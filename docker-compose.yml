@@ -6,8 +6,10 @@ services:
       POSTGRES_PASSWORD: docpilot
       POSTGRES_DB: docpilot
     ports:
-      # 5434 on the host: 5432/5433 are taken by another local project's Postgres
-      - "5434:5432"
+      # 5434 on the host: 5432/5433 are taken by another local project's
+      # Postgres. Bound to loopback so the dev database (default
+      # credentials) is never reachable from other machines on the LAN.
+      - "127.0.0.1:5434:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:

@@ -55,6 +55,35 @@ async def test_upload_document_bad_mime_type(client: AsyncClient) -> None:
     assert response.status_code == 415
 
 
+async def test_upload_rejects_content_mismatching_declared_type(
+    client: AsyncClient,
+) -> None:
+    """The Content-Type header is client-controlled; bytes that don't
+    carry the claimed format's magic number must be rejected, or they'd
+    later be served back out under that content type."""
+    response = await client.post(
+        "/documents",
+        files={"file": ("payload.png", b"<html>not a png</html>", "image/png")},
+    )
+
+    assert response.status_code == 415
+
+
+async def test_upload_accepts_pdf_magic_bytes(client: AsyncClient) -> None:
+    response = await client.post(
+        "/documents",
+        files={"file": ("doc.pdf", b"%PDF-1.7 minimal", "application/pdf")},
+    )
+
+    assert response.status_code == 201
+
+
+async def test_responses_carry_nosniff_header(client: AsyncClient) -> None:
+    response = await client.get("/documents")
+
+    assert response.headers.get("x-content-type-options") == "nosniff"
+
+
 async def test_get_document_unknown_id_returns_404(client: AsyncClient) -> None:
     response = await client.get(f"/documents/{uuid.uuid4()}")
 

@@ -43,6 +43,29 @@ def _safe_ext(mime_type: str) -> str:
     return ALLOWED_MIME_TYPES[mime_type]
 
 
+def _content_matches_mime(content: bytes, mime_type: str) -> bool:
+    """Check the file's magic bytes against its claimed mime type.
+
+    The Content-Type header is client-supplied and therefore a lie until
+    proven otherwise. Files that pass this check are stored and later
+    served back with that exact Content-Type by get_document_file, so
+    accepting a mismatch would let arbitrary bytes be re-served under an
+    image/* label (the classic stored-payload-via-upload pattern, even
+    with nosniff also set). Signatures cover exactly ALLOWED_MIME_TYPES.
+    """
+    if mime_type == "image/png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return content.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/gif":
+        return content.startswith((b"GIF87a", b"GIF89a"))
+    if mime_type == "image/webp":
+        return content[:4] == b"RIFF" and content[8:12] == b"WEBP"
+    if mime_type == "application/pdf":
+        return content.startswith(b"%PDF-")
+    return False
+
+
 async def _read_limited(file: UploadFile, max_size: int) -> bytes:
     """Read an upload in chunks, rejecting it as soon as it exceeds
     max_size.
@@ -81,6 +104,12 @@ async def upload_document(
         )
 
     content = await _read_limited(file, MAX_UPLOAD_SIZE)
+
+    if not _content_matches_mime(content, file.content_type):
+        raise HTTPException(
+            status_code=415,
+            detail="File content does not match its declared media type",
+        )
 
     document_id = uuid.uuid4()
     ext = _safe_ext(file.content_type)

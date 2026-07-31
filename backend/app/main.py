@@ -54,15 +54,46 @@ class MaxBodySizeMiddleware:
         await self.app(scope, limited_receive, send)
 
 
+class SecurityHeadersMiddleware:
+    """Adds X-Content-Type-Options: nosniff to every response.
+
+    The API serves user-uploaded bytes back out via /documents/{id}/file
+    with a stored Content-Type; nosniff tells browsers to honor that type
+    rather than content-sniffing their own, which (combined with the
+    magic-byte check at upload time) closes the stored-payload-served-
+    as-image pattern from both ends.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                headers.append((b"x-content-type-options", b"nosniff"))
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
 app = FastAPI(title="doc-pilot")
 
+# No cookies or HTTP auth are used anywhere, so credentialed CORS is
+# deliberately NOT enabled -- allow_credentials would only widen the
+# blast radius of a misconfigured origin for zero functional gain.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.add_middleware(MaxBodySizeMiddleware, max_body_size=MAX_UPLOAD_SIZE)
 
