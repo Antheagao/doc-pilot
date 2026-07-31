@@ -88,7 +88,31 @@ class ExtractionError(Exception):
     errors, 5xx, rate limits, a flaky disk read) where a retry has a
     real chance of succeeding. See NonRetryableExtractionError below for
     deterministic failures.
+
+    input_tokens/output_tokens/cost_usd are optional structured fields
+    (default None) set at raise sites where the API call already
+    succeeded and was billed before this exception was raised (a
+    refusal/non-tool_use stop reason, a missing tool_use block, or a
+    persistence failure after a successful call) -- callers that only
+    have a raised exception, not an ExtractionResult, still need a way
+    to know that money was spent. The existing message text (which
+    already embeds the same token counts for last_error/logging) is
+    unchanged; these are additive attributes for programmatic callers
+    like app.evals.runner.run_eval's cost cap, not a replacement for it.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cost_usd = cost_usd
 
 
 class NonRetryableExtractionError(ExtractionError):
@@ -324,7 +348,14 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
         raise NonRetryableExtractionError(
             f"model did not return a usable tool call (stop_reason={response.stop_reason!r}); "
             f"billed usage: input_tokens={response.usage.input_tokens}, "
-            f"output_tokens={response.usage.output_tokens}"
+            f"output_tokens={response.usage.output_tokens}",
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cost_usd=_compute_cost_usd(
+                settings.extraction_model,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            ),
         )
 
     tool_use_block = next(
@@ -334,7 +365,14 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
         raise ExtractionError(
             "stop_reason was tool_use but no tool_use block was found; "
             f"billed usage: input_tokens={response.usage.input_tokens}, "
-            f"output_tokens={response.usage.output_tokens}"
+            f"output_tokens={response.usage.output_tokens}",
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cost_usd=_compute_cost_usd(
+                settings.extraction_model,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            ),
         )
 
     latency_ms = int((time.perf_counter() - start) * 1000)
@@ -442,5 +480,8 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
         raise ExtractionError(
             "persistence failed after a successful, billed API call "
             f"(input_tokens={result.input_tokens}, output_tokens={result.output_tokens}, "
-            f"cost_usd={result.cost_usd:.6f}): {exc}"
+            f"cost_usd={result.cost_usd:.6f}): {exc}",
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cost_usd=result.cost_usd,
         ) from exc
