@@ -1,0 +1,386 @@
+{
+  "model": "claude-sonnet-5",
+  "prompt_version": "extract_v1",
+  "dataset_version": "v1",
+  "review_threshold": 0.8,
+  "started_at_utc": "2026-07-31T06:46:48.506479+00:00",
+  "concurrency": 3,
+  "max_cost_usd": 0.1,
+  "summary": {
+    "n_docs": 3,
+    "per_field_accuracy": {
+      "vendor": 1.0,
+      "document_date": 1.0,
+      "line_items": 1.0,
+      "subtotal": 1.0,
+      "tax": 1.0,
+      "total": 1.0,
+      "currency": 1.0
+    },
+    "overall_accuracy": 1.0,
+    "mean_confidence": 0.97,
+    "mean_confidence_correct": 0.97,
+    "mean_confidence_incorrect": null,
+    "caught_by_review": null,
+    "total_hallucinations": 0,
+    "total_schema_violations": 0,
+    "mean_item_accuracy": 1.0,
+    "mean_item_accuracy_docs_with_items": 1.0
+  },
+  "total_cost_usd": 0.032882,
+  "total_error_cost_usd": 0,
+  "mean_cost_per_doc": 0.010960666666666667,
+  "total_input_tokens": 8226,
+  "total_output_tokens": 1643,
+  "latency_p50_ms": 4368,
+  "latency_p95_ms": 5943,
+  "n_scored": 3,
+  "n_errors": 0,
+  "n_skipped_cost_cap": 0,
+  "errors": [],
+  "skipped_cost_cap": [],
+  "per_doc": [
+    {
+      "doc_id": "001-clean-coffee-receipt",
+      "status": "scored",
+      "difficulty": "clean",
+      "fields": {
+        "vendor": {
+          "correct": true,
+          "expected": "Cascade Coffee Roasters",
+          "actual": "Cascade Coffee Roasters",
+          "confidence": 0.97
+        },
+        "document_date": {
+          "correct": true,
+          "expected": "2025-08-08",
+          "actual": "2025-08-08",
+          "confidence": 0.98
+        },
+        "line_items": {
+          "correct": true,
+          "expected": [
+            {
+              "description": "Cat Litter 10lb",
+              "quantity": 1,
+              "unit_price": 11.3,
+              "total": 11.3
+            }
+          ],
+          "actual": [
+            {
+              "description": {
+                "value": "Cat Litter 10lb",
+                "confidence": 0.95
+              },
+              "quantity": {
+                "value": 1,
+                "confidence": 0.95
+              },
+              "unit_price": {
+                "value": 11.3,
+                "confidence": 0.95
+              },
+              "total": {
+                "value": 11.3,
+                "confidence": 0.95
+              }
+            }
+          ],
+          "confidence": 0.9
+        },
+        "subtotal": {
+          "correct": true,
+          "expected": 11.3,
+          "actual": 11.3,
+          "confidence": 0.97
+        },
+        "tax": {
+          "correct": true,
+          "expected": 0.79,
+          "actual": 0.79,
+          "confidence": 0.97
+        },
+        "total": {
+          "correct": true,
+          "expected": 12.09,
+          "actual": 12.09,
+          "confidence": 0.98
+        },
+        "currency": {
+          "correct": true,
+          "expected": "USD",
+          "actual": "USD",
+          "confidence": 0.99
+        }
+      },
+      "schema_violations": 0,
+      "hallucinations": 0,
+      "item_accuracy": 1.0,
+      "cost_usd": 0.009508,
+      "latency_ms": 4368,
+      "input_tokens": 2724,
+      "output_tokens": 406
+    },
+    {
+      "doc_id": "002-clean-hardware-invoice",
+      "status": "scored",
+      "difficulty": "clean",
+      "fields": {
+        "vendor": {
+          "correct": true,
+          "expected": "Ironclad Hardware Supply",
+          "actual": "Ironclad Hardware Supply",
+          "confidence": 0.98
+        },
+        "document_date": {
+          "correct": true,
+          "expected": "2025-06-29",
+          "actual": "2025-06-29",
+          "confidence": 0.98
+        },
+        "line_items": {
+          "correct": true,
+          "expected": [
+            {
+              "description": "Steel Hex Bolts (box of 50)",
+              "quantity": 3,
+              "unit_price": 6.75,
+              "total": 20.25
+            },
+            {
+              "description": "Garden Trowel",
+              "quantity": 2,
+              "unit_price": 8.1,
+              "total": 16.2
+            },
+            {
+              "description": "Kitchen Sponge 6-pack",
+              "quantity": 2,
+              "unit_price": 5.0,
+              "total": 10.0
+            },
+            {
+              "description": "Organic Roast Coffee 12oz",
+              "quantity": 4,
+              "unit_price": 15.0,
+              "total": 60.0
+            }
+          ],
+          "actual": [
+            {
+              "description": {
+                "value": "Steel Hex Bolts (box of 50)",
+                "confidence": 0.95
+              },
+              "quantity": {
+                "value": 3,
+                "confidence": 0.95
+              },
+              "unit_price": {
+                "value": 6.75,
+                "confidence": 0.95
+              },
+              "total": {
+                "value": 20.25,
+                "confidence": 0.7
+              }
+            },
+            {
+              "description": {
+                "value": "Garden Trowel",
+                "confidence": 0.95
+              },
+              "quantity": {
+                "value": 2,
+                "confidence": 0.95
+              },
+              "unit_price": {
+                "value": 8.1,
+                "confidence": 0.95
+              },
+              "total": {
+                "value": 16.2,
+                "confidence": 0.7
+              }
+            },
+            {
+              "description": {
+                "value": "Kitchen Sponge 6-pack",
+                "confidence": 0.95
+              },
+              "quantity": {
+                "value": 2,
+                "confidence": 0.95
+              },
+              "unit_price": {
+                "value": 5.0,
+                "confidence": 0.95
+              },
+              "total": {
+                "value": 10.0,
+                "confidence": 0.7
+              }
+            },
+            {
+              "description": {
+                "value": "Organic Roast Coffee 12oz",
+                "confidence": 0.95
+              },
+              "quantity": {
+                "value": 4,
+                "confidence": 0.95
+              },
+              "unit_price": {
+                "value": 15.0,
+                "confidence": 0.95
+              },
+              "total": {
+                "value": 60.0,
+                "confidence": 0.7
+              }
+            }
+          ],
+          "confidence": 0.85
+        },
+        "subtotal": {
+          "correct": true,
+          "expected": 106.45,
+          "actual": 106.45,
+          "confidence": 0.98
+        },
+        "tax": {
+          "correct": true,
+          "expected": 8.78,
+          "actual": 8.78,
+          "confidence": 0.98
+        },
+        "total": {
+          "correct": true,
+          "expected": 115.23,
+          "actual": 115.23,
+          "confidence": 0.98
+        },
+        "currency": {
+          "correct": true,
+          "expected": "USD",
+          "actual": "USD",
+          "confidence": 0.99
+        }
+      },
+      "schema_violations": 0,
+      "hallucinations": 0,
+      "item_accuracy": 1.0,
+      "cost_usd": 0.01281,
+      "latency_ms": 5943,
+      "input_tokens": 2760,
+      "output_tokens": 729
+    },
+    {
+      "doc_id": "003-clean-stationery-order",
+      "status": "scored",
+      "difficulty": "clean",
+      "fields": {
+        "vendor": {
+          "correct": true,
+          "expected": "Maple & Co. Stationery",
+          "actual": "Maple & Co. Stationery",
+          "confidence": 0.98
+        },
+        "document_date": {
+          "correct": true,
+          "expected": "2025-09-30",
+          "actual": "2025-09-30",
+          "confidence": 0.98
+        },
+        "line_items": {
+          "correct": true,
+          "expected": [
+            {
+              "description": "Cat Litter 10lb",
+              "quantity": 2,
+              "unit_price": 11.85,
+              "total": 23.7
+            },
+            {
+              "description": "Dog Chew Toy",
+              "quantity": 4,
+              "unit_price": 7.5,
+              "total": 30.0
+            }
+          ],
+          "actual": [
+            {
+              "description": {
+                "value": "Cat Litter 10lb",
+                "confidence": 0.98
+              },
+              "quantity": {
+                "value": 2,
+                "confidence": 0.98
+              },
+              "unit_price": {
+                "value": 11.85,
+                "confidence": 0.98
+              },
+              "total": {
+                "value": 23.7,
+                "confidence": 0.98
+              }
+            },
+            {
+              "description": {
+                "value": "Dog Chew Toy",
+                "confidence": 0.98
+              },
+              "quantity": {
+                "value": 4,
+                "confidence": 0.98
+              },
+              "unit_price": {
+                "value": 7.5,
+                "confidence": 0.98
+              },
+              "total": {
+                "value": 30.0,
+                "confidence": 0.98
+              }
+            }
+          ],
+          "confidence": 0.98
+        },
+        "subtotal": {
+          "correct": true,
+          "expected": 53.7,
+          "actual": 53.7,
+          "confidence": 0.98
+        },
+        "tax": {
+          "correct": true,
+          "expected": 2.69,
+          "actual": 2.69,
+          "confidence": 0.98
+        },
+        "total": {
+          "correct": true,
+          "expected": 56.39,
+          "actual": 56.39,
+          "confidence": 0.98
+        },
+        "currency": {
+          "correct": true,
+          "expected": "USD",
+          "actual": "USD",
+          "confidence": 0.99
+        }
+      },
+      "schema_violations": 0,
+      "hallucinations": 0,
+      "item_accuracy": 1.0,
+      "cost_usd": 0.010564,
+      "latency_ms": 4325,
+      "input_tokens": 2742,
+      "output_tokens": 508
+    }
+  ]
+}
