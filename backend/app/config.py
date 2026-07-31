@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://docpilot:docpilot@localhost:5434/docpilot"
     anthropic_api_key: str | None = None
     upload_dir: str = "uploads"
+    worker_poll_interval: float = 1.0
 
 
 @lru_cache
