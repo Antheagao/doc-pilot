@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Env
+.env
+
+# App
+uploads/
+
+# Node / frontend
+node_modules/
+.next/
+
+# OS cruft
+.DS_Store
+Thumbs.db
