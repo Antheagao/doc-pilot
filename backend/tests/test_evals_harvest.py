@@ -29,6 +29,20 @@ def _leaf(value, confidence: float) -> dict:
     return {"value": value, "confidence": confidence}
 
 
+def _labels_for(evals_dir: Path, document_id: uuid.UUID) -> list[Path]:
+    """Label files harvested from a specific document. Tests must scope
+    their filesystem assertions this way rather than counting all labels:
+    they run against the shared dev database (see tests/conftest.py), so
+    other committed extracted documents may legitimately be harvested
+    into the same tmp evals dir during a test's harvest call."""
+    matches = []
+    for path in (evals_dir / "labels").glob("*.json"):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if raw.get("source_document_id") == str(document_id):
+            matches.append(path)
+    return matches
+
+
 async def _seed_document(
     db_session: AsyncSession,
     tmp_path: Path,
@@ -169,7 +183,7 @@ async def test_skips_document_with_pending_review(
     assert len(ours) == 1
     assert ours[0].status == "skipped_pending"
     assert "vendor" in ours[0].detail
-    assert list((evals_dir / "labels").glob("*.json")) == []
+    assert _labels_for(evals_dir, document.id) == []
 
 
 async def test_rerun_skips_already_harvested_document(
@@ -185,7 +199,7 @@ async def test_rerun_skips_already_harvested_document(
     assert [o.status for o in second if o.document_id == document.id] == [
         "skipped_existing"
     ]
-    assert len(list((evals_dir / "labels").glob("*.json"))) == 1
+    assert len(_labels_for(evals_dir, document.id)) == 1
 
 
 async def test_invalid_human_correction_is_rejected_and_cleaned_up(
@@ -214,8 +228,14 @@ async def test_invalid_human_correction_is_rejected_and_cleaned_up(
     ours = [o for o in outcomes if o.document_id == document.id]
     assert ours[0].status == "invalid"
     assert "document_date" in ours[0].detail
-    assert list((evals_dir / "labels").glob("*.json")) == []
-    assert list((evals_dir / "docs").glob("*")) == []
+    assert _labels_for(evals_dir, document.id) == []
+    # Every image left in docs/ must belong to some surviving label (i.e.
+    # no orphan was left behind by our rejected document) -- checked by
+    # stem pairing since other shared-DB documents may have harvested
+    # legitimately into this same tmp dir.
+    label_stems = {p.stem for p in (evals_dir / "labels").glob("*.json")}
+    for image in (evals_dir / "docs").glob("*"):
+        assert image.stem in label_stems
 
 
 async def test_numbers_continue_from_existing_labels(
@@ -233,4 +253,8 @@ async def test_numbers_continue_from_existing_labels(
     ours = [o for o in outcomes if o.document_id == document.id]
     assert ours[0].status == "harvested"
     assert ours[0].doc_id is not None
-    assert ours[0].doc_id.startswith("026-review-")
+    # Numbering must continue past the highest existing label (025-...).
+    # Other shared-DB documents may harvest ahead of ours in the same
+    # run, so assert the floor rather than an exact number.
+    assert int(ours[0].doc_id.split("-", 1)[0]) >= 26
+    assert "-review-" in ours[0].doc_id
