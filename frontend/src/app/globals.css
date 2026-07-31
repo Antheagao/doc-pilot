@@ -82,6 +82,9 @@ a {
 }
 
 .site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
 }
@@ -481,4 +484,182 @@ a {
   padding: 3rem 1rem;
   color: var(--status-failed);
   text-align: center;
+}
+
+/* ---- Review queue ---- */
+
+.review-nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.review-nav-link:hover {
+  color: var(--accent);
+}
+
+.nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--confidence-low-bg);
+  border: 1px solid var(--confidence-low-border);
+  color: var(--confidence-low-fg);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.review-intro {
+  margin: 0.25rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  max-width: 60ch;
+}
+
+.review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.review-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.85rem 1rem;
+}
+
+.review-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.review-row-context {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.review-doc-link {
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-doc-link:hover {
+  color: var(--accent);
+}
+
+.review-field-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.review-row-value {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.review-correct-form {
+  margin-top: 0.75rem;
+}
+
+.review-input {
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.review-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.review-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  resize: vertical;
+}
+
+.review-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.btn {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.1s ease, border-color 0.1s ease;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* ---- Review state in the extraction panel ---- */
+
+.badge-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.review-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--status-extracted);
+  background: color-mix(in srgb, var(--status-extracted) 12%, transparent);
+  color: var(--status-extracted);
+  text-transform: capitalize;
+}
+
+.field-original {
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-decoration: line-through;
 }

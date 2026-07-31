@@ -1,4 +1,9 @@
-import type { Extraction, ExtractedField, FieldLeaf } from "@/lib/api";
+import type {
+  Extraction,
+  ExtractedField,
+  FieldLeaf,
+  ReviewAction,
+} from "@/lib/api";
 import ConfidenceBadge from "@/components/ConfidenceBadge";
 
 // Display order for the scalar fields; line_items is rendered separately
@@ -47,10 +52,18 @@ function formatLatency(value: unknown): string {
 // as `unknown` and validated at render time instead of trusted via the
 // static LineItem type.
 function LineItemCell({ leaf }: { leaf: unknown }) {
-  const valid = isLeaf(leaf);
-  const low = !valid || leaf.confidence < 0.8;
-  const display = valid ? formatScalar(leaf.value) : "—";
-  return <td className={valid && low ? "cell-low" : undefined}>{display}</td>;
+  // Corrected line-item rows (review_action === "corrected") hold plain
+  // scalar values, not {value, confidence} leaves — a human correction
+  // has no confidence score. Render those directly, with no low styling.
+  if (!isLeaf(leaf)) {
+    const scalar =
+      leaf === null || typeof leaf === "string" || typeof leaf === "number";
+    return <td>{scalar ? formatScalar(leaf) : "—"}</td>;
+  }
+  const low = leaf.confidence < 0.8;
+  return (
+    <td className={low ? "cell-low" : undefined}>{formatScalar(leaf.value)}</td>
+  );
 }
 
 function LineItemsTable({ items }: { items: unknown[] }) {
@@ -87,9 +100,14 @@ function LineItemsTable({ items }: { items: unknown[] }) {
   );
 }
 
+function ReviewBadge({ action }: { action: ReviewAction }) {
+  return <span className={`review-badge ${action}`}>{action}</span>;
+}
+
 function ScalarFieldRow({ field }: { field: ExtractedField }) {
   const leaf = isLeaf(field.value) ? field.value : null;
-  const display = formatScalar(leaf?.value);
+  const corrected = field.review_action === "corrected";
+  const display = formatScalar(corrected ? field.corrected_value : leaf?.value);
   return (
     <div className="field-row">
       <span className="field-name">{field.field_name.replace(/_/g, " ")}</span>
@@ -97,7 +115,18 @@ function ScalarFieldRow({ field }: { field: ExtractedField }) {
         <span className={`field-value${display === "—" ? " null-value" : ""}`}>
           {display}
         </span>
-        <ConfidenceBadge confidence={field.confidence} needsReview={field.needs_review} />
+        {corrected && (
+          <span className="field-original">was {formatScalar(leaf?.value)}</span>
+        )}
+        <span className="badge-row">
+          <ConfidenceBadge
+            confidence={field.confidence}
+            // Once a human has resolved the field, stop styling it as a
+            // pending low-confidence warning.
+            needsReview={field.needs_review && field.review_action === null}
+          />
+          {field.review_action && <ReviewBadge action={field.review_action} />}
+        </span>
       </span>
     </div>
   );
@@ -116,7 +145,16 @@ export default function ExtractionPanel({ extraction }: { extraction: Extraction
   const scalarFields = [...orderedFields, ...extraFields];
 
   const lineItemsField = byName.get("line_items");
-  const lineItems = Array.isArray(lineItemsField?.value) ? lineItemsField.value : [];
+  // A corrected line_items field displays the human-supplied rows (plain
+  // values — see LineItemCell) instead of the model's extraction.
+  const lineItemsCorrected =
+    lineItemsField?.review_action === "corrected" &&
+    Array.isArray(lineItemsField.corrected_value);
+  const lineItems = lineItemsCorrected
+    ? (lineItemsField.corrected_value as unknown[])
+    : Array.isArray(lineItemsField?.value)
+      ? lineItemsField.value
+      : [];
 
   return (
     <div className="results-panel">
@@ -130,10 +168,18 @@ export default function ExtractionPanel({ extraction }: { extraction: Extraction
         <div>
           <div className="field-row line-items-header">
             <span className="field-name">line items</span>
-            <ConfidenceBadge
-              confidence={lineItemsField.confidence}
-              needsReview={lineItemsField.needs_review}
-            />
+            <span className="badge-row">
+              <ConfidenceBadge
+                confidence={lineItemsField.confidence}
+                needsReview={
+                  lineItemsField.needs_review &&
+                  lineItemsField.review_action === null
+                }
+              />
+              {lineItemsField.review_action && (
+                <ReviewBadge action={lineItemsField.review_action} />
+              )}
+            </span>
           </div>
           <LineItemsTable items={lineItems} />
         </div>

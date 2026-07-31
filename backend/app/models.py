@@ -77,7 +77,12 @@ class Extraction(Base):
 
 class ExtractedField(Base):
     __tablename__ = "extracted_fields"
-    __table_args__ = (Index("ix_extracted_fields_extraction_id", "extraction_id"),)
+    __table_args__ = (
+        Index("ix_extracted_fields_extraction_id", "extraction_id"),
+        # The review-queue scan: fields with needs_review=true and
+        # reviewed_at IS NULL are the pending queue (see routers/review.py).
+        Index("ix_extracted_fields_review_queue", "needs_review", "reviewed_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -89,3 +94,14 @@ class ExtractedField(Base):
     value: Mapped[dict] = mapped_column(JSONB, nullable=False)
     confidence: Mapped[float] = mapped_column(nullable=False)
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Human review resolution. All three stay NULL until a reviewer acts;
+    # review_action is 'approved' (extracted value confirmed) or
+    # 'corrected' (corrected_value holds the human-supplied replacement).
+    # The original `value` is never overwritten -- corrections live beside
+    # it so the audit trail keeps what the model actually said, and so a
+    # correction can later become a labeled eval case.
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_action: Mapped[str | None] = mapped_column(String, nullable=True)
+    corrected_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

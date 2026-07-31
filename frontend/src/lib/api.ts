@@ -40,11 +40,22 @@ export interface LineItem {
 // every other field stores the {value, confidence} leaf as-is.
 export type ExtractedFieldValue = FieldLeaf | LineItem[] | null;
 
+// Set once a human has resolved the field from the review queue.
+export type ReviewAction = "approved" | "corrected";
+
 export interface ExtractedField {
+  id: string;
   field_name: string;
   value: ExtractedFieldValue;
   confidence: number;
   needs_review: boolean;
+  reviewed_at: string | null;
+  review_action: ReviewAction | null;
+  // The human-supplied *semantic* value (scalar for scalar fields, the
+  // plain-value line-item array for line_items) — only set when
+  // review_action === "corrected". The original `value` is never
+  // overwritten by a correction.
+  corrected_value: unknown;
 }
 
 export interface Extraction {
@@ -119,6 +130,54 @@ export async function getDocument(id: string): Promise<DocumentDetail> {
 
 export function documentFileUrl(id: string): string {
   return `${API_URL}/documents/${encodeURIComponent(id)}/file`;
+}
+
+export interface ReviewQueueItem {
+  field_id: string;
+  field_name: string;
+  value: ExtractedFieldValue;
+  confidence: number;
+  document_id: string;
+  filename: string;
+  extraction_id: string;
+  model: string;
+  extracted_at: string;
+}
+
+export async function getReviewQueue(
+  limit = 50,
+  offset = 0
+): Promise<ReviewQueueItem[]> {
+  const res = await fetch(
+    `${API_URL}/review/queue?limit=${limit}&offset=${offset}`,
+    { cache: "no-store" }
+  );
+  return handle<ReviewQueueItem[]>(res);
+}
+
+export async function getReviewQueueCount(): Promise<number> {
+  const res = await fetch(`${API_URL}/review/queue/count`, {
+    cache: "no-store",
+  });
+  const body = await handle<{ pending: number }>(res);
+  return body.pending;
+}
+
+export async function resolveReviewField(
+  fieldId: string,
+  resolution:
+    | { action: "approve" }
+    | { action: "correct"; corrected_value: unknown }
+): Promise<ExtractedField> {
+  const res = await fetch(
+    `${API_URL}/review/fields/${encodeURIComponent(fieldId)}/resolve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(resolution),
+    }
+  );
+  return handle<ExtractedField>(res);
 }
 
 export async function uploadDocument(file: File): Promise<DocumentCreateResponse> {

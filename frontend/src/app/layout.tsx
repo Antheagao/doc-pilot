@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import ReviewQueueLink from "@/components/ReviewQueueLink";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -19,6 +20,7 @@ export default function RootLayout({
           <Link href="/" className="site-title">
             doc-pilot
           </Link>
+          <ReviewQueueLink />
         </header>
         <main className="site-main">{children}</main>
       </body>

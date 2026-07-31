@@ -69,14 +69,19 @@ flowchart LR
     W --> C["Claude VLM<br/>forced tool-use<br/>{value, confidence} leaves"]
     C --> E[(extractions + extracted_fields)]
     E --> V[Viewer / review UI]
+    E --> R["Review queue<br/>low-confidence fields<br/>approve / correct"]
 ```
 
 Key decisions:
 
 - **Postgres `SKIP LOCKED` instead of Redis** for the job queue -- one fewer moving part to run and explain, and the queue lives in the same transactional store as the data it's producing, so a claimed-but-crashed job is just a row to reconcile on worker startup rather than a separate failure mode to reason about.
-- **Per-field confidence, not a single document-level score** -- the extraction tool forces every leaf into `{value, confidence}`, so the review queue (next up) can route individual low-confidence *fields* to a human rather than re-doing an entire document.
+- **Per-field confidence, not a single document-level score** -- the extraction tool forces every leaf into `{value, confidence}`, so the review queue routes individual low-confidence *fields* to a human rather than re-doing an entire document.
 - **Prompts as versioned files** (`backend/prompts/extract_v1.md`), not inline strings -- extraction rows store the `prompt_version` they were produced with, so eval results can be tied to a specific prompt revision as prompts iterate.
 - **Cost and latency tracked per document** -- every extraction row records input/output tokens, computed `cost_usd`, and `latency_ms`. Real numbers on `claude-sonnet-5`: roughly **$0.009 and ~4s per receipt**.
+
+## Human review
+
+Fields extracted with confidence below `review_threshold` (default 0.8, see `backend/app/config.py`) are flagged `needs_review` and land in a field-level work queue -- `GET /review/queue` on the backend, the **Review** page (with a pending-count badge in the header) on the frontend. A reviewer either **approves** the extracted value or **corrects** it; either way the resolution is stamped with `reviewed_at` and `review_action`, and a correction is stored in `corrected_value` *beside* the model's original answer, never over it -- the audit trail keeps what the model actually said, and each correction is a labeled `(document, field, human answer)` triple ready to be harvested into a new eval case. Resolving the same field twice is a 409: the first human decision wins until someone deliberately revisits it.
 
 ## Evals
 
@@ -108,4 +113,4 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 <!-- EVAL_TABLE:END -->
 
-*Status: core loop working (upload -> extract -> view). Evals and the human review queue are next.*
+*Status: upload -> extract -> view -> human review all working, with evals recorded per model/prompt. Next: harvest review corrections into new eval cases.*
