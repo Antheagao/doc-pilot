@@ -31,11 +31,14 @@ class MaxBodySizeMiddleware:
             return
 
         content_length = Headers(scope=scope).get("content-length")
-        if content_length is not None and content_length.isdigit():
-            if int(content_length) > self.max_body_size:
-                response = JSONResponse({"detail": "File too large"}, status_code=413)
-                await response(scope, receive, send)
-                return
+        if (
+            content_length is not None
+            and content_length.isdigit()
+            and int(content_length) > self.max_body_size
+        ):
+            response = JSONResponse({"detail": "File too large"}, status_code=413)
+            await response(scope, receive, send)
+            return
 
         total = 0
 

@@ -1,6 +1,22 @@
 # doc-pilot
 
+[![CI](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml)
+
 AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking.
+
+## Screenshots
+
+<img src="screenshots/document-detail.png" width="900" alt="A skewed grocery receipt beside its extracted fields, with per-field confidence badges and a human-corrected subtotal">
+
+*The split view: the original document beside what the model extracted. Every field carries its own confidence score. The subtotal here was misread off a skewed phone photo at 68% confidence, routed to review, and corrected by a human — the model's original answer stays visible, struck through, beside the correction.*
+
+<img src="screenshots/review-correct.png" width="900" alt="The review queue with two low-confidence fields, one with the inline correction editor open">
+
+*The review queue: only the individual fields that fell below the confidence threshold, not whole documents. Approve or correct inline; the header badge tracks pending count.*
+
+<img src="screenshots/home.png" width="900" alt="Document list with upload zone and per-document extraction status">
+
+*Upload via drag-and-drop and watch documents move `uploaded` → `processing` → `extracted`, polled live.*
 
 ## Planned architecture
 
@@ -81,7 +97,9 @@ Key decisions:
 
 ## Human review
 
-Fields extracted with confidence below `review_threshold` (default 0.8, see `backend/app/config.py`) are flagged `needs_review` and land in a field-level work queue -- `GET /review/queue` on the backend, the **Review** page (with a pending-count badge in the header) on the frontend. A reviewer either **approves** the extracted value or **corrects** it; either way the resolution is stamped with `reviewed_at` and `review_action`, and a correction is stored in `corrected_value` *beside* the model's original answer, never over it -- the audit trail keeps what the model actually said, and each correction is a labeled `(document, field, human answer)` triple ready to be harvested into a new eval case. Resolving the same field twice is a 409: the first human decision wins until someone deliberately revisits it.
+Fields extracted with confidence below `review_threshold` (default 0.8, see `backend/app/config.py`) are flagged `needs_review` and land in a field-level work queue -- `GET /review/queue` on the backend, the **Review** page (with a pending-count badge in the header) on the frontend. A reviewer either **approves** the extracted value or **corrects** it; either way the resolution is stamped with `reviewed_at` and `review_action`, and a correction is stored in `corrected_value` *beside* the model's original answer, never over it -- the audit trail keeps what the model actually said. Resolving the same field twice is a 409: the first human decision wins until someone deliberately revisits it.
+
+The loop closes with `python scripts/harvest_corrections.py` (from `backend/`): every document whose flagged fields have all been resolved is exported as a new eval case under `evals/` -- corrections become the label, approved and high-confidence values are kept as-is, and each exported label records its `source_document_id` so re-running only harvests new documents. Every harvested label passes the same loud validation the eval loader applies before it is kept, so a hand-typed correction in the wrong format is rejected at harvest time instead of poisoning the dataset.
 
 ## Evals
 
@@ -113,4 +131,4 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 <!-- EVAL_TABLE:END -->
 
-*Status: upload -> extract -> view -> human review all working, with evals recorded per model/prompt. Next: harvest review corrections into new eval cases.*
+*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- with CI running the whole test suite against Postgres on every push. Next: a hosted demo.*

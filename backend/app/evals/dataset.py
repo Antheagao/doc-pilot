@@ -160,7 +160,11 @@ def _validate_line_items(doc_id: str, value: Any) -> None:
             _validate_line_item_scalar(doc_id, i, key, item[key])
 
 
-def _load_case(label_path: Path) -> EvalCase:
+def _load_case(label_path: Path, evals_dir: Path = EVALS_DIR) -> EvalCase:
+    """Load and loudly validate one label. evals_dir anchors the label's
+    relative `image` path; the default is the repo corpus, and
+    app.evals.harvest passes its target dir so freshly harvested labels
+    validate against the directory they were just written to."""
     try:
         raw = json.loads(label_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -198,7 +202,7 @@ def _load_case(label_path: Path) -> EvalCase:
         _validate_numeric(doc_id, key, fields[key])
     _validate_line_items(doc_id, fields["line_items"])
 
-    image_path = EVALS_DIR / raw["image"]
+    image_path = evals_dir / raw["image"]
     if not image_path.is_file():
         raise ValueError(f"{doc_id}: image file not found: {image_path}")
 
