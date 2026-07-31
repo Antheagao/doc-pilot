@@ -1,46 +1,57 @@
+/* Design tokens. Every fg/bg pairing below is WCAG 2.1 AA-checked
+   (>= 4.5:1, most >= 7:1) in both themes -- neutrals are a zinc scale,
+   the accent is indigo, and status/confidence colors are tuned per
+   theme rather than shared, since a hue that reads well on white
+   rarely survives a dark surface unchanged. */
 :root {
   --background: #ffffff;
-  --surface: #f7f7f8;
-  --border: #e2e2e6;
-  --foreground: #1a1a1e;
-  --muted: #6b6b73;
-  --accent: #3454d1;
+  --surface: #fafafa;
+  --border: #e4e4e7;
+  --foreground: #18181b;
+  --muted: #52525b;
+  --accent: #4f46e5;
   --accent-contrast: #ffffff;
 
-  --status-uploaded: #6b6b73;
-  --status-processing: #b8860b;
-  --status-extracted: #1f8a4c;
-  --status-failed: #c23b3b;
+  --status-uploaded: #52525b;
+  --status-processing: #b45309;
+  --status-extracted: #15803d;
+  --status-failed: #b91c1c;
 
-  --confidence-low-bg: #fff4d6;
-  --confidence-low-border: #e0a716;
-  --confidence-low-fg: #7a5400;
-  --confidence-ok-bg: #eef1f8;
-  --confidence-ok-border: #c7cee3;
-  --confidence-ok-fg: #3d4560;
+  --confidence-low-bg: #fffbeb;
+  --confidence-low-border: #fcd34d;
+  --confidence-low-fg: #92400e;
+  --confidence-ok-bg: #eef2ff;
+  --confidence-ok-border: #c7d2fe;
+  --confidence-ok-fg: #3730a3;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.05);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #101014;
-    --surface: #17171c;
-    --border: #2b2b32;
-    --foreground: #ececef;
-    --muted: #9a9aa2;
-    --accent: #7d93ff;
-    --accent-contrast: #101014;
+    --background: #0b0b0e;
+    --surface: #16161a;
+    --border: #26262c;
+    --foreground: #f4f4f5;
+    --muted: #a1a1aa;
+    --accent: #a5b0ff;
+    --accent-contrast: #16161a;
 
-    --status-uploaded: #9a9aa2;
-    --status-processing: #e0b84a;
-    --status-extracted: #4bcf85;
-    --status-failed: #ff6b6b;
+    --status-uploaded: #a1a1aa;
+    --status-processing: #fbbf24;
+    --status-extracted: #4ade80;
+    --status-failed: #fca5a5;
 
-    --confidence-low-bg: #3a2f0d;
-    --confidence-low-border: #7a5f16;
-    --confidence-low-fg: #f0c542;
-    --confidence-ok-bg: #1d2130;
-    --confidence-ok-border: #333a52;
-    --confidence-ok-fg: #b6bfe0;
+    --confidence-low-bg: #33270a;
+    --confidence-low-border: #a16207;
+    --confidence-low-fg: #fcd34d;
+    --confidence-ok-bg: #1d2040;
+    --confidence-ok-border: #4348a2;
+    --confidence-ok-fg: #b3bcff;
+
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
   }
 
   html {
@@ -81,12 +92,41 @@ a {
   text-decoration: none;
 }
 
+/* One consistent, token-driven focus ring for every interactive element.
+   :focus-visible (not :focus) keeps it keyboard-only. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--background) 85%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .site-title {
@@ -108,7 +148,7 @@ a {
 .upload-zone {
   position: relative;
   border: 1.5px dashed var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   padding: 2.5rem 1.5rem;
   text-align: center;
   color: var(--muted);
@@ -157,8 +197,9 @@ a {
 .doc-list {
   margin-top: 1.5rem;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 
 .doc-row {
@@ -192,6 +233,7 @@ a {
   color: var(--muted);
   font-size: 0.82rem;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .empty-state,
@@ -201,7 +243,7 @@ a {
   text-align: center;
   color: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   background: var(--surface);
 }
 
@@ -306,7 +348,7 @@ a {
 
 .doc-preview {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   overflow: hidden;
   background: var(--surface);
   min-height: 300px;
@@ -329,9 +371,10 @@ a {
 
 .results-panel {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   padding: 1.25rem;
   background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 
 .status-panel {
@@ -431,6 +474,7 @@ a {
   border-collapse: collapse;
   font-size: 0.85rem;
   margin-top: 0.25rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .line-items-table th {
@@ -468,6 +512,7 @@ a {
   border-top: 1px solid var(--border);
   font-size: 0.8rem;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .footer-strip strong {
@@ -531,9 +576,10 @@ a {
 
 .review-row {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   background: var(--surface);
   padding: 0.85rem 1rem;
+  box-shadow: var(--shadow-card);
 }
 
 .review-row-main {
@@ -583,16 +629,11 @@ a {
   width: 100%;
   padding: 0.5rem 0.7rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: var(--background);
   color: var(--foreground);
   font-size: 0.9rem;
   font-family: inherit;
-}
-
-.review-input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .review-textarea {
@@ -610,17 +651,22 @@ a {
 .btn {
   padding: 0.4rem 0.9rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: var(--background);
   color: var(--foreground);
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.1s ease, border-color 0.1s ease;
+  transition: background-color 0.1s ease, border-color 0.1s ease,
+    transform 0.05s ease;
 }
 
 .btn:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .btn:disabled {
