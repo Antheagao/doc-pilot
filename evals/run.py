@@ -23,6 +23,13 @@ BACKEND_DIR = REPO_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+# app.evals.report's Ops table header uses ✓/✗, and Windows terminals
+# default stdout to the system codepage (cp1252 etc.), which can't
+# encode them -- reconfigure to utf-8 so `--report-only`/`--update-readme`
+# don't crash on a plain `python evals/run.py` invocation from PowerShell.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the doc-pilot extraction eval suite.")
@@ -43,10 +50,15 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--out", type=str, default=None, help="output directory for the result JSON")
     parser.add_argument(
-        "--report-only", action="store_true", help="(lands in E4) render a report from a prior run"
+        "--report-only",
+        action="store_true",
+        help="render tables from existing evals/results/*.json artifacts; run no extraction",
     )
     parser.add_argument(
-        "--update-readme", action="store_true", help="(lands in E4) write the eval table into README"
+        "--update-readme",
+        action="store_true",
+        help="write the eval tables into README.md and evals/results/latest.md "
+        "(combinable with a normal run or with --report-only)",
     )
     args = parser.parse_args()
     if args.concurrency < 1:
@@ -94,12 +106,24 @@ def _print_summary(result, cases, *, mock: bool) -> None:
         print(f"\nskipped_cost_cap ({len(result.skipped_cost_cap)}): {result.skipped_cost_cap}")
 
 
+def _update_readme(results_dir: Path | None) -> None:
+    from app.evals.report import (
+        load_results,
+        render_tables,
+        update_readme,
+        write_latest_md,
+    )
+
+    results = load_results(results_dir)
+    readme_path = REPO_ROOT / "README.md"
+    update_readme(render_tables(results), readme_path)
+    latest_path = write_latest_md(results)
+    print(f"\nupdated {readme_path}")
+    print(f"wrote {latest_path}")
+
+
 def main() -> None:
     args = _parse_args()
-
-    if args.report_only or args.update_readme:
-        print("report generation lands in E4")
-        sys.exit(0)
 
     try:
         import app.config  # noqa: F401
@@ -110,6 +134,17 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    out_dir = Path(args.out) if args.out else None
+
+    if args.report_only:
+        from app.evals.report import load_results, render_tables
+
+        results = load_results(out_dir)
+        print(render_tables(results))
+        if args.update_readme:
+            _update_readme(out_dir)
+        sys.exit(0)
 
     from app.config import get_settings
     from app.evals.dataset import load_cases
@@ -140,9 +175,14 @@ def main() -> None:
 
     _print_summary(result, cases, mock=args.mock)
 
-    out_dir = Path(args.out) if args.out else None
     out_path = write_result(result, out_dir)
     print(f"\nwrote {out_path}")
+
+    if args.update_readme:
+        # Reload from ALL artifacts in out_dir, not just this run's
+        # result -- the report is a history across every eval run, not
+        # just the one just written.
+        _update_readme(out_dir)
 
     if result.n_scored == 0:
         print(
