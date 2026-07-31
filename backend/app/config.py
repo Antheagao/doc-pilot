@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     upload_dir: str = "uploads"
     worker_poll_interval: float = 1.0
+    # Model used for document extraction (app/extraction.py). Defaults to
+    # the current Sonnet id -- see PRICING_PER_MTOK in that module for the
+    # price table this must stay in sync with if overridden.
+    extraction_model: str = "claude-sonnet-5"
+    # Extracted fields with confidence below this are flagged needs_review.
+    review_threshold: float = 0.8
 
 
 @lru_cache

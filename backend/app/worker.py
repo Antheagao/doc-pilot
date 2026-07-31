@@ -12,11 +12,12 @@ trivial and lets horizontal scaling do the work.
 
 Claim/commit split: claiming a job (state -> processing) is committed
 immediately, *before* the handler runs, rather than holding the row lock
-for the duration of the handler. The handler (a VLM call, in T5) can take
-several seconds; holding a transaction open that long would tie up a
-connection and block other workers from even attempting SKIP LOCKED scans
-against the table. Once claimed, a job is "owned" by this process via its
-state, not via a held lock.
+for the duration of the handler. The default handler (process_document_job,
+app/extraction.py) makes a VLM call and can take several seconds; holding
+a transaction open that long would tie up a connection and block other
+workers from even attempting SKIP LOCKED scans against the table. Once
+claimed, a job is "owned" by this process via its state, not via a held
+lock.
 
 Consequence: if this process dies (crash, kill -9, power loss) after
 claiming a job but before it finishes, that job is orphaned in
@@ -47,6 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import async_session_maker, engine
+from app.extraction import NonRetryableExtractionError, process_document_job
 from app.models import Document, Job
 
 logger = logging.getLogger(__name__)
@@ -55,15 +57,6 @@ MAX_ATTEMPTS = 3
 BACKOFF_BASE = 2.0
 
 Handler = Callable[[AsyncSession, Job], Awaitable[None]]
-
-
-async def process_job(session: AsyncSession, job: Job) -> None:
-    """Default job handler placeholder — the real extraction handler
-    lands in T5. Raises so the caller's failure path (mark
-    failed/requeue) handles it gracefully instead of the worker loop
-    crashing.
-    """
-    raise NotImplementedError("extraction handler lands in T5")
 
 
 def pending_job_stmt(now: datetime, document_id: uuid.UUID | None = None):
@@ -131,9 +124,18 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
     """Handle a failed job: requeue with backoff if attempts remain,
     otherwise mark it permanently failed (and fail its document).
 
+    NonRetryableExtractionError (see app/extraction.py) skips the
+    requeue path entirely, regardless of attempts remaining: it marks a
+    deterministic failure (bad mime, unpriced model, a refusal, output
+    truncation) where re-running the identical job would produce the
+    identical outcome, so retrying would only spend more money for the
+    same result. Every other exception keeps the existing
+    requeue-with-backoff-until-MAX_ATTEMPTS behavior.
+
     Same compare-and-set caveat as complete_job applies here.
     """
     job_id = job.id
+    non_retryable = isinstance(exc, NonRetryableExtractionError)
 
     # Roll back first, for two reasons: (1) a handler that failed with a
     # DB error leaves this session's transaction aborted -- any further
@@ -152,7 +154,7 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
 
     error_tail = "".join(traceback.format_exception(exc))[-2000:]
 
-    if job.attempts < MAX_ATTEMPTS:
+    if not non_retryable and job.attempts < MAX_ATTEMPTS:
         job.state = "pending"
         job.last_error = error_tail
         job.run_after = datetime.now(UTC) + timedelta(
@@ -174,7 +176,12 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
         if document is not None:
             document.status = "failed"
         await session.commit()
-        logger.info("failed job %s permanently after %d attempts", job.id, job.attempts)
+        if non_retryable:
+            logger.info(
+                "failed job %s permanently (non-retryable: %s)", job.id, type(exc).__name__
+            )
+        else:
+            logger.info("failed job %s permanently after %d attempts", job.id, job.attempts)
 
 
 async def reclaim_orphaned_jobs(session: AsyncSession) -> int:
@@ -193,7 +200,9 @@ async def reclaim_orphaned_jobs(session: AsyncSession) -> int:
     return len(jobs)
 
 
-async def run_once(handler: Handler = process_job, document_id: uuid.UUID | None = None) -> bool:
+async def run_once(
+    handler: Handler = process_document_job, document_id: uuid.UUID | None = None
+) -> bool:
     """Claim and run at most one job. Returns True if a job was claimed
     (regardless of success/failure), False if there was no work to do.
 
@@ -236,7 +245,7 @@ async def run_once(handler: Handler = process_job, document_id: uuid.UUID | None
     return True
 
 
-async def run_worker(handler: Handler = process_job) -> None:
+async def run_worker(handler: Handler = process_document_job) -> None:
     """Poll indefinitely, processing one job at a time.
 
     Per-iteration exceptions from run_once (e.g. a handler that leaves

@@ -10,6 +10,7 @@ from sqlalchemy import delete, text
 from app import worker as worker_module
 from app.config import Settings
 from app.db import async_session_maker
+from app.extraction import NonRetryableExtractionError
 from app.models import Document, Job
 from app.worker import MAX_ATTEMPTS, pending_job_stmt, reclaim_orphaned_jobs, run_once
 
@@ -166,6 +167,37 @@ async def test_retry_path_requeues_with_backoff(real_documents: Callable) -> Non
     assert result.run_after > datetime.now(UTC)
     assert result.last_error is not None
     assert "boom" in result.last_error
+
+
+async def test_non_retryable_failure_skips_requeue_and_fails_immediately(
+    real_documents: Callable,
+) -> None:
+    """A NonRetryableExtractionError (refusal, bad mime, unpriced model,
+    stop_reason == "max_tokens" truncation -- see app/extraction.py) is
+    deterministic: retrying the identical job would produce the
+    identical outcome, so fail_job must skip the requeue-with-backoff
+    path entirely and mark the job (and its document) failed on the very
+    first attempt, unlike test_retry_path_requeues_with_backoff's plain
+    ValueError (attempt 1 of MAX_ATTEMPTS, requeues).
+    """
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+
+    async def refusing_handler(session, job) -> None:
+        raise NonRetryableExtractionError("model refused")
+
+    claimed = await run_once(refusing_handler, document_id=document.id)
+
+    assert claimed is True
+    result_job = await _refresh_job(job.id)
+    assert result_job.state == "failed"
+    assert result_job.attempts == 1  # did not burn through MAX_ATTEMPTS retries
+    assert result_job.finished_at is not None
+    assert result_job.last_error is not None
+    assert "model refused" in result_job.last_error
+
+    result_document = await _refresh_document(document.id)
+    assert result_document.status == "failed"
 
 
 async def test_exhaustion_marks_job_and_document_failed(real_documents: Callable) -> None:
