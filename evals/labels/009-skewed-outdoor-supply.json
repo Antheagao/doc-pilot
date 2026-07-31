@@ -1,0 +1,36 @@
+{
+  "doc_id": "009-skewed-outdoor-supply",
+  "image": "docs/009-skewed-outdoor-supply.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "skewed",
+  "fields": {
+    "vendor": "Pinecrest Outdoor Supply",
+    "document_date": "2026-01-24",
+    "currency": "USD",
+    "subtotal": 89.5,
+    "tax": 4.48,
+    "total": 93.98,
+    "line_items": [
+      {
+        "description": "Bike Tire Patch Kit",
+        "quantity": 2,
+        "unit_price": 4.55,
+        "total": 9.1
+      },
+      {
+        "description": "Garden Trowel",
+        "quantity": 1,
+        "unit_price": 7.2,
+        "total": 7.2
+      },
+      {
+        "description": "Bamboo Cutting Board",
+        "quantity": 4,
+        "unit_price": 18.3,
+        "total": 73.2
+      }
+    ]
+  }
+}

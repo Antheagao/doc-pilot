@@ -1,0 +1,36 @@
+{
+  "doc_id": "004-clean-bike-shop-ticket",
+  "image": "docs/004-clean-bike-shop-ticket.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "clean",
+  "fields": {
+    "vendor": "Ridgeline Bike Works",
+    "document_date": "2025-09-29",
+    "currency": "USD",
+    "subtotal": 86.95,
+    "tax": 5.87,
+    "total": 92.82,
+    "line_items": [
+      {
+        "description": "Wool Blend Socks (pair)",
+        "quantity": 4,
+        "unit_price": 8.9,
+        "total": 35.6
+      },
+      {
+        "description": "Cedar Bird Feeder",
+        "quantity": 1,
+        "unit_price": 14.55,
+        "total": 14.55
+      },
+      {
+        "description": "Herbal Tea Sampler",
+        "quantity": 4,
+        "unit_price": 9.2,
+        "total": 36.8
+      }
+    ]
+  }
+}

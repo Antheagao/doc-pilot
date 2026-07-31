@@ -1,0 +1,78 @@
+{
+  "doc_id": "020-dense-electronics-order",
+  "image": "docs/020-dense-electronics-order.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "dense",
+  "fields": {
+    "vendor": "Sunridge Electronics Depot",
+    "document_date": "2026-06-06",
+    "currency": "USD",
+    "subtotal": 328.85,
+    "tax": 16.44,
+    "total": 345.29,
+    "line_items": [
+      {
+        "description": "Whiteboard Marker Set",
+        "quantity": 2,
+        "unit_price": 5.1,
+        "total": 10.2
+      },
+      {
+        "description": "Extension Cord 25ft",
+        "quantity": 4,
+        "unit_price": 19.95,
+        "total": 79.8
+      },
+      {
+        "description": "Furnace Filter 16x20",
+        "quantity": 1,
+        "unit_price": 12.75,
+        "total": 12.75
+      },
+      {
+        "description": "Ceramic Mug 12oz",
+        "quantity": 4,
+        "unit_price": 8.8,
+        "total": 35.2
+      },
+      {
+        "description": "Bamboo Cutting Board",
+        "quantity": 4,
+        "unit_price": 14.9,
+        "total": 59.6
+      },
+      {
+        "description": "Paperback Novel",
+        "quantity": 2,
+        "unit_price": 9.9,
+        "total": 19.8
+      },
+      {
+        "description": "Produce Bags (set of 5)",
+        "quantity": 3,
+        "unit_price": 7.0,
+        "total": 21.0
+      },
+      {
+        "description": "Cedar Bird Feeder",
+        "quantity": 1,
+        "unit_price": 19.0,
+        "total": 19.0
+      },
+      {
+        "description": "Stainless Water Bottle",
+        "quantity": 4,
+        "unit_price": 11.45,
+        "total": 45.8
+      },
+      {
+        "description": "Cat Litter 10lb",
+        "quantity": 2,
+        "unit_price": 12.85,
+        "total": 25.7
+      }
+    ]
+  }
+}

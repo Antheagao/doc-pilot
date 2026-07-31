@@ -1,0 +1,36 @@
+{
+  "doc_id": "011-noisy-print-shop",
+  "image": "docs/011-noisy-print-shop.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "noisy",
+  "fields": {
+    "vendor": "Union Square Print Shop",
+    "document_date": "2026-01-18",
+    "currency": "USD",
+    "subtotal": 89.9,
+    "tax": 5.39,
+    "total": 95.29,
+    "line_items": [
+      {
+        "description": "Wall Calendar",
+        "quantity": 4,
+        "unit_price": 7.8,
+        "total": 31.2
+      },
+      {
+        "description": "Dog Chew Toy",
+        "quantity": 2,
+        "unit_price": 5.75,
+        "total": 11.5
+      },
+      {
+        "description": "Paperback Novel",
+        "quantity": 4,
+        "unit_price": 11.8,
+        "total": 47.2
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "doc_id": "013-noisy-tea-house",
+  "image": "docs/013-noisy-tea-house.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "noisy",
+  "fields": {
+    "vendor": "Copper Kettle Tea House",
+    "document_date": "2025-10-11",
+    "currency": "USD",
+    "subtotal": 52.0,
+    "tax": 4.29,
+    "total": 56.29,
+    "line_items": [
+      {
+        "description": "Wool Blend Socks (pair)",
+        "quantity": 2,
+        "unit_price": 9.6,
+        "total": 19.2
+      },
+      {
+        "description": "Whiteboard Marker Set",
+        "quantity": 2,
+        "unit_price": 7.6,
+        "total": 15.2
+      },
+      {
+        "description": "Paperback Novel",
+        "quantity": 2,
+        "unit_price": 8.8,
+        "total": 17.6
+      }
+    ]
+  }
+}

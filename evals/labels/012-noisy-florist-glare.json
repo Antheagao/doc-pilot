@@ -1,0 +1,30 @@
+{
+  "doc_id": "012-noisy-florist-glare",
+  "image": "docs/012-noisy-florist-glare.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "noisy",
+  "fields": {
+    "vendor": "Foxglove Florist & Gifts",
+    "document_date": "2026-01-29",
+    "currency": "USD",
+    "subtotal": 47.0,
+    "tax": 3.29,
+    "total": 50.29,
+    "line_items": [
+      {
+        "description": "Bamboo Cutting Board",
+        "quantity": 3,
+        "unit_price": 13.0,
+        "total": 39.0
+      },
+      {
+        "description": "Whiteboard Marker Set",
+        "quantity": 1,
+        "unit_price": 8.0,
+        "total": 8.0
+      }
+    ]
+  }
+}

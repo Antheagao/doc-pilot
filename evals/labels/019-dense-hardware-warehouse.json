@@ -1,0 +1,114 @@
+{
+  "doc_id": "019-dense-hardware-warehouse",
+  "image": "docs/019-dense-hardware-warehouse.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "dense",
+  "fields": {
+    "vendor": "Sterling Hardware & Supply",
+    "document_date": "2026-05-13",
+    "currency": "USD",
+    "subtotal": 470.6,
+    "tax": 23.53,
+    "total": 494.13,
+    "line_items": [
+      {
+        "description": "Ballpoint Pen 12-pack",
+        "quantity": 3,
+        "unit_price": 5.4,
+        "total": 16.2
+      },
+      {
+        "description": "Extension Cord 25ft",
+        "quantity": 1,
+        "unit_price": 18.65,
+        "total": 18.65
+      },
+      {
+        "description": "Scented Candle 8oz",
+        "quantity": 3,
+        "unit_price": 9.1,
+        "total": 27.3
+      },
+      {
+        "description": "Cedar Bird Feeder",
+        "quantity": 2,
+        "unit_price": 21.05,
+        "total": 42.1
+      },
+      {
+        "description": "Wall Calendar",
+        "quantity": 2,
+        "unit_price": 6.45,
+        "total": 12.9
+      },
+      {
+        "description": "Canvas Tote Bag",
+        "quantity": 4,
+        "unit_price": 7.85,
+        "total": 31.4
+      },
+      {
+        "description": "Notebook, ruled 80pg",
+        "quantity": 1,
+        "unit_price": 4.1,
+        "total": 4.1
+      },
+      {
+        "description": "Garden Trowel",
+        "quantity": 4,
+        "unit_price": 6.05,
+        "total": 24.2
+      },
+      {
+        "description": "Yoga Mat",
+        "quantity": 4,
+        "unit_price": 22.55,
+        "total": 90.2
+      },
+      {
+        "description": "Wool Blend Socks (pair)",
+        "quantity": 4,
+        "unit_price": 8.75,
+        "total": 35.0
+      },
+      {
+        "description": "Cat Litter 10lb",
+        "quantity": 3,
+        "unit_price": 12.85,
+        "total": 38.55
+      },
+      {
+        "description": "Ceramic Mug 12oz",
+        "quantity": 2,
+        "unit_price": 8.15,
+        "total": 16.3
+      },
+      {
+        "description": "Bamboo Cutting Board",
+        "quantity": 4,
+        "unit_price": 13.65,
+        "total": 54.6
+      },
+      {
+        "description": "Kitchen Sponge 6-pack",
+        "quantity": 1,
+        "unit_price": 4.6,
+        "total": 4.6
+      },
+      {
+        "description": "Dog Chew Toy",
+        "quantity": 4,
+        "unit_price": 5.75,
+        "total": 23.0
+      },
+      {
+        "description": "Furnace Filter 16x20",
+        "quantity": 2,
+        "unit_price": 15.75,
+        "total": 31.5
+      }
+    ]
+  }
+}

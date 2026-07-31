@@ -1,0 +1,30 @@
+{
+  "doc_id": "015-handwriting-candle-co",
+  "image": "docs/015-handwriting-candle-co.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "handwriting",
+  "fields": {
+    "vendor": "Amberlight Candle Co.",
+    "document_date": "2025-09-15",
+    "currency": "USD",
+    "subtotal": 22.6,
+    "tax": 1.36,
+    "total": 23.96,
+    "line_items": [
+      {
+        "description": "Recycled Paper Ream",
+        "quantity": 1,
+        "unit_price": 4.4,
+        "total": 4.4
+      },
+      {
+        "description": "Scented Candle 8oz",
+        "quantity": 2,
+        "unit_price": 9.1,
+        "total": 18.2
+      }
+    ]
+  }
+}

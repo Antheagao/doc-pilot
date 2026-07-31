@@ -1,0 +1,90 @@
+{
+  "doc_id": "018-dense-office-outfitters",
+  "image": "docs/018-dense-office-outfitters.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "dense",
+  "fields": {
+    "vendor": "Northgate Office Outfitters",
+    "document_date": "2025-09-01",
+    "currency": "USD",
+    "subtotal": 393.15,
+    "tax": 32.43,
+    "total": 425.58,
+    "line_items": [
+      {
+        "description": "Cedar Bird Feeder",
+        "quantity": 4,
+        "unit_price": 21.1,
+        "total": 84.4
+      },
+      {
+        "description": "Whiteboard Marker Set",
+        "quantity": 2,
+        "unit_price": 5.75,
+        "total": 11.5
+      },
+      {
+        "description": "AA Batteries (8-pack)",
+        "quantity": 1,
+        "unit_price": 6.8,
+        "total": 6.8
+      },
+      {
+        "description": "Stainless Water Bottle",
+        "quantity": 2,
+        "unit_price": 14.2,
+        "total": 28.4
+      },
+      {
+        "description": "LED Desk Lamp",
+        "quantity": 2,
+        "unit_price": 19.7,
+        "total": 39.4
+      },
+      {
+        "description": "Canvas Tote Bag",
+        "quantity": 2,
+        "unit_price": 9.05,
+        "total": 18.1
+      },
+      {
+        "description": "Picture Frame 5x7",
+        "quantity": 2,
+        "unit_price": 12.05,
+        "total": 24.1
+      },
+      {
+        "description": "Produce Bags (set of 5)",
+        "quantity": 4,
+        "unit_price": 6.65,
+        "total": 26.6
+      },
+      {
+        "description": "Herbal Tea Sampler",
+        "quantity": 3,
+        "unit_price": 8.05,
+        "total": 24.15
+      },
+      {
+        "description": "Organic Roast Coffee 12oz",
+        "quantity": 3,
+        "unit_price": 15.9,
+        "total": 47.7
+      },
+      {
+        "description": "Yoga Mat",
+        "quantity": 2,
+        "unit_price": 22.7,
+        "total": 45.4
+      },
+      {
+        "description": "Wool Blend Socks (pair)",
+        "quantity": 4,
+        "unit_price": 9.15,
+        "total": 36.6
+      }
+    ]
+  }
+}

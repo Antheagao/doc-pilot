@@ -1,0 +1,36 @@
+{
+  "doc_id": "021-missing-field-grocery-no-tax",
+  "image": "docs/021-missing-field-grocery-no-tax.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "missing-field",
+  "fields": {
+    "vendor": "Green Valley Grocery",
+    "document_date": "2025-08-24",
+    "currency": "USD",
+    "subtotal": 71.35,
+    "tax": null,
+    "total": 71.35,
+    "line_items": [
+      {
+        "description": "Packing Tape Roll",
+        "quantity": 3,
+        "unit_price": 3.95,
+        "total": 11.85
+      },
+      {
+        "description": "Throw Pillow Cover",
+        "quantity": 2,
+        "unit_price": 12.95,
+        "total": 25.9
+      },
+      {
+        "description": "Produce Bags (set of 5)",
+        "quantity": 4,
+        "unit_price": 8.4,
+        "total": 33.6
+      }
+    ]
+  }
+}

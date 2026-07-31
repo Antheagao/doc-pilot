@@ -1,0 +1,24 @@
+{
+  "doc_id": "001-clean-coffee-receipt",
+  "image": "docs/001-clean-coffee-receipt.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "clean",
+  "fields": {
+    "vendor": "Cascade Coffee Roasters",
+    "document_date": "2025-08-08",
+    "currency": "USD",
+    "subtotal": 11.3,
+    "tax": 0.79,
+    "total": 12.09,
+    "line_items": [
+      {
+        "description": "Cat Litter 10lb",
+        "quantity": 1,
+        "unit_price": 11.3,
+        "total": 11.3
+      }
+    ]
+  }
+}

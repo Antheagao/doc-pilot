@@ -1,0 +1,36 @@
+{
+  "doc_id": "023-missing-field-order-no-currency",
+  "image": "docs/023-missing-field-order-no-currency.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "missing-field",
+  "fields": {
+    "vendor": "Driftwood General Store",
+    "document_date": "2025-10-27",
+    "currency": null,
+    "subtotal": 55.1,
+    "tax": 3.31,
+    "total": 58.41,
+    "line_items": [
+      {
+        "description": "Yoga Mat",
+        "quantity": 1,
+        "unit_price": 20.9,
+        "total": 20.9
+      },
+      {
+        "description": "Kitchen Sponge 6-pack",
+        "quantity": 4,
+        "unit_price": 3.75,
+        "total": 15.0
+      },
+      {
+        "description": "Steel Hex Bolts (box of 50)",
+        "quantity": 3,
+        "unit_price": 6.4,
+        "total": 19.2
+      }
+    ]
+  }
+}

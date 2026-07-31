@@ -1,0 +1,30 @@
+{
+  "doc_id": "008-skewed-pet-supply",
+  "image": "docs/008-skewed-pet-supply.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "skewed",
+  "fields": {
+    "vendor": "Blue Harbor Pet Supply",
+    "document_date": "2025-09-25",
+    "currency": "USD",
+    "subtotal": 16.05,
+    "tax": 0.96,
+    "total": 17.01,
+    "line_items": [
+      {
+        "description": "Garden Trowel",
+        "quantity": 2,
+        "unit_price": 6.7,
+        "total": 13.4
+      },
+      {
+        "description": "Notebook, ruled 80pg",
+        "quantity": 1,
+        "unit_price": 2.65,
+        "total": 2.65
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "doc_id": "024-eur-bakery-berlin",
+  "image": "docs/024-eur-bakery-berlin.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "eur",
+  "fields": {
+    "vendor": "Lindenplatz Bakery",
+    "document_date": "2026-05-31",
+    "currency": "EUR",
+    "subtotal": 26.25,
+    "tax": 1.57,
+    "total": 27.82,
+    "line_items": [
+      {
+        "description": "Notebook, ruled 80pg",
+        "quantity": 2,
+        "unit_price": 2.95,
+        "total": 5.9
+      },
+      {
+        "description": "Kitchen Sponge 6-pack",
+        "quantity": 2,
+        "unit_price": 3.4,
+        "total": 6.8
+      },
+      {
+        "description": "Cat Litter 10lb",
+        "quantity": 1,
+        "unit_price": 13.55,
+        "total": 13.55
+      }
+    ]
+  }
+}

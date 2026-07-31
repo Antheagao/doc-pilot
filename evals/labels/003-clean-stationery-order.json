@@ -1,0 +1,30 @@
+{
+  "doc_id": "003-clean-stationery-order",
+  "image": "docs/003-clean-stationery-order.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "clean",
+  "fields": {
+    "vendor": "Maple & Co. Stationery",
+    "document_date": "2025-09-30",
+    "currency": "USD",
+    "subtotal": 53.7,
+    "tax": 2.69,
+    "total": 56.39,
+    "line_items": [
+      {
+        "description": "Cat Litter 10lb",
+        "quantity": 2,
+        "unit_price": 11.85,
+        "total": 23.7
+      },
+      {
+        "description": "Dog Chew Toy",
+        "quantity": 4,
+        "unit_price": 7.5,
+        "total": 30.0
+      }
+    ]
+  }
+}

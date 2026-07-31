@@ -1,0 +1,30 @@
+{
+  "doc_id": "005-clean-bakery-receipt",
+  "image": "docs/005-clean-bakery-receipt.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "clean",
+  "fields": {
+    "vendor": "Cobblestone Bakery",
+    "document_date": "2026-04-15",
+    "currency": "USD",
+    "subtotal": 63.0,
+    "tax": 3.78,
+    "total": 66.78,
+    "line_items": [
+      {
+        "description": "Bamboo Cutting Board",
+        "quantity": 3,
+        "unit_price": 17.55,
+        "total": 52.65
+      },
+      {
+        "description": "Herbal Tea Sampler",
+        "quantity": 1,
+        "unit_price": 10.35,
+        "total": 10.35
+      }
+    ]
+  }
+}

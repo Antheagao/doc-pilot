@@ -1,0 +1,30 @@
+{
+  "doc_id": "022-missing-field-receipt-no-vendor",
+  "image": "docs/022-missing-field-receipt-no-vendor.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "missing-field",
+  "fields": {
+    "vendor": null,
+    "document_date": "2025-08-11",
+    "currency": "USD",
+    "subtotal": 85.25,
+    "tax": 5.75,
+    "total": 91.0,
+    "line_items": [
+      {
+        "description": "LED Desk Lamp",
+        "quantity": 4,
+        "unit_price": 19.85,
+        "total": 79.4
+      },
+      {
+        "description": "Recycled Paper Ream",
+        "quantity": 1,
+        "unit_price": 5.85,
+        "total": 5.85
+      }
+    ]
+  }
+}

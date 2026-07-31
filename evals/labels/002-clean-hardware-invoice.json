@@ -1,0 +1,42 @@
+{
+  "doc_id": "002-clean-hardware-invoice",
+  "image": "docs/002-clean-hardware-invoice.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "clean",
+  "fields": {
+    "vendor": "Ironclad Hardware Supply",
+    "document_date": "2025-06-29",
+    "currency": "USD",
+    "subtotal": 106.45,
+    "tax": 8.78,
+    "total": 115.23,
+    "line_items": [
+      {
+        "description": "Steel Hex Bolts (box of 50)",
+        "quantity": 3,
+        "unit_price": 6.75,
+        "total": 20.25
+      },
+      {
+        "description": "Garden Trowel",
+        "quantity": 2,
+        "unit_price": 8.1,
+        "total": 16.2
+      },
+      {
+        "description": "Kitchen Sponge 6-pack",
+        "quantity": 2,
+        "unit_price": 5.0,
+        "total": 10.0
+      },
+      {
+        "description": "Organic Roast Coffee 12oz",
+        "quantity": 4,
+        "unit_price": 15.0,
+        "total": 60.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "doc_id": "010-skewed-general-store",
+  "image": "docs/010-skewed-general-store.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "skewed",
+  "fields": {
+    "vendor": "Driftwood General Store",
+    "document_date": "2026-03-20",
+    "currency": "USD",
+    "subtotal": 25.7,
+    "tax": 1.8,
+    "total": 27.5,
+    "line_items": [
+      {
+        "description": "Ballpoint Pen 12-pack",
+        "quantity": 4,
+        "unit_price": 4.45,
+        "total": 17.8
+      },
+      {
+        "description": "Packing Tape Roll",
+        "quantity": 2,
+        "unit_price": 3.95,
+        "total": 7.9
+      }
+    ]
+  }
+}

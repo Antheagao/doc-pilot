@@ -1,0 +1,30 @@
+{
+  "doc_id": "016-handwriting-bakery-note",
+  "image": "docs/016-handwriting-bakery-note.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "handwriting",
+  "fields": {
+    "vendor": "Cobblestone Bakery",
+    "document_date": "2025-12-03",
+    "currency": "USD",
+    "subtotal": 45.25,
+    "tax": 3.05,
+    "total": 48.3,
+    "line_items": [
+      {
+        "description": "Picture Frame 5x7",
+        "quantity": 4,
+        "unit_price": 9.15,
+        "total": 36.6
+      },
+      {
+        "description": "Wool Blend Socks (pair)",
+        "quantity": 1,
+        "unit_price": 8.65,
+        "total": 8.65
+      }
+    ]
+  }
+}

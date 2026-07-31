@@ -1,0 +1,30 @@
+{
+  "doc_id": "014-noisy-home-goods",
+  "image": "docs/014-noisy-home-goods.jpg",
+  "mime_type": "image/jpeg",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "noisy",
+  "fields": {
+    "vendor": "Willow Creek Home Goods",
+    "document_date": "2025-07-25",
+    "currency": "USD",
+    "subtotal": 37.95,
+    "tax": 1.9,
+    "total": 39.85,
+    "line_items": [
+      {
+        "description": "Bike Tire Patch Kit",
+        "quantity": 2,
+        "unit_price": 4.8,
+        "total": 9.6
+      },
+      {
+        "description": "Throw Pillow Cover",
+        "quantity": 3,
+        "unit_price": 9.45,
+        "total": 28.35
+      }
+    ]
+  }
+}

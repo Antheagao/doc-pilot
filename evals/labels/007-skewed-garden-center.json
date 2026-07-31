@@ -1,0 +1,36 @@
+{
+  "doc_id": "007-skewed-garden-center",
+  "image": "docs/007-skewed-garden-center.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "skewed",
+  "fields": {
+    "vendor": "Thistlewood Garden Center",
+    "document_date": "2025-11-13",
+    "currency": "USD",
+    "subtotal": 17.3,
+    "tax": 1.04,
+    "total": 18.34,
+    "line_items": [
+      {
+        "description": "Ceramic Mug 12oz",
+        "quantity": 1,
+        "unit_price": 5.3,
+        "total": 5.3
+      },
+      {
+        "description": "Notebook, ruled 80pg",
+        "quantity": 1,
+        "unit_price": 3.25,
+        "total": 3.25
+      },
+      {
+        "description": "Produce Bags (set of 5)",
+        "quantity": 1,
+        "unit_price": 8.75,
+        "total": 8.75
+      }
+    ]
+  }
+}

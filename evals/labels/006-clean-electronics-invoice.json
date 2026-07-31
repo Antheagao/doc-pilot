@@ -1,0 +1,42 @@
+{
+  "doc_id": "006-clean-electronics-invoice",
+  "image": "docs/006-clean-electronics-invoice.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "clean",
+  "fields": {
+    "vendor": "Sunridge Electronics Depot",
+    "document_date": "2026-03-21",
+    "currency": "USD",
+    "subtotal": 118.25,
+    "tax": 5.91,
+    "total": 124.16,
+    "line_items": [
+      {
+        "description": "Kitchen Sponge 6-pack",
+        "quantity": 3,
+        "unit_price": 3.05,
+        "total": 9.15
+      },
+      {
+        "description": "Steel Hex Bolts (box of 50)",
+        "quantity": 2,
+        "unit_price": 8.0,
+        "total": 16.0
+      },
+      {
+        "description": "Picture Frame 5x7",
+        "quantity": 4,
+        "unit_price": 12.85,
+        "total": 51.4
+      },
+      {
+        "description": "Furnace Filter 16x20",
+        "quantity": 3,
+        "unit_price": 13.9,
+        "total": 41.7
+      }
+    ]
+  }
+}

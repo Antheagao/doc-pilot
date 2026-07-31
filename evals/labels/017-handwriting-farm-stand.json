@@ -1,0 +1,36 @@
+{
+  "doc_id": "017-handwriting-farm-stand",
+  "image": "docs/017-handwriting-farm-stand.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v1",
+  "difficulty": "handwriting",
+  "fields": {
+    "vendor": "Sunny Acres Farm Stand",
+    "document_date": "2026-02-23",
+    "currency": "USD",
+    "subtotal": 62.75,
+    "tax": 4.39,
+    "total": 67.14,
+    "line_items": [
+      {
+        "description": "Packing Tape Roll",
+        "quantity": 3,
+        "unit_price": 3.6,
+        "total": 10.8
+      },
+      {
+        "description": "Extension Cord 25ft",
+        "quantity": 3,
+        "unit_price": 14.65,
+        "total": 43.95
+      },
+      {
+        "description": "Wool Blend Socks (pair)",
+        "quantity": 1,
+        "unit_price": 8.0,
+        "total": 8.0
+      }
+    ]
+  }
+}
