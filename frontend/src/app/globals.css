@@ -520,6 +520,41 @@ textarea:focus-visible,
   font-weight: 600;
 }
 
+.stats-strip {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-strip__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stats-strip__label {
+  color: var(--muted);
+}
+
+.stats-strip__value {
+  color: var(--foreground);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.stats-strip__sub {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .failed-state {
   display: flex;
   flex-direction: column;

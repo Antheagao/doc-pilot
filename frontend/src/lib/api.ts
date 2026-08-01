@@ -180,6 +180,43 @@ export async function resolveReviewField(
   return handle<ExtractedField>(res);
 }
 
+export interface StatsReview {
+  pending: number;
+  approved: number;
+  corrected: number;
+}
+
+export interface LastEval {
+  model: string | null;
+  prompt_version: string | null;
+  dataset_version: string | null;
+  started_at_utc: string;
+  overall_accuracy: number | null;
+  caught_by_review: number | null;
+  mean_cost_per_doc: number;
+  n_scored: number;
+}
+
+export interface Stats {
+  documents_total: number;
+  documents_by_status: Record<string, number>;
+  documents_processed: number;
+  extractions_total: number;
+  total_cost_usd: number;
+  mean_cost_per_doc: number | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  review: StatsReview;
+  last_eval: LastEval | null;
+}
+
+export async function getStats(): Promise<Stats> {
+  const res = await fetch(`${API_URL}/stats`, { cache: "no-store" });
+  return handle<Stats>(res);
+}
+
 export async function uploadDocument(file: File): Promise<DocumentCreateResponse> {
   const formData = new FormData();
   formData.append("file", file);

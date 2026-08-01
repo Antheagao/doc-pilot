@@ -6,6 +6,7 @@ import Link from "next/link";
 import { listDocuments, ApiError, type DocumentListItem } from "@/lib/api";
 import StatusChip from "@/components/StatusChip";
 import UploadZone from "@/components/UploadZone";
+import StatsStrip from "@/components/StatsStrip";
 
 const POLL_INTERVAL_MS = 3000;
 const IN_FLIGHT_STATUSES = new Set(["uploaded", "processing"]);
@@ -71,6 +72,8 @@ export default function HomePage() {
   return (
     <div>
       <UploadZone onUploaded={(id) => router.push(`/documents/${id}`)} />
+
+      <StatsStrip />
 
       <div className="section-heading">Documents</div>
 
