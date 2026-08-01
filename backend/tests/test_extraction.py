@@ -16,6 +16,7 @@ from app.extraction import (
     TOP_LEVEL_FIELDS,
     ExtractionError,
     ExtractionResult,
+    ModelRefusalError,
     NonRetryableExtractionError,
     _coerce_leaf,
     _format_violations_for_prompt,
@@ -426,7 +427,7 @@ async def test_refusal_raises_non_retryable_and_persists_nothing(
     response = _FakeMessage(stop_reason="refusal", content=[], usage=_FakeUsage(50, 10))
     _patch_client(monkeypatch, response)
 
-    with pytest.raises(NonRetryableExtractionError) as exc_info:
+    with pytest.raises(ModelRefusalError) as exc_info:
         await process_document_job(db_session, job)
     # billed usage is surfaced in the error text (fix 2c) so a requeued
     # job's last_error doesn't hide the spend from the failed attempt.
@@ -450,8 +451,9 @@ async def test_max_tokens_truncation_is_non_retryable(
     )
     _patch_client(monkeypatch, response)
 
-    with pytest.raises(NonRetryableExtractionError):
+    with pytest.raises(NonRetryableExtractionError) as exc_info:
         await process_document_job(db_session, job)
+    assert not isinstance(exc_info.value, ModelRefusalError)
 
     assert await _extraction_count(db_session, document.id) == 0
 

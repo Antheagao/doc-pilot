@@ -48,7 +48,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import async_session_maker, engine
-from app.extraction import NonRetryableExtractionError, process_document_job
+from app.extraction import (
+    ModelRefusalError,
+    NonRetryableExtractionError,
+    process_document_job,
+)
 from app.models import Document, Job
 
 logger = logging.getLogger(__name__)
@@ -173,10 +177,13 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
         job.last_error = error_tail
         job.finished_at = datetime.now(UTC)
         document = await session.get(Document, job.document_id)
+        refused = isinstance(exc, ModelRefusalError)
         if document is not None:
-            document.status = "failed"
+            document.status = "refused" if refused else "failed"
         await session.commit()
-        if non_retryable:
+        if refused:
+            logger.info("failed job %s permanently (model refusal)", job.id)
+        elif non_retryable:
             logger.info(
                 "failed job %s permanently (non-retryable: %s)", job.id, type(exc).__name__
             )

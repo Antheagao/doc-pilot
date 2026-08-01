@@ -5,7 +5,7 @@
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
 
-export type DocumentStatus = "uploaded" | "processing" | "extracted" | "failed";
+export type DocumentStatus = "uploaded" | "processing" | "extracted" | "failed" | "refused";
 
 export interface DocumentListItem {
   id: string;

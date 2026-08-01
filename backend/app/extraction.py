@@ -141,6 +141,16 @@ class NonRetryableExtractionError(ExtractionError):
     """
 
 
+class ModelRefusalError(NonRetryableExtractionError):
+    """The model explicitly refused to extract the document
+    (response.stop_reason == "refusal"), as distinct from other
+    non-tool_use stop reasons like max_tokens. Still non-retryable --
+    re-running the identical job would produce the identical refusal --
+    but worker.fail_job marks the document "refused" instead of "failed"
+    so the UI can tell the two apart.
+    """
+
+
 def _leaf_schema(value_schema: dict[str, Any]) -> dict[str, Any]:
     """A `{"value": <value_schema>, "confidence": number}` leaf, the shape
     every extracted field (and line-item sub-field) uses per the prompt.
@@ -482,7 +492,12 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
         raise ExtractionError(f"Anthropic API error: {exc}") from exc
 
     if response.stop_reason != "tool_use":
-        raise NonRetryableExtractionError(
+        error_cls = (
+            ModelRefusalError
+            if response.stop_reason == "refusal"
+            else NonRetryableExtractionError
+        )
+        raise error_cls(
             f"model did not return a usable tool call (stop_reason={response.stop_reason!r}); "
             f"billed usage: input_tokens={response.usage.input_tokens}, "
             f"output_tokens={response.usage.output_tokens}",

@@ -10,7 +10,7 @@ from sqlalchemy import delete, text
 from app import worker as worker_module
 from app.config import Settings
 from app.db import async_session_maker
-from app.extraction import NonRetryableExtractionError
+from app.extraction import ModelRefusalError, NonRetryableExtractionError
 from app.models import Document, Job
 from app.worker import MAX_ATTEMPTS, pending_job_stmt, reclaim_orphaned_jobs, run_once
 
@@ -198,6 +198,33 @@ async def test_non_retryable_failure_skips_requeue_and_fails_immediately(
 
     result_document = await _refresh_document(document.id)
     assert result_document.status == "failed"
+
+
+async def test_model_refusal_marks_document_refused(real_documents: Callable) -> None:
+    """A ModelRefusalError (see app/extraction.py) is a NonRetryableExtractionError
+    subtype, so it gets the same skip-requeue-and-fail-immediately job
+    handling as the plain-NonRetryable case above -- but fail_job marks
+    the document "refused" instead of "failed" so the UI can tell a
+    model refusal apart from every other permanent failure.
+    """
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+
+    async def refusing_handler(session, job) -> None:
+        raise ModelRefusalError("model refused")
+
+    claimed = await run_once(refusing_handler, document_id=document.id)
+
+    assert claimed is True
+    result_job = await _refresh_job(job.id)
+    assert result_job.state == "failed"
+    assert result_job.attempts == 1  # did not burn through MAX_ATTEMPTS retries
+    assert result_job.finished_at is not None
+    assert result_job.last_error is not None
+    assert "model refused" in result_job.last_error
+
+    result_document = await _refresh_document(document.id)
+    assert result_document.status == "refused"
 
 
 async def test_exhaustion_marks_job_and_document_failed(real_documents: Callable) -> None:

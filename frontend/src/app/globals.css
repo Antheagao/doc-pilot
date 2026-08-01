@@ -16,6 +16,7 @@
   --status-processing: #b45309;
   --status-extracted: #15803d;
   --status-failed: #b91c1c;
+  --status-refused: #7c2d12;
 
   --confidence-low-bg: #fffbeb;
   --confidence-low-border: #fcd34d;
@@ -43,6 +44,7 @@
     --status-processing: #fbbf24;
     --status-extracted: #4ade80;
     --status-failed: #fca5a5;
+    --status-refused: #fdba74;
 
     --confidence-low-bg: #33270a;
     --confidence-low-border: #a16207;
@@ -311,6 +313,11 @@ textarea:focus-visible,
 .status-chip--failed {
   background: color-mix(in srgb, var(--status-failed) 14%, transparent);
   color: var(--status-failed);
+}
+
+.status-chip--refused {
+  background: color-mix(in srgb, var(--status-refused) 14%, transparent);
+  color: var(--status-refused);
 }
 
 /* ---- Document detail split view ---- */

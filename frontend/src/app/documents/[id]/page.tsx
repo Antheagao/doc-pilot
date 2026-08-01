@@ -123,6 +123,18 @@ export default function DocumentPage() {
               </div>
             )}
 
+            {doc.status === "refused" && (
+              <div className="results-panel">
+                <div className="failed-state">
+                  <div>Extraction refused</div>
+                  <div className="hint">
+                    The model declined to extract this document — nothing was
+                    stored. This isn&apos;t retried automatically.
+                  </div>
+                </div>
+              </div>
+            )}
+
             {doc.status === "extracted" &&
               (doc.extraction ? (
                 <ExtractionPanel extraction={doc.extraction} />
