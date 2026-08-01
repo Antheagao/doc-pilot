@@ -37,6 +37,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings
 from app.models import Document, ExtractedField, Extraction, Job
+from app.pdf import count_pdf_pages, split_pdf_pages
 
 # The extraction prompt is a versioned file; the version string is derived
 # from its filename so a new prompt (extract_v2.md, ...) automatically
@@ -305,7 +306,10 @@ def _leaf_is_malformed(raw: Any) -> bool:
         return True
     try:
         confidence = float(raw.get("confidence"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: float(x) on an int too large to represent as a
+        # float (e.g. a huge integer literal, valid JSON) -- same
+        # "can't trust this leaf" degrade as a non-numeric confidence.
         return True
     return not math.isfinite(confidence)
 
@@ -334,6 +338,154 @@ def _coerce_leaf(raw: Any) -> tuple[Any, float]:
 
     confidence = float(raw["confidence"])
     return raw["value"], max(0.0, min(1.0, confidence))
+
+
+# --- H6 chunked-PDF merge (merge_page_tool_inputs) --------------------------
+#
+# Kept next to _coerce_leaf/_leaf_is_malformed (rather than in app.pdf,
+# which must stay pypdf+stdlib only, or its own module) so it can reuse
+# them directly without a circular import back into this module.
+
+# When two pages disagree on a scalar field's value, the merged leaf's
+# confidence is capped at this value regardless of how confident either
+# page was individually -- a real cross-page disagreement must reach a
+# human reviewer even if one page reported very high confidence.
+MERGE_CONFLICT_CONFIDENCE = 0.5
+
+# Header-ish fields: ties in confidence break to the EARLIEST page
+# (the header of a multi-page document is expected up front).
+_MERGE_TIE_BREAK_EARLIEST = ("vendor", "document_date", "currency")
+# Money fields: ties in confidence break to the LATEST page (totals
+# conventionally print at the end of a multi-page invoice).
+_MERGE_TIE_BREAK_LATEST = ("subtotal", "tax", "total")
+
+
+def _values_disagree(a: Any, b: Any) -> bool:
+    """True iff two non-null candidate leaf values for the same scalar
+    field are meaningfully different. Strings are compared via
+    strip().casefold() (whitespace/case-insensitive), numbers via
+    round(v, 2) (tolerates float noise from independent per-page
+    extractions), anything else by plain equality.
+
+    Page tool_inputs are untrusted (see the module docstring) and can
+    contain adversarial numerics -- e.g. an oversized int literal like
+    10**400, valid JSON but too large for float() to represent, raising
+    OverflowError. That's treated as a disagreement (the safe direction:
+    it caps the merged confidence via MERGE_CONFLICT_CONFIDENCE rather
+    than silently trusting an unrepresentable number), not re-raised.
+    """
+    if isinstance(a, str) and isinstance(b, str):
+        return a.strip().casefold() != b.strip().casefold()
+    if isinstance(a, int | float) and isinstance(b, int | float):
+        try:
+            return round(float(a), 2) != round(float(b), 2)
+        except OverflowError:
+            return True
+    return a != b
+
+
+def _merge_scalar_leaf(candidates: list[tuple[int, Any, float]], *, tie_break: str) -> dict[str, Any]:
+    """Merge one scalar field's per-page (page_index, value, confidence)
+    candidates -- already read defensively via _coerce_leaf, so a
+    malformed leaf on any page has already degraded to
+    (page_index, None, 0.0) by the time it reaches here -- into a single
+    {"value", "confidence"} leaf, shape-identical to a single-call leaf.
+
+    All-null (every candidate's value is None): the merged leaf's value
+    is None, confidence is the MINIMUM confidence across every
+    candidate (including the null ones) -- an absent field should land
+    low-confidence and route to review, not look artificially confident
+    just because no page actually reported anything wrong.
+
+    Otherwise: pick the highest-confidence NON-null candidate; ties
+    (equal confidence) are broken by `tie_break` ("earliest" or
+    "latest") using page index. If any non-null candidate's value
+    disagrees with another's (see _values_disagree), the merged
+    confidence is capped at MERGE_CONFLICT_CONFIDENCE -- a genuine
+    cross-page conflict must reach a human even if the winning page was
+    very confident.
+    """
+    non_null = [c for c in candidates if c[1] is not None]
+    if not non_null:
+        return {"value": None, "confidence": min((c[2] for c in candidates), default=0.0)}
+
+    best_confidence = max(c[2] for c in non_null)
+    tied = [c for c in non_null if c[2] == best_confidence]
+    winner = (min if tie_break == "earliest" else max)(tied, key=lambda c: c[0])
+
+    base_value = non_null[0][1]
+    disagreement = any(_values_disagree(base_value, c[1]) for c in non_null[1:])
+
+    confidence = min(winner[2], MERGE_CONFLICT_CONFIDENCE) if disagreement else winner[2]
+    return {"value": winner[1], "confidence": confidence}
+
+
+def _merge_line_items(page_line_items: list[tuple[Any, float]]) -> dict[str, Any]:
+    """Merge per-page (value, confidence) candidates for the "line_items"
+    leaf (already read via _coerce_leaf) into one leaf: every page's
+    array that actually IS a list is concatenated in page order, and
+    the merged confidence is the MINIMUM confidence across only the
+    pages that contributed a list -- a page whose line_items leaf was
+    null/malformed contributed nothing to concatenate, so it doesn't
+    drag the confidence down either. If no page produced a list at all,
+    returns {"value": [], "confidence": 0.0} so the field routes to
+    review like any other all-null field.
+    """
+    concatenated: list[Any] = []
+    contributing_confidences: list[float] = []
+    for value, confidence in page_line_items:
+        if isinstance(value, list):
+            concatenated.extend(value)
+            contributing_confidences.append(confidence)
+
+    if not contributing_confidences:
+        return {"value": [], "confidence": 0.0}
+    return {"value": concatenated, "confidence": min(contributing_confidences)}
+
+
+def merge_page_tool_inputs(page_inputs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge a list of per-page tool_input dicts (one per PDF page, in
+    page order, each shaped like a single-call RECORD_EXTRACTION_TOOL
+    response) into ONE tool_input identical in SHAPE to a single-call
+    one -- so downstream persistence (process_document_job), scoring
+    (_coerce_leaf-based eval scoring), and this module's own
+    _coerce_leaf are all untouched by chunking. See _merge_scalar_leaf
+    and _merge_line_items for the field-by-field merge rules (header
+    fields tie-break earliest, money fields tie-break latest,
+    all-null uses min confidence, disagreement caps confidence at
+    MERGE_CONFLICT_CONFIDENCE).
+
+    Every page's tool_input is untrusted the same way a single
+    response's is (see the module docstring / _coerce_leaf): a
+    non-dict page_input, or one missing/mangling a field entirely,
+    degrades that page's contribution to (None, 0.0) via _coerce_leaf
+    rather than raising.
+    """
+    line_item_candidates: list[tuple[Any, float]] = []
+    scalar_candidates: dict[str, list[tuple[int, Any, float]]] = {
+        field_name: [] for field_name in TOP_LEVEL_FIELDS if field_name != "line_items"
+    }
+
+    for page_idx, page_input in enumerate(page_inputs):
+        raw_line_items = page_input.get("line_items") if isinstance(page_input, dict) else None
+        line_item_candidates.append(_coerce_leaf(raw_line_items))
+
+        for field_name, candidates in scalar_candidates.items():
+            raw_leaf = page_input.get(field_name) if isinstance(page_input, dict) else None
+            value, confidence = _coerce_leaf(raw_leaf)
+            candidates.append((page_idx, value, confidence))
+
+    merged: dict[str, Any] = {}
+    for field_name in TOP_LEVEL_FIELDS:
+        if field_name == "line_items":
+            merged[field_name] = _merge_line_items(line_item_candidates)
+        elif field_name in _MERGE_TIE_BREAK_EARLIEST:
+            merged[field_name] = _merge_scalar_leaf(scalar_candidates[field_name], tie_break="earliest")
+        else:
+            assert field_name in _MERGE_TIE_BREAK_LATEST  # every non-line_items field is one or the other
+            merged[field_name] = _merge_scalar_leaf(scalar_candidates[field_name], tie_break="latest")
+
+    return merged
 
 
 _LINE_ITEM_SUBFIELDS = ("description", "quantity", "unit_price", "total")
@@ -422,36 +574,71 @@ def _format_violations_for_prompt(violations: list[str]) -> str:
     return "\n".join(f"- {v}" for v in shown + suffix_lines)
 
 
-async def _build_document_block(path: Path, mime_type: str) -> dict[str, Any]:
-    """Build the image/document content block for the user message.
-
-    Mime-type validation happens before the (threaded) file read so an
-    unsupported type fails fast without touching disk. The read itself
-    is offloaded via run_in_threadpool so a large file doesn't block the
-    event loop the worker shares with everything else in the process.
-    OSError from the read (missing file, permission error, ...) is
-    wrapped as ExtractionError -- retryable, since the underlying cause
-    (e.g. a networked/mounted uploads volume being briefly unavailable)
-    is plausibly transient, unlike the deterministic failures that use
-    NonRetryableExtractionError.
+def _content_type_for_mime(mime_type: str) -> str:
+    """Validate mime_type and return the Anthropic content block `type`
+    ("image" or "document") for it, or raise NonRetryableExtractionError
+    for anything unsupported. Factored out of _build_document_block so
+    this check can run before any read/threadpool hop is scheduled --
+    exactly the order it ran in inline before this was split out.
     """
     if mime_type == PDF_MIME_TYPE:
-        content_type = "document"
-    elif mime_type in IMAGE_MIME_TYPES:
-        content_type = "image"
-    else:
-        raise NonRetryableExtractionError(f"unsupported mime type for extraction: {mime_type}")
+        return "document"
+    if mime_type in IMAGE_MIME_TYPES:
+        return "image"
+    raise NonRetryableExtractionError(f"unsupported mime type for extraction: {mime_type}")
 
+
+async def _read_document_bytes(path: Path) -> bytes:
+    """Threaded raw-bytes read shared by every path that needs the
+    document's bytes: the image/single-call path (via
+    _build_document_block below) and both PDF code paths in
+    extract_document (page counting and, for a chunked PDF,
+    app.pdf.split_pdf_pages) -- factored out so a PDF's bytes are read
+    from disk exactly once regardless of which path ends up handling it.
+    run_in_threadpool keeps a large file's read off the event loop the
+    worker shares with everything else in the process. OSError (missing
+    file, permission error, ...) is wrapped as ExtractionError --
+    retryable, since the underlying cause (e.g. a networked/mounted
+    uploads volume being briefly unavailable) is plausibly transient,
+    unlike the deterministic failures that use NonRetryableExtractionError.
+    """
     try:
-        raw_bytes = await run_in_threadpool(path.read_bytes)
+        return await run_in_threadpool(path.read_bytes)
     except OSError as exc:
         raise ExtractionError(f"failed to read document file {path}: {exc}") from exc
 
+
+def _encode_document_block(raw_bytes: bytes, mime_type: str, content_type: str) -> dict[str, Any]:
+    """Pure: base64-encode already-read bytes into the image/document
+    content block shape the Anthropic API expects. Shared by the
+    single-call path (_build_document_block, below) and both PDF
+    paths in extract_document -- the whole-PDF single-call case reuses
+    the bytes already read for page counting rather than reading the
+    file twice, and the H6 chunked path calls this once per split
+    single-page PDF.
+    """
     data = base64.standard_b64encode(raw_bytes).decode("utf-8")
     return {
         "type": content_type,
         "source": {"type": "base64", "media_type": mime_type, "data": data},
     }
+
+
+async def _build_document_block(path: Path, mime_type: str) -> dict[str, Any]:
+    """Build the image/document content block for the user message.
+
+    Mime-type validation happens before the (threaded) file read so an
+    unsupported type fails fast without touching disk -- see
+    _content_type_for_mime. The read (_read_document_bytes) and the
+    base64 encoding (_encode_document_block) are the same two steps
+    every code path uses; this is just their composition for the
+    whole-file, non-PDF-page-counted case (images, and a PDF at or
+    below settings.pdf_max_pages_per_call handled outside this
+    function reuses the already-read bytes directly).
+    """
+    content_type = _content_type_for_mime(mime_type)
+    raw_bytes = await _read_document_bytes(path)
+    return _encode_document_block(raw_bytes, mime_type, content_type)
 
 
 # Status codes an anthropic.APIStatusError can carry that are deterministic
@@ -479,46 +666,45 @@ def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
         return None
 
 
-async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult:
-    """Call Claude with the extraction tool forced, and return the parsed
-    result.
+@dataclass
+class _PageResult:
+    """The outcome of one _extract_one_block call -- either the whole
+    document (single-call path) or one PDF page (H6 chunked path).
 
-    Failure classification: unsupported mime type and an unpriced model
-    are validated up front, before any API call, and raise
-    NonRetryableExtractionError for free. A refusal or any other
-    non-tool_use stop reason (including "max_tokens" truncation) is
-    deterministic given the same document/prompt/model, so it also
-    raises NonRetryableExtractionError -- but only after the call, since
-    it's the API's own response that tells us; those messages include
-    the token counts from that (already billed) call so the spend isn't
-    invisible in a requeued job's last_error. A missing tool_use block
-    despite stop_reason == "tool_use" would mean the forced-tool-choice
-    guarantee itself didn't hold -- that's treated as a transient
-    anomaly (plain ExtractionError, retryable) rather than classified
-    alongside the deterministic cases. A file that can't be read raises
-    ExtractionError (see _build_document_block); network/5xx/429/529
-    raise a retryable ExtractionError, and 400/401/403/404/413/422 raise
-    NonRetryableExtractionError, via the anthropic.APIStatusError/
-    APIConnectionError/AnthropicError classification below.
-
-    Schema-repair reprompt: after a successful tool_use response, if its
-    tool_input violates RECORD_EXTRACTION_TOOL's schema (see
-    _schema_violations) and settings.schema_repair is enabled, exactly
-    one additional call is made asking the model to fix only the
-    structure (see REPAIR_PROMPT_TEXT). The repaired tool_input is used
-    only if it has strictly fewer violations than the first response's;
-    either way both calls' tokens/cost are summed into the returned
-    ExtractionResult, and the result's `repaired`/`schema_violations`
-    fields report what happened. A failed, refused, or non-tool_use
-    repair call never fails the extraction -- it just falls back to the
-    first response.
+    Deliberately a subset of ExtractionResult: model/prompt_version are
+    constant across every block within one extract_document call, so
+    the caller (extract_document / _extract_chunked_pdf) attaches those
+    once rather than repeating them per block. latency_ms is scoped to
+    just THIS block's call(s) -- the first call plus an optional repair
+    call -- not the whole extract_document invocation; the chunked path
+    sums every page's latency_ms into its own total.
     """
-    settings = get_settings()
-    _ensure_model_priced(settings.extraction_model)
 
-    document_block = await _build_document_block(Path(path), mime_type)
-    client = _build_client(settings)
+    tool_input: dict[str, Any]
+    input_tokens: int
+    output_tokens: int
+    latency_ms: int
+    repaired: bool
+    schema_violations: int
 
+
+async def _extract_one_block(
+    client: anthropic.AsyncAnthropic, settings: Settings, document_block: dict[str, Any]
+) -> _PageResult:
+    """Send ONE document content block (a whole image/PDF for the
+    single-call path, or a single PDF page for the H6 chunked path)
+    through record_extraction and return the result.
+
+    This is every step extract_document used to run inline, factored
+    out unchanged so the single-call and per-page chunked paths share
+    identical behavior: build the user message from `document_block` ->
+    create() -> classify any anthropic.APIStatusError/APIConnectionError/
+    AnthropicError -> check stop_reason -> find the tool_use block ->
+    schema-repair reprompt -> sum this block's tokens. See
+    extract_document's docstring for the full failure classification
+    (what's retryable vs not) and the schema-repair reprompt semantics
+    -- none of that changed, it just moved here.
+    """
     user_message = {
         "role": "user",
         "content": [
@@ -550,14 +736,19 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
         if exc.status_code in NON_RETRYABLE_STATUS_CODES:
             message = f"Anthropic API error ({exc.status_code}): {exc}"
             if exc.status_code == 413:
-                # The document itself is too large for a single request;
-                # retrying an unchanged, unchunked request would 413
-                # again every time. Page-chunking (H6) is the fix -- not
-                # available yet, so for now this is a permanent failure.
+                # Deterministic given the same bytes -- retrying an
+                # unchanged request would 413 again every time. This
+                # fires on both the single-call path (the whole
+                # document is too large) and the H6 chunked path (one
+                # single-page PDF, from _extract_one_block, is still
+                # too large on its own) -- page-chunking has already
+                # split as far as it can by the time a single page hits
+                # this, so a bigger fix (downsampling/re-encoding the
+                # source) is the only way forward.
                 message += (
-                    " -- the document is too large for a single extraction "
-                    "request; page-chunking (arriving in H6) is the path to "
-                    "support documents this size"
+                    " -- the document (or a single page of it) exceeds the "
+                    "API's request size limit even after page chunking; "
+                    "reduce the source resolution"
                 )
             raise NonRetryableExtractionError(message) from exc
         # Retryable: 429, 529, 408, other 5xx, and any status not
@@ -714,22 +905,196 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
                     )
 
     latency_ms = int((time.perf_counter() - start) * 1000)
-    cost_usd = _compute_cost_usd(
-        settings.extraction_model,
-        total_input_tokens,
-        total_output_tokens,
+
+    return _PageResult(
+        tool_input=tool_input,
+        input_tokens=total_input_tokens,
+        output_tokens=total_output_tokens,
+        latency_ms=latency_ms,
+        repaired=repaired,
+        schema_violations=len(violations),
     )
 
+
+async def _extract_chunked_pdf(
+    raw_bytes: bytes, settings: Settings
+) -> ExtractionResult:
+    """The H6 chunked-PDF path: settings.pdf_max_pages_per_call < page
+    count <= settings.pdf_max_pages. Split the PDF into one single-page
+    PDF per page (app.pdf.split_pdf_pages), extract each page
+    SEQUENTIALLY via _extract_one_block -- a plain for loop, not
+    asyncio.gather, so this never bursts multiple pages' worth of
+    requests against the rate limiter at once -- then merge the
+    per-page tool_inputs (merge_page_tool_inputs) into one tool_input
+    shape-identical to a single-call extraction's, plus a `_chunks`
+    provenance list keyed by page number (see process_document_job:
+    raw_response is this tool_input verbatim, and its TOP_LEVEL_FIELDS
+    iteration ignores the extra `_chunks` key, so persistence and eval
+    scoring are untouched by it).
+
+    If any page's _extract_one_block call raises, the tokens/cost
+    already spent on EARLIER pages in this call are added onto the
+    raised exception's own input_tokens/output_tokens/cost_usd (the
+    existing billed-but-errored convention documented on
+    ExtractionError) before it's re-raised, so a requeued job's
+    last_error and any programmatic caller (e.g. the eval runner's cost
+    cap) never lose track of spend from pages that succeeded before the
+    failure.
+    """
+    try:
+        page_pdfs = split_pdf_pages(raw_bytes)
+    except ValueError as exc:
+        raise NonRetryableExtractionError(f"unreadable or encrypted PDF: {exc}") from exc
+
+    client = _build_client(settings)
+
+    page_inputs: list[dict[str, Any]] = []
+    chunks: list[dict[str, Any]] = []
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_latency_ms = 0
+    total_schema_violations = 0
+    any_repaired = False
+
+    for page_num, page_pdf_bytes in enumerate(page_pdfs, start=1):
+        document_block = _encode_document_block(page_pdf_bytes, PDF_MIME_TYPE, "document")
+        try:
+            page_result = await _extract_one_block(client, settings, document_block)
+        except ExtractionError as exc:
+            exc.input_tokens = total_input_tokens + (exc.input_tokens or 0)
+            exc.output_tokens = total_output_tokens + (exc.output_tokens or 0)
+            exc.cost_usd = _compute_cost_usd(
+                settings.extraction_model, exc.input_tokens, exc.output_tokens
+            )
+            raise
+
+        page_inputs.append(page_result.tool_input)
+        chunks.append(
+            {
+                "page": page_num,
+                "tool_input": page_result.tool_input,
+                "input_tokens": page_result.input_tokens,
+                "output_tokens": page_result.output_tokens,
+                "cost_usd": _compute_cost_usd(
+                    settings.extraction_model,
+                    page_result.input_tokens,
+                    page_result.output_tokens,
+                ),
+                "latency_ms": page_result.latency_ms,
+                "repaired": page_result.repaired,
+            }
+        )
+        total_input_tokens += page_result.input_tokens
+        total_output_tokens += page_result.output_tokens
+        total_latency_ms += page_result.latency_ms
+        total_schema_violations += page_result.schema_violations
+        any_repaired = any_repaired or page_result.repaired
+
+    merged_tool_input = merge_page_tool_inputs(page_inputs)
+    merged_tool_input["_chunks"] = chunks
+
     return ExtractionResult(
-        tool_input=tool_input,
+        tool_input=merged_tool_input,
         model=settings.extraction_model,
         prompt_version=PROMPT_VERSION,
         input_tokens=total_input_tokens,
         output_tokens=total_output_tokens,
-        cost_usd=cost_usd,
-        latency_ms=latency_ms,
-        repaired=repaired,
-        schema_violations=len(violations),
+        cost_usd=_compute_cost_usd(
+            settings.extraction_model, total_input_tokens, total_output_tokens
+        ),
+        latency_ms=total_latency_ms,
+        repaired=any_repaired,
+        schema_violations=total_schema_violations,
+    )
+
+
+async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult:
+    """Call Claude with the extraction tool forced, and return the parsed
+    result. Dispatches to one of three paths based on document type and
+    (for PDFs) page count -- see the H6 task notes for the full design:
+
+    - Images, and PDFs with page count <= settings.pdf_max_pages_per_call
+      (default 5): unchanged single-call path, byte-identical to the
+      pre-H6 behavior -- one _extract_one_block call on the whole
+      document, wrapped straight into an ExtractionResult.
+    - PDFs with settings.pdf_max_pages_per_call < page count <=
+      settings.pdf_max_pages (default 20): the H6 chunked path -- see
+      _extract_chunked_pdf.
+    - PDFs with page count > settings.pdf_max_pages, or a PDF pypdf
+      can't read/decrypt (app.pdf.count_pdf_pages raising ValueError):
+      raise NonRetryableExtractionError BEFORE any API call -- refusing
+      an oversized or unreadable document is free, and retrying an
+      identical request would fail identically every time.
+
+    Failure classification for the actual extraction calls (both the
+    single-call and per-page chunked cases) lives in _extract_one_block
+    -- see its docstring for what's retryable vs not. An unpriced model
+    is still validated up front here, before any API call or even a
+    PDF page count, and raises NonRetryableExtractionError for free.
+
+    Schema-repair reprompt: unchanged from before H6, see
+    _extract_one_block's docstring -- it runs per block (once for the
+    whole document on the single-call path, once per page on the
+    chunked path), never across the whole extract_document call.
+
+    Page counting: only relevant to PDFs. The file's bytes are read
+    exactly once (_read_document_bytes) regardless of which path ends
+    up handling the document -- the single-call PDF path reuses those
+    bytes for _encode_document_block rather than reading the file
+    again, and the chunked path passes them straight to
+    app.pdf.split_pdf_pages.
+    """
+    settings = get_settings()
+    _ensure_model_priced(settings.extraction_model)
+
+    path = Path(path)
+
+    if mime_type == PDF_MIME_TYPE:
+        raw_bytes = await _read_document_bytes(path)
+        try:
+            page_count = count_pdf_pages(raw_bytes)
+        except ValueError as exc:
+            raise NonRetryableExtractionError(
+                f"unreadable or encrypted PDF, cannot extract: {exc}"
+            ) from exc
+
+        if page_count == 0:
+            # A guaranteed-rejection API call otherwise: there is
+            # nothing for the model to extract from, and no page count
+            # threshold above catches this (0 is <= every positive
+            # pdf_max_pages_per_call/pdf_max_pages). Refuse locally,
+            # free, alongside the other pre-flight checks.
+            raise NonRetryableExtractionError("PDF has 0 pages; nothing to extract")
+
+        if page_count > settings.pdf_max_pages:
+            raise NonRetryableExtractionError(
+                f"PDF has {page_count} pages, exceeding pdf_max_pages="
+                f"{settings.pdf_max_pages}; refusing to extract before spending "
+                "any API budget"
+            )
+
+        if page_count > settings.pdf_max_pages_per_call:
+            return await _extract_chunked_pdf(raw_bytes, settings)
+
+        document_block = _encode_document_block(raw_bytes, mime_type, "document")
+    else:
+        document_block = await _build_document_block(path, mime_type)
+
+    client = _build_client(settings)
+    page_result = await _extract_one_block(client, settings, document_block)
+
+    return ExtractionResult(
+        tool_input=page_result.tool_input,
+        model=settings.extraction_model,
+        prompt_version=PROMPT_VERSION,
+        input_tokens=page_result.input_tokens,
+        output_tokens=page_result.output_tokens,
+        cost_usd=_compute_cost_usd(
+            settings.extraction_model, page_result.input_tokens, page_result.output_tokens
+        ),
+        latency_ms=page_result.latency_ms,
+        repaired=page_result.repaired,
+        schema_violations=page_result.schema_violations,
     )
 
 

@@ -1,9 +1,11 @@
 import base64
+from io import BytesIO
 from unittest.mock import AsyncMock
 
 import anthropic
 import httpx
 import pytest
+from pypdf import PdfWriter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +34,22 @@ TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
     "+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+
+
+def _minimal_pdf() -> bytes:
+    """A genuinely parseable single-page PDF (unlike a hand-typed
+    "%PDF-1.4 ..." string): H6 (see app/pdf.py) makes extract_document
+    read and page-count every PDF via pypdf before deciding whether to
+    take the single-call or chunked path, so any PDF fixture used
+    through process_document_job/extract_document must be real enough
+    for pypdf to parse, even in tests that only care about the
+    single-call request shape.
+    """
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
 
 REALISTIC_TOOL_INPUT = {
     "vendor": {"value": "Acme Corp", "confidence": 0.95},
@@ -295,7 +313,7 @@ async def test_pdf_document_uses_document_content_block(
         tmp_path,
         filename="invoice.pdf",
         mime_type="application/pdf",
-        content=b"%PDF-1.4 not a real pdf, just bytes for the mocked call\n",
+        content=_minimal_pdf(),
     )
     job = await _make_job(db_session, document.id)
     response = _FakeMessage(
@@ -552,8 +570,13 @@ async def test_413_non_retryable_mentions_document_size_and_chunking(
 ) -> None:
     """413 is deterministic (the document itself is too large) so it's
     NonRetryableExtractionError like the other 4xx cases, but its message
-    must call out the specific cause and the chunking fix landing in H6,
-    since a bare "413" is not actionable in a requeued job's last_error.
+    must call out the specific cause -- and that page chunking (H6,
+    shipped) has already been tried and still wasn't enough, since a
+    bare "413" is not actionable in a requeued job's last_error. This
+    fires on both extract_document's single-call path (this test, via
+    _extract_from_tmp_file's plain image) and the H6 chunked path
+    (where a single page from _extract_one_block is still too large on
+    its own) -- the message text must read sensibly for either.
     """
     exc = anthropic.RequestTooLargeError(
         "payload too large", response=_fake_response(413), body=None
@@ -563,7 +586,7 @@ async def test_413_non_retryable_mentions_document_size_and_chunking(
     with pytest.raises(NonRetryableExtractionError) as exc_info:
         await _extract_from_tmp_file(tmp_path)
     assert "too large" in str(exc_info.value)
-    assert "H6" in str(exc_info.value)
+    assert "chunking" in str(exc_info.value)
 
 
 async def test_5xx_status_error_is_retryable(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1146,6 +1169,11 @@ def test_format_violations_for_prompt_no_truncation_under_the_cap() -> None:
         {"value": "x", "confidence": float("nan")},
         {"value": "x", "confidence": float("inf")},
         {"value": None, "confidence": "also-not-a-number"},
+        # FIX 2 regression: an oversized int literal (valid JSON) is too
+        # large for float() to represent -- float(10**400) raises
+        # OverflowError, which must degrade the leaf the same as any
+        # other non-numeric confidence, not escape unclassified.
+        {"value": "x", "confidence": 10**400},
     ],
 )
 def test_leaf_is_malformed_implies_coerce_leaf_degrades(leaf: object) -> None:

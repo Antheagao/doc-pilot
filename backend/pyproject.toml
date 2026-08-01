@@ -12,6 +12,7 @@ dependencies = [
     "anthropic",
     "pydantic-settings",
     "python-multipart",
+    "pypdf",
 ]
 
 [project.optional-dependencies]

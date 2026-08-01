@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # backoff. See _build_client's docstring for the two-layer story.
     anthropic_max_retries: int = 2
     anthropic_timeout_seconds: float = 120.0
+    # Oversized-document chunking (H6, see app/extraction.py's
+    # extract_document dispatcher and app/pdf.py). At or below this page
+    # count, a PDF is sent whole in a single call exactly as before H6
+    # shipped. Above it (and at or below pdf_max_pages), the PDF is
+    # split into per-page single-page PDFs and extracted sequentially,
+    # then merged.
+    pdf_max_pages_per_call: int = 5
+    # Hard ceiling: a PDF with more pages than this is refused with
+    # NonRetryableExtractionError BEFORE any API call is made, so a
+    # misconfigured/oversized upload can't spend API budget it was never
+    # going to be able to chunk usefully anyway.
+    pdf_max_pages: int = 20
 
 
 @lru_cache
