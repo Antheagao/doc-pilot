@@ -4,6 +4,10 @@
 
 AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking.
 
+<!-- LIVE_DEMO: hosted demo link goes here once a host is picked -->
+
+212 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+
 ## Screenshots
 
 <img src="screenshots/document-detail.png" width="900" alt="A skewed grocery receipt beside its extracted fields, with per-field confidence badges and a human-corrected subtotal">
@@ -18,21 +22,48 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 *Upload via drag-and-drop and watch documents move `uploaded` → `processing` → `extracted`, polled live.*
 
-## Planned architecture
+## Stack
 
 - **Backend:** FastAPI (Python)
 - **VLM:** Claude via the Anthropic API — image input with structured outputs (JSON schema), never regex-parsing free text
 - **Queue:** Postgres `SKIP LOCKED` job queue
 - **Frontend:** Next.js — upload, extraction results side-by-side with the document image, review/correct UI
 
-## Core principles
-
-- Evals from day one: labeled document set in `evals/`, field-level accuracy scored per model/prompt version
-- Human-in-the-loop: low-confidence fields go to a review queue; corrections become new eval cases
-- Cost & latency tracked per document
-- Prompts and schemas versioned as code
-
 ## Quickstart
+
+The fastest path is the whole stack via Docker Compose -- no local Python or Node setup required.
+
+```powershell
+git clone <this repo> doc-pilot
+cd doc-pilot
+
+# compose reads ANTHROPIC_API_KEY from a repo-root .env for variable
+# substitution (see .env.example). If you already have backend/.env from
+# a previous local-dev setup, reuse it directly:
+Copy-Item backend\.env .env          # Windows
+# cp backend/.env .env               # macOS/Linux
+
+# Fresh clone with no backend/.env yet? Start from the template instead,
+# then edit .env and set ANTHROPIC_API_KEY=sk-ant-... (or just export
+# ANTHROPIC_API_KEY in your shell -- compose falls back to that if no
+# root .env is present):
+# Copy-Item .env.example .env        # Windows
+# cp .env.example .env               # macOS/Linux
+
+docker compose up --build
+```
+
+Migrations run automatically -- a one-shot `migrate` service runs `alembic upgrade head` and `api`/`worker` wait on it before starting. Once the stack is up:
+
+- Frontend: http://localhost:3000
+- API: http://localhost:8000
+- Postgres: `localhost:5434` (bound to loopback, `docpilot`/`docpilot`)
+
+Open http://localhost:3000, upload a file from [`samples/`](samples/) (or generate fresh ones with `python backend/scripts/make_samples.py`), and watch it go `uploaded` -> `extracted` with per-field confidence.
+
+> **Gotcha:** the frontend's `NEXT_PUBLIC_API_URL` is inlined into the JS bundle at *build* time (`frontend/Dockerfile`), not read at container start. Pointing the UI at a different API means rebuilding the image, not just restarting it: `docker compose build --build-arg NEXT_PUBLIC_API_URL=https://your-api frontend`.
+
+### Local development (without Docker)
 
 Three terminals, in order:
 
@@ -88,12 +119,15 @@ flowchart LR
     E --> R["Review queue<br/>low-confidence fields<br/>approve / correct"]
 ```
 
-Key decisions:
+This is the data-flow shape (what happens to a document), not the deployment topology -- for that, `docker compose up --build` runs five services: `db`, a one-shot `migrate`, `api`, `worker`, and `frontend` (see the Quickstart above and `docker-compose.yml`).
 
-- **Postgres `SKIP LOCKED` instead of Redis** for the job queue -- one fewer moving part to run and explain, and the queue lives in the same transactional store as the data it's producing, so a claimed-but-crashed job is just a row to reconcile on worker startup rather than a separate failure mode to reason about.
-- **Per-field confidence, not a single document-level score** -- the extraction tool forces every leaf into `{value, confidence}`, so the review queue routes individual low-confidence *fields* to a human rather than re-doing an entire document.
-- **Prompts as versioned files** (`backend/prompts/extract_v1.md`), not inline strings -- extraction rows store the `prompt_version` they were produced with, so eval results can be tied to a specific prompt revision as prompts iterate.
-- **Cost and latency tracked per document** -- every extraction row records input/output tokens, computed `cost_usd`, and `latency_ms`. Real numbers on `claude-sonnet-5`: roughly **$0.009 and ~4s per receipt**.
+## Why these tech choices
+
+- **Postgres `SKIP LOCKED` instead of Redis for the job queue.** One datastore to run, deploy, and explain instead of two. More importantly, the queue is transactional with the data it produces: a job row and its extraction rows commit or roll back together, so there's no window where the queue says "done" and the data disagrees. A worker that crashes mid-claim doesn't need a separate recovery system -- it's just a `processing` row that a future worker startup reconciles back to `pending` (`reclaim_orphaned_jobs()` in `app/worker.py`). Scaling out is "run more worker processes" -- with the honest caveat that today's startup orphan-reclaim assumes a single worker; running two concurrently would need that sweep to become claim-aware first (see the `worker` service comment in `docker-compose.yml`).
+- **FastAPI / Python for the backend.** First-class SDKs for the pieces that matter here (the Anthropic SDK, async SQLAlchemy, Alembic); the workload is almost entirely I/O-bound waiting on VLM round-trips, which is exactly the case `async`/`await` is for.
+- **Evals from day one.** No prompt version ships without a run against the labeled corpus in `evals/` -- the table in the [Evals](#evals) section below isn't hand-maintained, it's generated from committed run artifacts in `evals/results/`, each tied to the `(model, prompt_version, dataset_version)` triple it was produced with.
+- **Per-field confidence, not a single document-level score, routed to a human review queue.** The extraction tool forces every leaf value into `{value, confidence}`, so review routes individual low-confidence *fields* to a human rather than re-doing an entire document. This is justified empirically, not just by preference: the `caught_by_review` column in the Evals Ops table shows Sonnet flags essentially all of its own misses with low confidence, while Haiku flags almost none of them. That asymmetry -- a model that mostly knows when it's wrong versus one that doesn't -- is the whole case for the queue existing.
+- **Prompts as versioned files** (`backend/prompts/extract_v1.md`), not inline strings, so extraction rows and eval results can be tied to a specific prompt revision as prompts iterate. **Next.js as a thin client-side UI over a plain REST API** -- every page is a client component calling the FastAPI backend directly, no server components or BFF layer in between, which is also why the API URL has to be resolved to something the *browser* can reach at build time (see the Quickstart gotcha above).
 
 ## Human review
 
@@ -127,7 +161,9 @@ doc-pilot is currently a **single-user local tool** and its security posture is 
 
 Every extraction is scored against a synthetic-but-messy, PII-free corpus of labeled receipts/invoices in `evals/` -- generated with the correct answer known up front (not hand-transcribed from real documents), so the set doubles as a regression suite rather than a noisy guess. Each field has its own match rule: currency is an exact string match, dates are normalized to ISO-8601 before comparing, dollar amounts tolerate ±1 cent (compared in integer cents to dodge float rounding error), vendor names use fuzzy string matching (>=0.85 ratio), and line items must match item-for-item, in order. Every result is tied to the `(model, prompt_version, dataset_version)` triple it was produced with, so accuracy tracks across prompt iterations instead of floating in isolation -- the project rule is that a new prompt version only ships once an eval run proves it. The `caught_by_review` metric -- the share of incorrect fields the model itself flagged with low confidence -- is the empirical justification for routing low-confidence fields to a human review queue instead of trusting every extraction blindly.
 
-On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0125) at a 4.0-point accuracy difference (95.4% vs 99.4%) -- the eval table is how that trade-off stays measurable as prompts change.
+Every extraction row records its own `cost_usd` and `latency_ms` (token counts times the model's per-token price), which is where every dollar figure in this README comes from -- there's no separate cost-tracking path to keep in sync. Two numbers show up elsewhere and are worth labeling so they don't read as contradictory: a single manual smoke extraction (`scripts/smoke.py`, one receipt) costs **~$0.009** on `claude-sonnet-5`, while the **$0.0125/doc** below is the **25-document eval mean** for that same model. Both are real; they differ because one is a single sample and the other is averaged across the labeled set -- the eval mean is the number to trust for planning per-document spend, not the one-off smoke run.
+
+On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0125, both 25-document eval means) at a 4.0-point accuracy difference (95.4% vs 99.4%) -- the eval table is how that trade-off stays measurable as prompts change.
 
 <!-- EVAL_TABLE:START -->
 
@@ -153,4 +189,4 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 <!-- EVAL_TABLE:END -->
 
-*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- with CI running the whole test suite against Postgres on every push. Next: a hosted demo.*
+*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- and the whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres on every push. Next: pick a host and ship the demo.*
