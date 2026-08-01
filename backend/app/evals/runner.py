@@ -273,6 +273,7 @@ async def run_eval(
                 "latency_ms": result.latency_ms,
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
+                "repaired": result.repaired,
             }
 
             async with cost_lock:

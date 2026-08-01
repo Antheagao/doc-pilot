@@ -23,6 +23,7 @@ see _coerce_leaf.
 """
 
 import base64
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -46,6 +47,19 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 PROMPT_PATH = PROMPTS_DIR / "extract_v1.md"
 PROMPT_VERSION = PROMPT_PATH.stem
 PROMPT_TEXT = PROMPT_PATH.read_text(encoding="utf-8")
+
+# The schema-repair reprompt (see extract_document / _schema_violations)
+# is a separately versioned prompt for the same reason PROMPT_TEXT is:
+# eval results and repair-effectiveness metrics should be tied to which
+# repair wording was in effect. It contains a `{{violations}}`
+# placeholder substituted via str.replace, not str.format -- the prompt
+# text itself contains literal JSON braces (`{"value": ...}`) that
+# str.format would try (and fail) to interpret as replacement fields.
+REPAIR_PROMPT_PATH = PROMPTS_DIR / "repair_v1.md"
+REPAIR_PROMPT_VERSION = REPAIR_PROMPT_PATH.stem
+REPAIR_PROMPT_TEXT = REPAIR_PROMPT_PATH.read_text(encoding="utf-8")
+
+logger = logging.getLogger(__name__)
 
 # Anthropic media types the vision API accepts for an `image` content
 # block. GIF is included deliberately -- the Claude API's image source
@@ -193,6 +207,15 @@ class ExtractionResult:
     output_tokens: int
     cost_usd: float
     latency_ms: int
+    # Appended last, both defaulted, so existing keyword-argument
+    # constructions (e.g. app.evals.runner.build_mock_extract_fn) keep
+    # working unmodified. repaired is True only when a repair reprompt
+    # (see extract_document) both ran and was accepted; schema_violations
+    # is the violation count (see _schema_violations) of whichever
+    # tool_input ended up in this result -- the repaired one if accepted,
+    # the first response's otherwise.
+    repaired: bool = False
+    schema_violations: int = 0
 
 
 def _build_client(settings: Settings) -> anthropic.AsyncAnthropic:
@@ -230,6 +253,28 @@ def _compute_cost_usd(model: str, input_tokens: int, output_tokens: int) -> floa
     return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
 
 
+def _leaf_is_malformed(raw: Any) -> bool:
+    """True iff `raw` does NOT have the shape _coerce_leaf accepts: not a
+    dict, missing the "value" key, or a "confidence" that doesn't convert
+    to a finite float. This is the single rule both _coerce_leaf's reject
+    branch and _schema_violations' violation detector delegate to, so the
+    two can never drift out of sync with each other -- see both callers'
+    docstrings.
+
+    Note this is NOT the same question as "is this leaf's `value`
+    correct" -- a leaf with a perfectly well-formed {"value": null,
+    "confidence": 0.2} shape is not malformed, even though its value is
+    null, because null is a legitimate value per the extraction prompt.
+    """
+    if not isinstance(raw, dict) or "value" not in raw:
+        return True
+    try:
+        confidence = float(raw.get("confidence"))
+    except (TypeError, ValueError):
+        return True
+    return not math.isfinite(confidence)
+
+
 def _coerce_leaf(raw: Any) -> tuple[Any, float]:
     """Defensively normalize a single {"value", "confidence"} leaf out of
     the model's (untrusted) tool_use.input. Returns (value, confidence).
@@ -238,28 +283,108 @@ def _coerce_leaf(raw: Any) -> tuple[Any, float]:
     that value is legitimately null -- the prompt tells the model to use
     null for absent/illegible fields, which is different from the key
     being missing entirely), and has a "confidence" that converts to a
-    finite float. Any other shape -- a bare scalar instead of a dict
-    (`"vendor": "Acme"`), a missing "value" key, a null/non-numeric
-    confidence -- degrades the WHOLE leaf to (None, 0.0) rather than
-    salvaging the parts that happened to look fine: if the model didn't
-    follow the schema for a field, nothing in that field is trustworthy
-    enough to keep.
+    finite float (see _leaf_is_malformed, the shared rule). Any other
+    shape -- a bare scalar instead of a dict (`"vendor": "Acme"`), a
+    missing "value" key, a null/non-numeric confidence -- degrades the
+    WHOLE leaf to (None, 0.0) rather than salvaging the parts that
+    happened to look fine: if the model didn't follow the schema for a
+    field, nothing in that field is trustworthy enough to keep.
 
     confidence is clamped to [0.0, 1.0] even when float-convertible,
     since a schema `minimum`/`maximum` on the tool definition is only a
     hint to the model, not an enforced constraint.
     """
-    if not isinstance(raw, dict) or "value" not in raw:
+    if _leaf_is_malformed(raw):
         return None, 0.0
 
-    try:
-        confidence = float(raw.get("confidence"))
-    except (TypeError, ValueError):
-        return None, 0.0
-    if not math.isfinite(confidence):
-        return None, 0.0
-
+    confidence = float(raw["confidence"])
     return raw["value"], max(0.0, min(1.0, confidence))
+
+
+_LINE_ITEM_SUBFIELDS = ("description", "quantity", "unit_price", "total")
+
+# _schema_violations truncates its result to this many dotted-path
+# entries (plus one trailing summary entry) so a response that's
+# malformed in nearly every leaf -- e.g. every line item missing every
+# sub-leaf -- can't blow up the repair prompt built from the list.
+MAX_SCHEMA_VIOLATIONS = 20
+
+_MISSING = object()
+
+
+def _schema_violations(tool_input: dict[str, Any]) -> list[str]:
+    """Enumerate dotted-path violations of RECORD_EXTRACTION_TOOL's
+    schema in `tool_input`, the model's untrusted tool_use.input.
+
+    A violation path is bare `field_name` for a missing or malformed
+    top-level leaf (missing and malformed collapse to the same path --
+    a field can't be both), or `line_items.value[<idx>].<subfield>` for
+    a malformed/missing sub-leaf of one line item. Uses
+    _leaf_is_malformed as the single source of truth for "malformed" so
+    this can never disagree with what _coerce_leaf actually rejects.
+
+    line_items is special-cased: if its OWN leaf is malformed, that's
+    the one violation for it and there's nothing to descend into (no
+    {"value": [...]} shape exists yet). Only when its leaf is
+    well-formed AND `value` is an actual list do we walk each item's
+    four sub-leaves; a non-dict item degrades to "every sub-leaf
+    missing" the same way _leaf_is_malformed(None) would.
+
+    Returns the FULL, untruncated list -- callers use its true length for
+    both the repair-acceptance comparison (extract_document: "strictly
+    fewer violations than before") and the returned schema_violations
+    count, so truncating here would corrupt both (a repair that cuts 50
+    violations down to 25 must still compare as strictly better than 50,
+    not tie at "21 == 21" after both get capped the same way). Truncation
+    to MAX_SCHEMA_VIOLATIONS entries + a trailing "… (N more)" summary
+    happens only where it belongs: at the one call site that renders
+    this list into repair prompt text (extract_document).
+
+    `tool_input` is untrusted the same way every leaf is: a non-dict
+    tool_input (the model returning something other than an object at
+    all) degrades to "every top-level field missing" rather than raising
+    -- one violation per TOP_LEVEL_FIELDS entry -- so this is always safe
+    to call on a raw tool_use.input without an isinstance guard at the
+    call site.
+    """
+    if not isinstance(tool_input, dict):
+        return list(TOP_LEVEL_FIELDS)
+
+    violations: list[str] = []
+
+    for field_name in TOP_LEVEL_FIELDS:
+        raw = tool_input.get(field_name, _MISSING)
+        if raw is _MISSING or _leaf_is_malformed(raw):
+            violations.append(field_name)
+            continue
+
+        if field_name == "line_items":
+            items = raw["value"]
+            if isinstance(items, list):
+                for idx, item in enumerate(items):
+                    item_dict = item if isinstance(item, dict) else {}
+                    for sub_field in _LINE_ITEM_SUBFIELDS:
+                        if _leaf_is_malformed(item_dict.get(sub_field)):
+                            violations.append(f"line_items.value[{idx}].{sub_field}")
+
+    return violations
+
+
+def _format_violations_for_prompt(violations: list[str]) -> str:
+    """Render a (possibly long) violations list as the repair prompt's
+    bullet list, truncated to MAX_SCHEMA_VIOLATIONS entries plus a
+    trailing "… (N more)" summary line -- so a response that's malformed
+    in nearly every leaf can't blow up the repair prompt. This is the
+    ONLY place truncation happens; _schema_violations itself always
+    returns the full list (see its docstring for why).
+    """
+    shown = violations
+    suffix_lines: list[str] = []
+    if len(violations) > MAX_SCHEMA_VIOLATIONS:
+        remaining = len(violations) - MAX_SCHEMA_VIOLATIONS
+        shown = violations[:MAX_SCHEMA_VIOLATIONS]
+        suffix_lines = [f"… ({remaining} more)"]
+    return "\n".join(f"- {v}" for v in shown + suffix_lines)
 
 
 async def _build_document_block(path: Path, mime_type: str) -> dict[str, Any]:
@@ -313,12 +438,32 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
     alongside the deterministic cases. A file that can't be read raises
     ExtractionError (see _build_document_block); network/5xx/429 raise
     ExtractionError via the anthropic.APIError branch below.
+
+    Schema-repair reprompt: after a successful tool_use response, if its
+    tool_input violates RECORD_EXTRACTION_TOOL's schema (see
+    _schema_violations) and settings.schema_repair is enabled, exactly
+    one additional call is made asking the model to fix only the
+    structure (see REPAIR_PROMPT_TEXT). The repaired tool_input is used
+    only if it has strictly fewer violations than the first response's;
+    either way both calls' tokens/cost are summed into the returned
+    ExtractionResult, and the result's `repaired`/`schema_violations`
+    fields report what happened. A failed, refused, or non-tool_use
+    repair call never fails the extraction -- it just falls back to the
+    first response.
     """
     settings = get_settings()
     _ensure_model_priced(settings.extraction_model)
 
     document_block = await _build_document_block(Path(path), mime_type)
     client = _build_client(settings)
+
+    user_message = {
+        "role": "user",
+        "content": [
+            document_block,
+            {"type": "text", "text": "Extract the document now."},
+        ],
+    }
 
     start = time.perf_counter()
     try:
@@ -328,15 +473,7 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
             system=PROMPT_TEXT,
             tools=[RECORD_EXTRACTION_TOOL],
             tool_choice={"type": "tool", "name": "record_extraction"},
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        document_block,
-                        {"type": "text", "text": "Extract the document now."},
-                    ],
-                }
-            ],
+            messages=[user_message],
         )
     except anthropic.APIError as exc:
         # Covers rate limits, 5xx, and other transient/network-shaped
@@ -375,21 +512,116 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
             ),
         )
 
+    tool_input = tool_use_block.input
+    violations = _schema_violations(tool_input)
+    repaired = False
+    total_input_tokens = response.usage.input_tokens
+    total_output_tokens = response.usage.output_tokens
+
+    # Schema-repair reprompt: tool_choice guarantees *a* tool_use block,
+    # not one that matches RECORD_EXTRACTION_TOOL's schema (see module
+    # docstring). If the first response violated it, make exactly one
+    # additional call asking the model to fix only the structure. The
+    # repair call's cost is billed regardless of whether it's accepted
+    # (see docstring below) -- money was spent either way -- but a
+    # failed/unusable repair call must never turn an otherwise-usable
+    # extraction into a failed job, so any exception, refusal, or missing
+    # tool_use block from the repair call just falls back to the first
+    # response.
+    if violations and settings.schema_repair:
+        repair_text = REPAIR_PROMPT_TEXT.replace(
+            "{{violations}}", _format_violations_for_prompt(violations)
+        )
+        try:
+            repair_response = await client.messages.create(
+                model=settings.extraction_model,
+                max_tokens=DEFAULT_MAX_TOKENS,
+                system=PROMPT_TEXT,
+                tools=[RECORD_EXTRACTION_TOOL],
+                tool_choice={"type": "tool", "name": "record_extraction"},
+                messages=[
+                    user_message,
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": tool_use_block.id,
+                                "name": tool_use_block.name,
+                                "input": tool_input,
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_block.id,
+                                "content": repair_text,
+                                "is_error": True,
+                            }
+                        ],
+                    },
+                ],
+            )
+        except Exception:  # a failed repair must never fail an otherwise-usable extraction
+            logger.warning(
+                "schema repair call failed for record_extraction; falling back to "
+                "the first response's tool_input",
+                exc_info=True,
+            )
+        else:
+            # The repair call is billed the moment it succeeds, whether
+            # or not its result is actually accepted below (see
+            # docstring) -- both calls spent real money.
+            total_input_tokens += repair_response.usage.input_tokens
+            total_output_tokens += repair_response.usage.output_tokens
+
+            repair_tool_use_block = None
+            if repair_response.stop_reason == "tool_use":
+                repair_tool_use_block = next(
+                    (block for block in repair_response.content if block.type == "tool_use"),
+                    None,
+                )
+
+            if repair_tool_use_block is None:
+                logger.warning(
+                    "schema repair call returned no usable tool_use block "
+                    "(stop_reason=%r); falling back to the first response's tool_input",
+                    repair_response.stop_reason,
+                )
+            else:
+                repair_violations = _schema_violations(repair_tool_use_block.input)
+                if len(repair_violations) < len(violations):
+                    tool_input = repair_tool_use_block.input
+                    violations = repair_violations
+                    repaired = True
+                else:
+                    logger.warning(
+                        "schema repair did not reduce violations (%d -> %d); "
+                        "falling back to the first response's tool_input",
+                        len(violations),
+                        len(repair_violations),
+                    )
+
     latency_ms = int((time.perf_counter() - start) * 1000)
     cost_usd = _compute_cost_usd(
         settings.extraction_model,
-        response.usage.input_tokens,
-        response.usage.output_tokens,
+        total_input_tokens,
+        total_output_tokens,
     )
 
     return ExtractionResult(
-        tool_input=tool_use_block.input,
+        tool_input=tool_input,
         model=settings.extraction_model,
         prompt_version=PROMPT_VERSION,
-        input_tokens=response.usage.input_tokens,
-        output_tokens=response.usage.output_tokens,
+        input_tokens=total_input_tokens,
+        output_tokens=total_output_tokens,
         cost_usd=cost_usd,
         latency_ms=latency_ms,
+        repaired=repaired,
+        schema_violations=len(violations),
     )
 
 

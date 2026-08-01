@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     extraction_model: str = "claude-sonnet-5"
     # Extracted fields with confidence below this are flagged needs_review.
     review_threshold: float = 0.8
+    # When a first extraction response violates RECORD_EXTRACTION_TOOL's
+    # schema (app/extraction.py's _schema_violations), attempt exactly one
+    # repair reprompt before giving up on the cleaner shape. See
+    # extraction.extract_document.
+    schema_repair: bool = True
 
 
 @lru_cache
