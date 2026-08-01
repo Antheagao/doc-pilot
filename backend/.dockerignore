@@ -1,0 +1,14 @@
+# Security-critical: backend/.env holds a real Anthropic API key and must
+# never reach an image layer.
+.env
+.env.example
+
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+*.egg-info
+uploads
+tests
+.git
