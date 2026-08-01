@@ -18,5 +18,88 @@ services:
       timeout: 5s
       retries: 5
 
+  # One-shot: runs migrations to head and exits. api/worker wait on its
+  # success so the schema is always current before either starts serving
+  # or claiming jobs.
+  migrate:
+    build: ./backend
+    command: alembic upgrade head
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+    restart: "no"
+    # The backend image's baked-in healthcheck probes the API's /healthz;
+    # this one-shot container runs alembic, not uvicorn, so that probe is
+    # meaningless here.
+    healthcheck:
+      disable: true
+
+  api:
+    build: ./backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      # In-network: db's service name and container port, not the
+      # 5434 host mapping used from outside the compose network.
+      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+      # Must match worker's UPLOAD_DIR -- routers/documents.py persists
+      # absolute storage_path strings that the worker and the file
+      # endpoint later re-open, so both containers have to resolve the
+      # same path onto the same shared volume.
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads
+    restart: unless-stopped
+
+  worker:
+    # Exactly one replica -- never `docker compose up --scale worker=2`.
+    # reclaim_orphaned_jobs() runs once at worker startup (app/worker.py)
+    # and resets any 'processing' job back to 'pending', assuming any
+    # such row is a leftover from a previous run of this same process.
+    # A second concurrent worker would have that sweep steal its
+    # in-flight job.
+    build: ./backend
+    command: python -m app.worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+      # Must match api's UPLOAD_DIR -- see the comment there.
+      UPLOAD_DIR: /data/uploads
+      # Worker only: it's the one that calls the VLM (app/extraction.py).
+      # The API process never touches the model, so it doesn't get this
+      # key -- least privilege.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - uploads:/data/uploads
+    restart: unless-stopped
+    # The backend image's baked-in healthcheck probes the API's /healthz;
+    # the worker runs no HTTP server, so without this override it would
+    # sit "unhealthy" forever and break `docker compose up --wait`.
+    healthcheck:
+      disable: true
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The browser-facing URL, not a compose service name: this gets
+        # inlined into the client bundle at build time (see
+        # frontend/Dockerfile) and every fetching page is a client
+        # component, so it has to be a URL the BROWSER can reach --
+        # http://api:8000 would only resolve inside the compose network.
+        NEXT_PUBLIC_API_URL: "http://localhost:8000"
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:3000:3000"
+
 volumes:
   db_data:
+  uploads:
