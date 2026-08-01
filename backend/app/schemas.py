@@ -81,6 +81,38 @@ class ReviewQueueCount(BaseModel):
     pending: int
 
 
+class StatsReview(BaseModel):
+    pending: int
+    approved: int
+    corrected: int
+
+
+class StatsLastEval(BaseModel):
+    model: str | None
+    prompt_version: str | None
+    dataset_version: str | None
+    started_at_utc: str
+    overall_accuracy: float | None
+    caught_by_review: float | None
+    mean_cost_per_doc: float
+    n_scored: int
+
+
+class StatsOut(BaseModel):
+    documents_total: int
+    documents_by_status: dict[str, int]
+    documents_processed: int
+    extractions_total: int
+    total_cost_usd: float
+    mean_cost_per_doc: float | None
+    total_input_tokens: int
+    total_output_tokens: int
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+    review: StatsReview
+    last_eval: StatsLastEval | None
+
+
 class ReviewResolveRequest(BaseModel):
     """Resolve a pending review field.
 
