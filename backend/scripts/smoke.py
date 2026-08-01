@@ -16,6 +16,11 @@ gitignored):
     cd backend
     python scripts/smoke.py
 
+See tests/test_live_smoke.py for the assertion-bearing counterpart to
+this script: same pipeline, opt-in via RUN_LIVE_SMOKE=1 and pytest's
+`live` marker, but with pass/fail assertions instead of a human-readable
+console dump.
+
 Requires pillow (dev dependency, see pyproject.toml `[project.optional-dependencies].dev`).
 """
 
