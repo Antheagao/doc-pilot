@@ -485,6 +485,214 @@ async def test_tool_use_stop_reason_without_tool_use_block_is_retryable(
     assert await _extraction_count(db_session, document.id) == 0
 
 
+# --- rate-limit-aware backoff and HTTP-status classification (H5) --------
+
+
+def _fake_response(status_code: int, headers: dict[str, str] | None = None) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        headers=headers or {},
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+
+
+async def test_rate_limit_error_with_retry_after_is_retryable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real anthropic.RateLimitError (429) with a `retry-after: 7`
+    header must raise a retryable ExtractionError (not
+    NonRetryableExtractionError) with retry_after_seconds parsed out of
+    the header.
+    """
+    exc = anthropic.RateLimitError(
+        "rate limited", response=_fake_response(429, {"retry-after": "7"}), body=None
+    )
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert not isinstance(exc_info.value, NonRetryableExtractionError)
+    assert exc_info.value.retry_after_seconds == pytest.approx(7.0)
+
+
+async def test_overloaded_error_is_retryable(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """anthropic.OverloadedError (529) -- like RateLimitError, an
+    APIStatusError subclass with a fixed status_code -- must also be
+    retryable, classified the same way as any other 5xx.
+    """
+    exc = anthropic.OverloadedError(
+        "overloaded", response=_fake_response(529), body=None
+    )
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert not isinstance(exc_info.value, NonRetryableExtractionError)
+
+
+async def test_bad_request_error_is_non_retryable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 400 BadRequestError never succeeds on retry (same request, same
+    document, same rejection every time) -- must raise
+    NonRetryableExtractionError so fail_job doesn't burn all 3 worker
+    attempts on it.
+    """
+    exc = anthropic.BadRequestError("bad request", response=_fake_response(400), body=None)
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(NonRetryableExtractionError):
+        await _extract_from_tmp_file(tmp_path)
+
+
+async def test_413_non_retryable_mentions_document_size_and_chunking(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """413 is deterministic (the document itself is too large) so it's
+    NonRetryableExtractionError like the other 4xx cases, but its message
+    must call out the specific cause and the chunking fix landing in H6,
+    since a bare "413" is not actionable in a requeued job's last_error.
+    """
+    exc = anthropic.RequestTooLargeError(
+        "payload too large", response=_fake_response(413), body=None
+    )
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(NonRetryableExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+    assert "too large" in str(exc_info.value)
+    assert "H6" in str(exc_info.value)
+
+
+async def test_5xx_status_error_is_retryable(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A generic >=500 APIStatusError (InternalServerError -- the SDK's
+    catch-all for 5xx codes with no dedicated exception class) must be
+    retryable, same as RateLimitError/OverloadedError.
+    """
+    exc = anthropic.InternalServerError("server error", response=_fake_response(500), body=None)
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert not isinstance(exc_info.value, NonRetryableExtractionError)
+
+
+async def test_api_connection_error_is_retryable_with_no_retry_after(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """anthropic.APIConnectionError (and its subclass APITimeoutError)
+    carries no HTTP response, so there's no `retry-after` header to
+    parse -- retryable, with retry_after_seconds left at its default None.
+    """
+    exc = anthropic.APIConnectionError(
+        message="connection reset",
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert not isinstance(exc_info.value, NonRetryableExtractionError)
+    assert exc_info.value.retry_after_seconds is None
+
+
+async def test_api_timeout_error_is_retryable(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """APITimeoutError is a subclass of APIConnectionError, not a
+    separate except clause in extract_document -- confirm it's still
+    caught (isinstance, not exact-type matching) and classified the same
+    way as a plain connection error.
+    """
+    exc = anthropic.APITimeoutError(
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert not isinstance(exc_info.value, NonRetryableExtractionError)
+
+
+async def test_retry_after_http_date_form_yields_none(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """retry-after in the HTTP-date form RFC 7231 also permits (rather
+    than delay-seconds) must not crash int() parsing -- it degrades to
+    retry_after_seconds=None instead.
+    """
+    exc = anthropic.RateLimitError(
+        "rate limited",
+        response=_fake_response(429, {"retry-after": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+        body=None,
+    )
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert exc_info.value.retry_after_seconds is None
+
+
+async def test_retry_after_absent_header_yields_none(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exc = anthropic.RateLimitError("rate limited", response=_fake_response(429), body=None)
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert exc_info.value.retry_after_seconds is None
+
+
+async def test_bare_anthropic_error_is_retryable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-APIError anthropic.AnthropicError (e.g. a validation error
+    from the SDK itself, not an HTTP response) must not escape
+    extract_document unclassified -- the outermost `except
+    anthropic.AnthropicError` branch catches it as a retryable
+    ExtractionError.
+    """
+    exc = anthropic.AnthropicError("something the SDK itself rejected")
+    _patch_client_side_effect(monkeypatch, [exc])
+
+    with pytest.raises(ExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert not isinstance(exc_info.value, NonRetryableExtractionError)
+
+
+def test_build_client_passes_max_retries_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_build_client must forward settings.anthropic_max_retries/
+    anthropic_timeout_seconds to anthropic.AsyncAnthropic explicitly,
+    rather than relying on the SDK's own defaults -- the simplest honest
+    check is to swap out the class itself and inspect the kwargs it was
+    constructed with.
+    """
+    captured: dict[str, object] = {}
+
+    class _FakeAsyncAnthropic:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", _FakeAsyncAnthropic)
+    settings = Settings(
+        extraction_model="claude-sonnet-5",
+        anthropic_max_retries=5,
+        anthropic_timeout_seconds=45.0,
+    )
+
+    extraction_module._build_client(settings)
+
+    assert captured["max_retries"] == 5
+    assert captured["timeout"] == pytest.approx(45.0)
+
+
 # --- schema-repair reprompt (H3) -----------------------------------------
 
 

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -113,6 +114,15 @@ class ExtractionError(Exception):
     already embeds the same token counts for last_error/logging) is
     unchanged; these are additive attributes for programmatic callers
     like app.evals.runner.run_eval's cost cap, not a replacement for it.
+
+    retry_after_seconds (default None) is set at raise sites triggered
+    by a retryable anthropic.APIStatusError (429 rate limit, 529
+    overloaded, other 5xx/408) whose response carried a parseable
+    `retry-after` header -- see the classification in extract_document's
+    messages.create() call. app.worker.fail_job reads it via
+    getattr(exc, "retry_after_seconds", None) and feeds it into
+    _backoff_delay as a floor on the requeue delay, so a job never
+    retries sooner than the server explicitly asked for.
     """
 
     def __init__(
@@ -122,11 +132,13 @@ class ExtractionError(Exception):
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cost_usd: float | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(message)
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.cost_usd = cost_usd
+        self.retry_after_seconds = retry_after_seconds
 
 
 class NonRetryableExtractionError(ExtractionError):
@@ -232,8 +244,21 @@ def _build_client(settings: Settings) -> anthropic.AsyncAnthropic:
     """Factored out so tests can monkeypatch just the client construction
     and inject a fake with a mocked `.messages.create` -- no network, no
     need to stub the whole extract_document call.
+
+    max_retries/timeout are two independent retry layers with different
+    horizons, not a duplication of each other: the SDK retries transport
+    blips (connection errors, 429/5xx) in-process, within a single
+    extract_document call, honoring any `retry-after` header on the
+    failing response. The Postgres job queue (app.worker.fail_job) is the
+    outer layer -- it retries on a minutes-long horizon, across separate
+    worker invocations, only after the SDK's own retries are exhausted
+    and extract_document raises. Neither layer replaces the other.
     """
-    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    return anthropic.AsyncAnthropic(
+        api_key=settings.anthropic_api_key,
+        max_retries=settings.anthropic_max_retries,
+        timeout=settings.anthropic_timeout_seconds,
+    )
 
 
 def _ensure_model_priced(model: str) -> None:
@@ -429,6 +454,31 @@ async def _build_document_block(path: Path, mime_type: str) -> dict[str, Any]:
     }
 
 
+# Status codes an anthropic.APIStatusError can carry that are deterministic
+# given the same request -- retrying would spend money for the identical
+# rejection every time. Everything else (429 rate limit, 529 overloaded,
+# 408 timeout, other 5xx, and any status not explicitly deterministic,
+# e.g. 409) is treated as retryable: see the classification in
+# extract_document's messages.create() call.
+NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 413, 422}
+
+
+def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
+    """Parse a retryable response's `retry-after` header as an integer
+    number of seconds, defensively: the header may be absent, or in the
+    HTTP-date form RFC 7231 also allows (rather than delay-seconds) --
+    either case returns None rather than raising or guessing, matching
+    ExtractionError.retry_after_seconds' own "optional, best-effort" contract.
+    """
+    header = response.headers.get("retry-after")
+    if header is None:
+        return None
+    try:
+        return float(int(header.strip()))
+    except (TypeError, ValueError):
+        return None
+
+
 async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult:
     """Call Claude with the extraction tool forced, and return the parsed
     result.
@@ -446,8 +496,10 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
     guarantee itself didn't hold -- that's treated as a transient
     anomaly (plain ExtractionError, retryable) rather than classified
     alongside the deterministic cases. A file that can't be read raises
-    ExtractionError (see _build_document_block); network/5xx/429 raise
-    ExtractionError via the anthropic.APIError branch below.
+    ExtractionError (see _build_document_block); network/5xx/429/529
+    raise a retryable ExtractionError, and 400/401/403/404/413/422 raise
+    NonRetryableExtractionError, via the anthropic.APIStatusError/
+    APIConnectionError/AnthropicError classification below.
 
     Schema-repair reprompt: after a successful tool_use response, if its
     tool_input violates RECORD_EXTRACTION_TOOL's schema (see
@@ -485,11 +537,52 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
             tool_choice={"type": "tool", "name": "record_extraction"},
             messages=[user_message],
         )
-    except anthropic.APIError as exc:
-        # Covers rate limits, 5xx, and other transient/network-shaped
-        # failures -- the API's own message is preserved so fail_job's
-        # stored last_error is actionable. Retryable.
-        raise ExtractionError(f"Anthropic API error: {exc}") from exc
+    except anthropic.APIStatusError as exc:
+        # RateLimitError (429) and OverloadedError (529) are both
+        # APIStatusError subclasses with a fixed status_code (see the
+        # claude-api skill's cached exception hierarchy), so classifying
+        # by exc.status_code here covers them without a separate except
+        # clause per class -- same treatment as any other 5xx/408.
+        # NON_RETRYABLE_STATUS_CODES are deterministic given the same
+        # request/document/model: retrying only spends money for the
+        # identical rejection, so today these burn all 3 worker attempts
+        # before failing -- classifying them here fixes that.
+        if exc.status_code in NON_RETRYABLE_STATUS_CODES:
+            message = f"Anthropic API error ({exc.status_code}): {exc}"
+            if exc.status_code == 413:
+                # The document itself is too large for a single request;
+                # retrying an unchanged, unchunked request would 413
+                # again every time. Page-chunking (H6) is the fix -- not
+                # available yet, so for now this is a permanent failure.
+                message += (
+                    " -- the document is too large for a single extraction "
+                    "request; page-chunking (arriving in H6) is the path to "
+                    "support documents this size"
+                )
+            raise NonRetryableExtractionError(message) from exc
+        # Retryable: 429, 529, 408, other 5xx, and any status not
+        # explicitly deterministic above (e.g. 409). retry_after_seconds
+        # is parsed from the response's `retry-after` header (when
+        # present and in delay-seconds form) so app.worker.fail_job can
+        # honor it as a floor on the requeue delay.
+        raise ExtractionError(
+            f"Anthropic API error ({exc.status_code}): {exc}",
+            retry_after_seconds=_parse_retry_after_seconds(exc.response),
+        ) from exc
+    except anthropic.APIConnectionError as exc:
+        # Covers network-shaped failures with no HTTP response to classify
+        # by status code -- including anthropic.APITimeoutError, a
+        # subclass of APIConnectionError. No response means no
+        # `retry-after` to parse. Retryable.
+        raise ExtractionError(f"Anthropic API connection error: {exc}") from exc
+    except anthropic.AnthropicError as exc:
+        # Outermost SDK branch: catches any anthropic exception that
+        # isn't an APIStatusError or APIConnectionError (e.g. a bare
+        # AnthropicError/RetryableError, or a future SDK exception type)
+        # so it can't escape this call unclassified. Treated as
+        # transient/retryable rather than silently propagating as an
+        # unhandled exception type fail_job doesn't know how to bucket.
+        raise ExtractionError(f"Anthropic SDK error: {exc}") from exc
 
     if response.stop_reason != "tool_use":
         error_cls = (

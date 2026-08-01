@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # repair reprompt before giving up on the cleaner shape. See
     # extraction.extract_document.
     schema_repair: bool = True
+    # Passed straight through to anthropic.AsyncAnthropic (app.extraction
+    # ._build_client) -- the SDK's own in-process retry/timeout layer,
+    # distinct from and beneath the Postgres job queue's own requeue
+    # backoff. See _build_client's docstring for the two-layer story.
+    anthropic_max_retries: int = 2
+    anthropic_timeout_seconds: float = 120.0
 
 
 @lru_cache

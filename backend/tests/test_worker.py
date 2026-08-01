@@ -10,9 +10,96 @@ from sqlalchemy import delete, text
 from app import worker as worker_module
 from app.config import Settings
 from app.db import async_session_maker
-from app.extraction import ModelRefusalError, NonRetryableExtractionError
+from app.extraction import (
+    ExtractionError,
+    ModelRefusalError,
+    NonRetryableExtractionError,
+)
 from app.models import Document, Job
-from app.worker import MAX_ATTEMPTS, pending_job_stmt, reclaim_orphaned_jobs, run_once
+from app.worker import (
+    BACKOFF_BASE,
+    BACKOFF_MAX,
+    MAX_ATTEMPTS,
+    RETRY_AFTER_MAX,
+    _backoff_delay,
+    pending_job_stmt,
+    reclaim_orphaned_jobs,
+    run_once,
+)
+
+# --- _backoff_delay (pure function, no DB) ---------------------------------
+
+
+def test_backoff_delay_base_is_monotonic_non_decreasing_across_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With jitter pinned to its lower bound (random.uniform returns `a`),
+    _backoff_delay returns exactly base/2 -- deterministic, so the
+    exponential growth across attempts can be asserted directly rather
+    than just bounded.
+    """
+    monkeypatch.setattr(worker_module.random, "uniform", lambda a, b: a)
+
+    delays = [_backoff_delay(attempts, None) for attempts in range(1, 10)]
+
+    assert delays == sorted(delays)
+    # Attempt 1: base = BACKOFF_BASE * 2**0 = 2.0 -> delay = 1.0
+    assert delays[0] == pytest.approx(BACKOFF_BASE / 2)
+    # Growth stops once base hits BACKOFF_MAX (attempt 6: 2*2**5=64 -> capped at 60).
+    assert delays[-1] == pytest.approx(BACKOFF_MAX / 2)
+
+
+def test_backoff_delay_never_exceeds_backoff_max_when_retry_after_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worst case for the cap: jitter pinned to its upper bound (random.uniform
+    returns `b`), so delay == base == min(BACKOFF_MAX, BACKOFF_BASE * 2**(n-1)).
+    Checked at high attempt counts where the uncapped exponential would be
+    enormous.
+    """
+    monkeypatch.setattr(worker_module.random, "uniform", lambda a, b: b)
+
+    for attempts in (1, 5, 10, 50, 1000):
+        assert _backoff_delay(attempts, None) <= BACKOFF_MAX
+
+
+def test_backoff_delay_always_at_least_retry_after_when_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """retry_after is a floor: even with zero jitter and a low attempt
+    count (whose plain exponential base is far smaller than retry_after),
+    the returned delay must not go below it.
+    """
+    monkeypatch.setattr(worker_module.random, "uniform", lambda a, b: a)  # smallest possible delay
+
+    assert _backoff_delay(1, 30.0) == pytest.approx(30.0)
+    assert _backoff_delay(1, 0.5) == pytest.approx(BACKOFF_BASE / 2)  # floor below the natural delay is a no-op
+    # The floor itself is capped: a misbehaving proxy's retry-after: 9999
+    # must not park the job for hours.
+    assert _backoff_delay(50, 9999.0) == pytest.approx(RETRY_AFTER_MAX)
+
+
+def test_backoff_delay_jitter_within_base_half_to_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin random.uniform to its exact arguments and to a known return
+    value, so the delay computed from it can be asserted exactly -- this
+    both confirms the [0, base/2] range random.uniform is called with and
+    that _backoff_delay combines it with base/2 correctly (final delay in
+    [base/2, base]).
+    """
+    captured: dict[str, float] = {}
+
+    def fake_uniform(a: float, b: float) -> float:
+        captured["a"] = a
+        captured["b"] = b
+        return (a + b) / 2  # deterministic midpoint
+
+    monkeypatch.setattr(worker_module.random, "uniform", fake_uniform)
+
+    attempts = 3  # base = BACKOFF_BASE * 2**2 = 8.0
+    delay = _backoff_delay(attempts, None)
+
+    assert captured == {"a": 0, "b": pytest.approx(4.0)}  # [0, base/2]
+    assert delay == pytest.approx(4.0 + 2.0)  # base/2 + midpoint of [0, base/2]
 
 
 @pytest_asyncio.fixture
@@ -167,6 +254,32 @@ async def test_retry_path_requeues_with_backoff(real_documents: Callable) -> Non
     assert result.run_after > datetime.now(UTC)
     assert result.last_error is not None
     assert "boom" in result.last_error
+
+
+async def test_retry_after_seconds_floors_the_requeue_delay(real_documents: Callable) -> None:
+    """When the handler raises an ExtractionError carrying
+    retry_after_seconds (set when the VLM call failed with a rate-limit/
+    overload response that told us how long to wait -- see
+    app.extraction), fail_job must requeue with a run_after at least that
+    far out, not just the plain exponential backoff for attempt 1 (which
+    on its own would land well under 30s). Small clock slack is allowed
+    since `before` is captured just ahead of the real requeue timestamp.
+    """
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+
+    async def rate_limited_handler(session, job) -> None:
+        raise ExtractionError("rate limited", retry_after_seconds=30)
+
+    before = datetime.now(UTC)
+    claimed = await run_once(rate_limited_handler, document_id=document.id)
+
+    assert claimed is True
+    result = await _refresh_job(job.id)
+    assert result.state == "pending"
+    assert result.attempts == 1
+    assert result.run_after is not None
+    assert result.run_after >= before + timedelta(seconds=30) - timedelta(seconds=1)
 
 
 async def test_non_retryable_failure_skips_requeue_and_fails_immediately(

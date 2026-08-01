@@ -30,14 +30,20 @@ another live worker is actively working on right now. Running two worker
 processes concurrently would make this sweep steal in-flight jobs.
 
 Retry/backoff: failed jobs are requeued (state -> pending) up to
-MAX_ATTEMPTS times, with an exponential backoff applied via the
-`run_after` column (base 2s: 2s, 4s, 8s, ...). The claim query only
-considers jobs whose `run_after` is null or in the past, so a backing-off
-job doesn't get immediately re-claimed by the next poll.
+MAX_ATTEMPTS times, with an equal-jitter exponential backoff (see
+_backoff_delay) applied via the `run_after` column, capped at
+BACKOFF_MAX. When the failure carries an ExtractionError.retry_after_seconds
+(a 429/529/5xx response with a `retry-after` header -- see
+app.extraction.extract_document), that value is a floor on the delay:
+the server's own requested wait always wins over a shorter jittered
+backoff. The claim query only considers jobs whose `run_after` is null
+or in the past, so a backing-off job doesn't get immediately re-claimed
+by the next poll.
 """
 
 import asyncio
 import logging
+import random
 import traceback
 import uuid
 from collections.abc import Awaitable, Callable
@@ -59,8 +65,47 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 BACKOFF_BASE = 2.0
+# Ceiling on the deterministic half of _backoff_delay's exponential growth
+# (before jitter and before the retry_after floor) -- without this a job
+# that's failed many times would otherwise wait longer and longer forever.
+BACKOFF_MAX = 60.0
+# Ceiling on how far a server-supplied retry-after header can push the
+# requeue. A misbehaving proxy sending retry-after: 86400 would otherwise
+# park the document in "processing" for a day with no operator signal.
+# (The Anthropic SDK's own in-process retry layer ignores retry-after
+# values over 60s for the same reason.)
+RETRY_AFTER_MAX = 900.0
 
 Handler = Callable[[AsyncSession, Job], Awaitable[None]]
+
+
+def _backoff_delay(attempts: int, retry_after: float | None) -> float:
+    """Equal-jitter exponential backoff delay, in seconds, for the
+    `attempts`-th failed attempt (1-indexed, matching Job.attempts).
+
+    Pure function -- no I/O, no clock reads -- so tests can assert exact
+    values by monkeypatching random.uniform instead of asserting a loose
+    range against a real timestamp.
+
+    `base` is the plain exponential (BACKOFF_BASE * 2**(attempts-1)),
+    capped at BACKOFF_MAX so a job that keeps failing doesn't wait longer
+    and longer without bound. The returned delay is base/2 plus a uniform
+    random draw from [0, base/2]: half deterministic floor, half jitter,
+    so many simultaneously-failing jobs don't all retry in lockstep (the
+    "equal jitter" strategy -- see
+    https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/).
+
+    `retry_after` -- ExtractionError.retry_after_seconds, when the
+    failure was a rate-limit/overload response that told us explicitly
+    how long to wait (see app.extraction.extract_document) -- is then
+    applied as a floor, capped at RETRY_AFTER_MAX: jitter may extend the
+    delay past what the server asked for, but must never shorten it
+    below that.
+    """
+    base = min(BACKOFF_MAX, BACKOFF_BASE * 2 ** (attempts - 1))
+    delay = base / 2 + random.uniform(0, base / 2)
+    floor = min(retry_after, RETRY_AFTER_MAX) if retry_after else 0.0
+    return max(delay, floor)
 
 
 def pending_job_stmt(now: datetime, document_id: uuid.UUID | None = None):
@@ -161,8 +206,13 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
     if not non_retryable and job.attempts < MAX_ATTEMPTS:
         job.state = "pending"
         job.last_error = error_tail
+        # retry_after_seconds is only ever set on ExtractionError (see
+        # app.extraction) -- getattr defaults to None for any other
+        # exception type, same as _backoff_delay's own `retry_after or
+        # 0.0` fallback when there's nothing to floor against.
+        retry_after = getattr(exc, "retry_after_seconds", None)
         job.run_after = datetime.now(UTC) + timedelta(
-            seconds=BACKOFF_BASE * 2 ** (job.attempts - 1)
+            seconds=_backoff_delay(job.attempts, retry_after)
         )
         await session.commit()
         logger.info(
