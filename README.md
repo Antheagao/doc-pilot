@@ -6,21 +6,23 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 <!-- LIVE_DEMO: hosted demo link goes here once a host is picked -->
 
+![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
+
 212 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
-<img src="screenshots/document-detail.png" width="900" alt="A skewed grocery receipt beside its extracted fields, with per-field confidence badges and a human-corrected subtotal">
+<img src="screenshots/document-detail.png" width="900" alt="A handwritten bakery receipt beside its extracted fields, with per-field confidence badges, a human-corrected subtotal, and per-document cost, latency, and token counts">
 
-*The split view: the original document beside what the model extracted. Every field carries its own confidence score. The subtotal here was misread off a skewed phone photo at 68% confidence, routed to review, and corrected by a human — the model's original answer stays visible, struck through, beside the correction.*
+*The split view: the original document beside what the model extracted. Every field carries its own confidence score, and the footer shows exactly what this document cost (model, prompt version, $, latency, tokens). A low-confidence subtotal was routed to review and corrected by a human — the model's original answer stays visible, struck through, beside the correction; the vendor field is still awaiting review at 74%.*
 
-<img src="screenshots/review-correct.png" width="900" alt="The review queue with two low-confidence fields, one with the inline correction editor open">
+<img src="screenshots/review-correct.png" width="900" alt="The review queue with two low-confidence fields from a handwritten receipt, one with the inline correction editor open">
 
 *The review queue: only the individual fields that fell below the confidence threshold, not whole documents. Approve or correct inline; the header badge tracks pending count.*
 
-<img src="screenshots/home.png" width="900" alt="Document list with upload zone and per-document extraction status">
+<img src="screenshots/home.png" width="900" alt="Home page with upload zone, live stats strip, and per-document extraction status">
 
-*Upload via drag-and-drop and watch documents move `uploaded` → `processing` → `extracted`, polled live.*
+*Upload via drag-and-drop, with a live stats strip — documents processed, average cost per document, p50/p95 latency, pending review count — and documents polled live through `uploaded` → `processing` → `extracted`.*
 
 ## Stack
 
