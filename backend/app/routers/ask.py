@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.loop import answer_question
 from app.agent.tools import ToolContext
+from app.budget import enforce_daily_budget
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.evals.online import record_ask_run
@@ -106,6 +107,7 @@ async def ask(
 ) -> AskResponse:
     if client is None:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+    await enforce_daily_budget(session, settings)
     try:
         result = await answer_question(
             ToolContext(session=session, embedder=embedder), request.question, settings, client

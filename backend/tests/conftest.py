@@ -37,7 +37,10 @@ async def client(db_session: AsyncSession, tmp_path) -> AsyncGenerator[AsyncClie
         yield db_session
 
     def override_get_settings() -> Settings:
-        return Settings(upload_dir=str(tmp_path))
+        # The spend cap is off: tests share the dev database, and real
+        # spend recorded there today must not turn an upload into a 429.
+        # tests/test_budget.py turns it on explicitly.
+        return Settings(upload_dir=str(tmp_path), daily_budget_usd=0)
 
     app.dependency_overrides[get_session] = override_get_session
     app.dependency_overrides[get_settings] = override_get_settings

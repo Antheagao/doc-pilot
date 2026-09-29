@@ -213,7 +213,15 @@ export interface Stats {
   // Extraction + transcription per processed document.
   mean_pipeline_cost_per_doc: number | null;
   spend: StatsSpend;
+  budget: StatsBudget;
   ask: StatsAsk;
+}
+
+// The daily spend cap; daily_budget_usd is null when it's off.
+export interface StatsBudget {
+  daily_budget_usd: number | null;
+  spent_today_usd: number;
+  resets_in_seconds: number;
 }
 
 // Every model call the system has paid for, by stage.

@@ -188,7 +188,9 @@ export default function AskPage() {
         err instanceof ApiError
           ? err.status === 503
             ? `The agent is unavailable: ${err.message}`
-            : `API error: ${err.message}`
+            : err.status === 429
+              ? `Not right now: ${err.message}.`
+              : `API error: ${err.message}`
           : "Could not reach the API. Is the backend running?"
       );
     } finally {

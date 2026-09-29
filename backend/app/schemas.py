@@ -109,6 +109,14 @@ class StatsSpend(BaseModel):
     total_usd: float
 
 
+class StatsBudget(BaseModel):
+    """The daily spend cap (app/budget.py): null when it's off."""
+
+    daily_budget_usd: float | None
+    spent_today_usd: float
+    resets_in_seconds: int
+
+
 class StatsAsk(BaseModel):
     """/ask in production: volume, cost, latency, and the two online
     quality signals -- people's feedback and the sampled groundedness
@@ -145,6 +153,7 @@ class StatsOut(BaseModel):
     # extraction alone).
     mean_pipeline_cost_per_doc: float | None
     spend: StatsSpend
+    budget: StatsBudget
     ask: StatsAsk
 
 

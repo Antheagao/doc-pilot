@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-406 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+413 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -318,10 +318,11 @@ doc-pilot is currently a **single-user local tool** and its security posture is 
 - **Re-serving is locked down.** Files are served back with their stored content type plus `X-Content-Type-Options: nosniff`, closing the stored-payload-served-as-image pattern from both ends.
 - **No injection surfaces.** All SQL goes through the ORM with bound parameters; the frontend renders extracted values as React text nodes (VLM output is treated as untrusted data, never HTML); document content reaches the model under forced tool-choice with a fixed schema, and the eval corpus includes an adversarial prompt-injection case to measure that boundary.
 - **Retrieved text is untrusted data, too.** Transcriptions -- including the eval corpus's prompt-injection receipt -- land in the search index verbatim, and `/search` returns them as data. The `/ask` agent feeds them back into a model, so its system prompt treats everything inside tool results as document content, never instructions, and the agent eval includes the injection receipt as a scored question.
-- **`/ask` is the one API route that spends money.** It is capped per question (steps and dollars), and it is why the api service now gets `ANTHROPIC_API_KEY` in `docker-compose.yml` -- every other route still runs without it.
+- **`/ask` is the one API route that calls the model.** It is capped per question (steps and dollars), and it is why the api service now gets `ANTHROPIC_API_KEY` in `docker-compose.yml` -- every other route still runs without it.
+- **Spend is capped per day.** Uploads (each queues a billed extraction and transcription) and `/ask` questions are refused with `429` and a `Retry-After` once the model spend recorded since midnight UTC -- extraction, transcription, the agent, its grader -- reaches `DAILY_BUDGET_USD` ($5 by default; `0` turns it off; `app/budget.py`). The check runs before anything is stored or called. It's a soft cap: work already admitted finishes, so a day can end over budget by at most what was in flight (each question is itself capped at `AGENT_MAX_COST_USD`). `GET /stats` shows today's spend against the budget.
 - **The dev database binds to loopback only**, so its dev-grade credentials are never LAN-reachable.
 
-**Before the hosted demo ships**, the threat model changes and three things become blocking: some form of auth (even a single bearer token), rate limiting with a daily spend cap (every upload triggers billed VLM calls and every `/ask` a billed agent run — unauthenticated internet traffic means unbounded API spend at ~$0.01/document), and a storage quota with cleanup for uploads.
+**Before the hosted demo ships**, the threat model changes and three things become blocking: some form of auth (even a single bearer token), per-client rate limiting (the daily spend cap bounds the *cost* of unauthenticated traffic, but one client can still spend the whole day's budget and lock everyone else out until midnight), and a storage quota with cleanup for uploads.
 
 ## Evals
 

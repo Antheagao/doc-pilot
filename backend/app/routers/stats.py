@@ -10,6 +10,7 @@ acceptable trade for never serving stale numbers.
 """
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +19,20 @@ from sqlalchemy import Integer, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.budget import seconds_until_reset, spent_today_usd
+from app.config import Settings, get_settings
 from app.db import get_session
 from app.evals.report import load_results
 from app.models import AskRun, Document, DocumentPage, ExtractedField, Extraction
 from app.routers.review import _PENDING
-from app.schemas import StatsAsk, StatsLastEval, StatsOut, StatsReview, StatsSpend
+from app.schemas import (
+    StatsAsk,
+    StatsBudget,
+    StatsLastEval,
+    StatsOut,
+    StatsReview,
+    StatsSpend,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +56,10 @@ def _load_last_eval_results() -> list[dict[str, Any]]:
 
 
 @router.get("", response_model=StatsOut)
-async def get_stats(session: AsyncSession = Depends(get_session)) -> StatsOut:
+async def get_stats(
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> StatsOut:
     documents_total = (
         await session.execute(select(func.count()).select_from(Document))
     ).scalar_one()
@@ -129,6 +142,8 @@ async def get_stats(session: AsyncSession = Depends(get_session)) -> StatsOut:
         total_usd=total_cost_usd + transcription_cost + agent_cost + judge_cost,
     )
 
+    now = datetime.now(UTC)
+
     # The whole load-and-project step is one try/except: a loadable-but-
     # malformed artifact (e.g. summary: {} instead of a full dict, or a
     # wrong-typed top-level value) can raise just as easily during
@@ -171,6 +186,11 @@ async def get_stats(session: AsyncSession = Depends(get_session)) -> StatsOut:
         last_eval=last_eval,
         mean_pipeline_cost_per_doc=mean_pipeline_cost_per_doc,
         spend=spend,
+        budget=StatsBudget(
+            daily_budget_usd=settings.daily_budget_usd or None,
+            spent_today_usd=await spent_today_usd(session, now),
+            resets_in_seconds=seconds_until_reset(now),
+        ),
         ask=StatsAsk(**ask),
     )
 

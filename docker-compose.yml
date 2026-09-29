@@ -65,6 +65,10 @@ services:
       # background for groundedness -- one more model call each, so off
       # unless set. See app/evals/online.py.
       ASK_JUDGE_SAMPLE_RATE: ${ASK_JUDGE_SAMPLE_RATE:-0}
+      # Uploads and /ask questions get 429 once the model spend recorded
+      # since midnight UTC reaches this (USD); 0 turns the cap off. See
+      # app/budget.py.
+      DAILY_BUDGET_USD: ${DAILY_BUDGET_USD:-5}
       # Only POST /ask (the question-answering agent, app/agent/) calls the
       # model from the API process; every other route runs without it, and
       # /ask returns 503 when this is empty.

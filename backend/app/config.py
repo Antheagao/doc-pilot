@@ -119,6 +119,13 @@ class Settings(BaseSettings):
     judge_effort: str = "medium"
     judge_max_tokens: int = 8000
 
+    # --- Spend guardrail (app/budget.py) ----------------------------------
+    # Uploads and /ask questions are refused (429) once the model spend
+    # recorded since midnight UTC -- extraction, transcription, the agent,
+    # its grader -- reaches this many dollars. A soft cap: work already
+    # admitted finishes. 0 turns it off.
+    daily_budget_usd: float = Field(default=5.0, ge=0.0)
+
     # Online evaluation (app/evals/online.py): the share of answered /ask
     # questions (0.0-1.0) that get a background 'judge' job running the
     # reference-free groundedness grader on JUDGE_MODEL. Off by default:

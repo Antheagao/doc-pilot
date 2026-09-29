@@ -221,7 +221,9 @@ def _cite_first_record(_unused, field_line: str):
     return respond
 
 
-SETTINGS = Settings(agent_model="claude-opus-5-5", agent_effort="medium", anthropic_api_key="test")
+SETTINGS = Settings(
+    agent_model="claude-opus-5-5", agent_effort="medium", anthropic_api_key="test", daily_budget_usd=0
+)
 
 
 async def test_agent_answers_with_verified_citations(db_session: AsyncSession) -> None:

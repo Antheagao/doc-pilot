@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.budget import enforce_daily_budget
 from app.config import Settings, get_settings, resolve_upload_dir
 from app.db import get_session
 from app.models import Document, ExtractedField, Extraction, Job
@@ -103,6 +104,9 @@ async def upload_document(
         raise HTTPException(
             status_code=415, detail=f"Unsupported media type: {file.content_type}"
         )
+    # Every upload queues billed model calls (extraction, then
+    # transcription), so it is refused once today's budget is spent.
+    await enforce_daily_budget(session, settings)
 
     content = await _read_limited(file, MAX_UPLOAD_SIZE)
 

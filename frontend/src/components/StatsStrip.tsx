@@ -56,8 +56,11 @@ export default function StatsStrip() {
         <div className="stats-strip__label">total spend</div>
         <div className="stats-strip__value">{formatCost(stats.spend.total_usd)}</div>
         <div className="stats-strip__sub">
-          {stats.ask.runs} question{stats.ask.runs === 1 ? "" : "s"} ·{" "}
-          {formatCost(stats.spend.agent_usd + stats.spend.judge_usd)}
+          {stats.budget.daily_budget_usd !== null
+            ? `today $${stats.budget.spent_today_usd.toFixed(2)} of $${stats.budget.daily_budget_usd.toFixed(2)}`
+            : `${stats.ask.runs} question${stats.ask.runs === 1 ? "" : "s"} · ${formatCost(
+                stats.spend.agent_usd + stats.spend.judge_usd
+              )}`}
         </div>
       </div>
       <div className="stats-strip__cell">
