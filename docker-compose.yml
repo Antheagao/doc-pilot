@@ -58,6 +58,9 @@ services:
       # The API embeds search queries (GET /search), so it loads the same
       # embedding model as the worker -- see EMBEDDING_CACHE_DIR on worker.
       EMBEDDING_CACHE_DIR: /data/models
+      # Tracing is off unless this is set -- see the `jaeger` service.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: doc-pilot-api
     volumes:
       - uploads:/data/uploads
       - models:/data/models
@@ -87,6 +90,8 @@ services:
       # use into this volume, shared with api, so it's fetched once rather
       # than on every container start.
       EMBEDDING_CACHE_DIR: /data/models
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: doc-pilot-worker
     volumes:
       - uploads:/data/uploads
       - models:/data/models
@@ -111,6 +116,18 @@ services:
       - api
     ports:
       - "127.0.0.1:3000:3000"
+
+  # Opt-in trace viewer (app/telemetry.py). Starts only with the profile,
+  # and api/worker only export when OTEL_EXPORTER_OTLP_ENDPOINT is set:
+  #   OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile tracing up --build
+  # then open http://localhost:16686. In-memory storage: traces are gone
+  # when the container stops.
+  jaeger:
+    image: jaegertracing/jaeger:2.21.0
+    profiles: ["tracing"]
+    ports:
+      - "127.0.0.1:16686:16686"  # UI
+      - "127.0.0.1:4318:4318"    # OTLP/HTTP, for exporting from the host (local dev)
 
 volumes:
   db_data:

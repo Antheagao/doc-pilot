@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-283 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+299 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -29,6 +29,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 - **Backend:** FastAPI (Python)
 - **VLM:** Claude via the Anthropic API — image input with structured outputs (JSON schema), never regex-parsing free text
 - **Queue:** Postgres `SKIP LOCKED` job queue
+- **Tracing:** OpenTelemetry with the GenAI semantic conventions -- one trace per document, from upload through extraction and indexing, exported over OTLP to Jaeger (opt-in)
 - **Retrieval:** pgvector (HNSW) + Postgres full-text search, fused with Reciprocal Rank Fusion; embeddings from `BAAI/bge-small-en-v1.5` run locally via fastembed (ONNX, CPU) -- no second API key, no per-query cost
 - **Frontend:** Next.js — upload, extraction results side-by-side with the document image, review/correct UI
 
@@ -200,6 +201,34 @@ Known gaps -- `run_retrieval.py` prints the hardest queries after every run, and
 - **Abbreviations.** "stores in Michigan" vs `Detroit, MI` -- location recall tops out at 88-96%.
 - **Scale.** 25 documents is a regression baseline and an ablation bench, not a benchmark; absolute numbers will fall on a larger corpus, and the query set grows with it.
 
+## Tracing
+
+Every document's lifecycle is one OpenTelemetry trace -- across the job queue, not just within a request. Each job row stores the W3C `traceparent` of whatever enqueued it (the upload request, or the extract job that queued the index job), and the worker starts the job's span as a child of that context. Model calls are `chat` spans with the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) (`gen_ai.request.model`, `gen_ai.usage.input_tokens`/`output_tokens`, cache tokens, `gen_ai.response.finish_reasons`, `gen_ai.response.id`) plus doc-pilot's own `docpilot.cost_usd` and `docpilot.prompt_version`; embeddings and search are `embeddings` and `retrieval` spans; SQL statements nest under whichever request or job issued them.
+
+```
+POST /documents                                     85.7 ms
+└─ job extract                                      19.7 ms   outcome=done
+   ├─ chat claude-sonnet-5                                    in=1712 out=845 tokens, finish=tool_use, $0.01187
+   └─ job index                                    166.7 ms   outcome=done
+      ├─ chat claude-haiku-4-5                                page 1, in=1650 out=412 tokens, finish=end_turn, $0.00371
+      └─ embeddings fastembed:BAAI/bge-small-en-v1.5   106.0 ms   7 chunks
+GET /search                                         20.5 ms
+└─ retrieval document_chunks                        18.7 ms   3 results
+```
+
+*A real trace, exported over OTLP to Jaeger 2.21 and read back from its API (SQL spans omitted for width). Only the Anthropic client was stubbed -- this sandbox has no API key -- so the model-call durations are not real; the token counts and costs are realistic fixtures run through the real pricing code.*
+
+The first version of that trace showed the index job taking **16.9 s**, almost all of it inside `embeddings`: the ONNX model was loading inside the first job. The worker now loads it at startup (and the API in the background), and the same span takes ~100 ms. Tracing also caught its own noise: the worker's claim poll runs every second, and with SQL instrumented each poll became a one-span trace, so the poll now runs with instrumentation suppressed.
+
+Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, so tests, CI and a plain `docker compose up` pay nothing. To see traces:
+
+```powershell
+$env:OTEL_EXPORTER_OTLP_ENDPOINT="http://jaeger:4318"; docker compose --profile tracing up --build   # Windows
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile tracing up --build          # macOS/Linux
+```
+
+then open http://localhost:16686. Content is never recorded on spans: no prompts, document images, transcriptions, or search queries -- receipts carry personal data, and the GenAI conventions make message content opt-in for the same reason.
+
 ## Failure handling
 
 Four independent recovery paths cover the ways a VLM call can go wrong, all in `backend/app/extraction.py`:
@@ -255,4 +284,4 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 <!-- EVAL_TABLE:END -->
 
-*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Next: an agent layer over search + the structured extraction data, with OpenTelemetry tracing and LLM-as-judge scoring beside the existing rubric; then pick a host and ship the demo.*
+*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace. Next: an agent layer over search + the structured extraction data, with LLM-as-judge scoring beside the existing rubric; then pick a host and ship the demo.*

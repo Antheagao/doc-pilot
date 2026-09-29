@@ -1,11 +1,19 @@
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.db import engine
+from app.retrieval.embeddings import warm_up_embedder
 from app.routers import documents, review, search, stats
 from app.routers.documents import MAX_UPLOAD_SIZE
+from app.telemetry import configure_tracing, instrument_api
 
 
 class MaxBodySizeMiddleware:
@@ -81,7 +89,17 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
-app = FastAPI(title="doc-pilot")
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Warm the embedding model in the background: /search embeds every
+    # query, and the first one shouldn't pay the model load. Not awaited,
+    # so the API is serving (and /healthz passing) while it loads.
+    warm_up = asyncio.create_task(run_in_threadpool(warm_up_embedder))
+    yield
+    warm_up.cancel()
+
+
+app = FastAPI(title="doc-pilot", lifespan=lifespan)
 
 # No cookies or HTTP auth are used anywhere, so credentialed CORS is
 # deliberately NOT enabled -- allow_credentials would only widen the
@@ -101,6 +119,11 @@ app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(review.router, prefix="/review", tags=["review"])
 app.include_router(stats.router, prefix="/stats", tags=["stats"])
 app.include_router(search.router, prefix="/search", tags=["search"])
+
+# Tracing is opt-in via OTEL_EXPORTER_OTLP_ENDPOINT (see app/telemetry.py);
+# when it's off this is a no-op and no instrumentation is installed.
+if configure_tracing("doc-pilot-api"):
+    instrument_api(app, engine)
 
 
 @app.get("/healthz")

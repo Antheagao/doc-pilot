@@ -101,3 +101,27 @@ def test_importing_the_app_never_imports_fastembed() -> None:
         "assert 'fastembed' not in sys.modules, 'fastembed imported eagerly'"
     )
     subprocess.run([sys.executable, "-c", code], check=True, cwd=BACKEND_DIR)
+
+
+def test_fastembed_warm_up_runs_one_real_embed(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    embedder = FastEmbedEmbedder("BAAI/bge-small-en-v1.5")
+    monkeypatch.setattr(embedder, "embed_query", lambda text: calls.append(text) or [])
+
+    embedder.warm_up()
+
+    assert calls == ["warm up"]
+
+
+def test_warm_up_embedder_never_raises(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    from app.retrieval import embeddings as embeddings_module
+
+    class Broken(HashingEmbedder):
+        def warm_up(self) -> None:
+            raise OSError("no network for the model download")
+
+    monkeypatch.setattr(embeddings_module, "get_embedder", lambda: Broken())
+
+    embeddings_module.warm_up_embedder()  # must not raise
+
+    assert "warm-up failed" in caplog.text

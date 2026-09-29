@@ -17,6 +17,7 @@ from app.schemas import (
     ExtractedFieldOut,
     ExtractionOut,
 )
+from app.telemetry import current_traceparent
 
 router = APIRouter()
 
@@ -125,7 +126,7 @@ async def upload_document(
         storage_path=str(storage_path),
         status="uploaded",
     )
-    job = Job(document_id=document_id, state="pending")
+    job = Job(document_id=document_id, state="pending", traceparent=current_traceparent())
 
     try:
         session.add_all([document, job])

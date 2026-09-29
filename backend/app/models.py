@@ -73,6 +73,11 @@ class Job(Base):
     kind: Mapped[str] = mapped_column(
         String, nullable=False, default=JOB_KIND_EXTRACT, server_default=JOB_KIND_EXTRACT
     )
+    # W3C trace context of whatever enqueued this job (the upload request,
+    # or the extract job that queued an index job). The worker starts the
+    # job's span as a child of it, so a document's whole lifecycle is one
+    # trace across the queue. NULL when tracing is off. See app/telemetry.py.
+    traceparent: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Extraction(Base):

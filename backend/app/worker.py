@@ -56,11 +56,14 @@ import logging
 import random
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.db import async_session_maker, engine
@@ -70,7 +73,21 @@ from app.extraction import (
     process_document_job,
 )
 from app.models import JOB_KIND_EXTRACT, JOB_KIND_INDEX, Document, Job
+from app.retrieval.embeddings import warm_up_embedder
 from app.retrieval.index_job import process_index_job
+from app.telemetry import (
+    DOCPILOT_DOCUMENT_ID,
+    DOCPILOT_JOB_ATTEMPT,
+    DOCPILOT_JOB_ID,
+    DOCPILOT_JOB_KIND,
+    DOCPILOT_JOB_OUTCOME,
+    configure_tracing,
+    context_from_traceparent,
+    instrument_engine,
+    shutdown_tracing,
+    tracer,
+    untraced,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -294,41 +311,84 @@ async def run_once(
 
     document_id is test-only scoping -- see pending_job_stmt.
     """
-    async with async_session_maker() as session:
-        job = await claim_job(session, document_id=document_id)
-        if job is None:
-            return False
-        job_id = job.id
+    # The claim poll is untraced: it runs every poll interval, work or not.
+    # A claimed job's own span (below) starts the traced part.
+    with untraced():
+        async with async_session_maker() as session:
+            job = await claim_job(session, document_id=document_id)
+            if job is None:
+                return False
+            job_id = job.id
 
     async with async_session_maker() as session:
         job = await session.get(Job, job_id)
         if job is None:
             logger.warning("job %s vanished before handler could run", job_id)
             return True
-        try:
-            await handler(session, job)
-        except asyncio.CancelledError:
-            # The process is shutting down mid-handler. Requeue rather
-            # than fail: this wasn't the job's fault, so it shouldn't
-            # burn one of its MAX_ATTEMPTS. Roll back first for the same
-            # reason fail_job does -- don't flush partial handler writes
-            # alongside the requeue -- and re-fetch afterward since
-            # rollback may have expired `job`.
-            logger.info("job %s cancelled mid-handler, requeuing", job.id)
-            await session.rollback()
-            job = await session.get(Job, job_id)
-            if job is not None:
-                job.state = "pending"
-                job.attempts = max(job.attempts - 1, 0)
-                await session.commit()
-            raise
-        except Exception as exc:
-            logger.exception("job %s handler failed", job.id)
-            await fail_job(session, job, exc)
-        else:
-            await complete_job(session, job)
+        with _job_span(job) as span:
+            await _run_handler(session, job, job_id, handler, span)
 
     return True
+
+
+@contextmanager
+def _job_span(job: Job) -> Iterator[Span]:
+    """The job's span, a child of the context that enqueued it (see
+    Job.traceparent) or a new root. The handler's own spans -- model
+    calls, embeddings, SQL -- nest under it."""
+    with tracer().start_as_current_span(
+        f"job {job.kind}",
+        context=context_from_traceparent(job.traceparent),
+        kind=SpanKind.CONSUMER,
+        attributes={
+            DOCPILOT_JOB_ID: str(job.id),
+            DOCPILOT_JOB_KIND: job.kind,
+            DOCPILOT_JOB_ATTEMPT: job.attempts,
+            DOCPILOT_DOCUMENT_ID: str(job.document_id),
+        },
+    ) as span:
+        yield span
+
+
+async def _run_handler(
+    session: AsyncSession, job: Job, job_id: uuid.UUID, handler: Handler, span: Span
+) -> None:
+    """Run the handler and settle the job: complete it, requeue/fail it
+    via fail_job, or requeue it on cancellation. The job's final state is
+    recorded on the span as docpilot.job.outcome, and a handler failure is
+    recorded as the span's exception/error status even though it is
+    handled here rather than propagated."""
+    try:
+        await handler(session, job)
+    except asyncio.CancelledError:
+        # The process is shutting down mid-handler. Requeue rather
+        # than fail: this wasn't the job's fault, so it shouldn't
+        # burn one of its MAX_ATTEMPTS. Roll back first for the same
+        # reason fail_job does -- don't flush partial handler writes
+        # alongside the requeue -- and re-fetch afterward since
+        # rollback may have expired `job`.
+        logger.info("job %s cancelled mid-handler, requeuing", job.id)
+        await session.rollback()
+        job = await session.get(Job, job_id)
+        if job is not None:
+            job.state = "pending"
+            job.attempts = max(job.attempts - 1, 0)
+            await session.commit()
+        raise
+    except Exception as exc:
+        logger.exception("job %s handler failed", job.id)
+        span.record_exception(exc)
+        span.set_status(Status(StatusCode.ERROR, f"{type(exc).__name__}: {exc}"[:500]))
+        await fail_job(session, job, exc)
+        settled = await session.get(Job, job_id)
+        if settled is not None:
+            span.set_attribute(
+                DOCPILOT_JOB_OUTCOME,
+                "requeued" if settled.state == "pending" else settled.state,
+            )
+    else:
+        await complete_job(session, job)
+        span.set_attribute(DOCPILOT_JOB_OUTCOME, "done")
 
 
 async def run_worker(handler: Handler = dispatch_job) -> None:
@@ -364,8 +424,18 @@ async def run_worker(handler: Handler = dispatch_job) -> None:
 
 
 async def main() -> None:
-    async with async_session_maker() as session:
-        await reclaim_orphaned_jobs(session)
+    if configure_tracing("doc-pilot-worker"):
+        instrument_engine(engine)
+        logger.info("tracing enabled (OTLP export)")
+
+    with untraced():
+        async with async_session_maker() as session:
+            await reclaim_orphaned_jobs(session)
+
+    # Load the embedding model before claiming work, so the first index
+    # job doesn't pay for it (tracing showed a cold first `embeddings`
+    # span taking seconds inside the job).
+    await run_in_threadpool(warm_up_embedder)
 
     task = asyncio.ensure_future(run_worker())
     try:
@@ -374,6 +444,7 @@ async def main() -> None:
         pass
     finally:
         await engine.dispose()
+        shutdown_tracing()
         logger.info("worker stopped, engine disposed")
 
 

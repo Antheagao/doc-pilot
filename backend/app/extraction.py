@@ -38,6 +38,7 @@ from starlette.concurrency import run_in_threadpool
 from app.config import Settings, get_settings
 from app.models import JOB_KIND_INDEX, Document, ExtractedField, Extraction, Job
 from app.pdf import count_pdf_pages, split_pdf_pages
+from app.telemetry import current_traceparent, model_call_span, record_model_response
 
 # The extraction prompt is a versioned file; the version string is derived
 # from its filename so a new prompt (extract_v2.md, ...) automatically
@@ -772,17 +773,29 @@ async def _extract_one_block(
     }
 
     start = time.perf_counter()
-    try:
-        response = await client.messages.create(
-            model=settings.extraction_model,
-            max_tokens=DEFAULT_MAX_TOKENS,
-            system=PROMPT_TEXT,
-            tools=[RECORD_EXTRACTION_TOOL],
-            tool_choice={"type": "tool", "name": "record_extraction"},
-            messages=[user_message],
+    with model_call_span(
+        settings.extraction_model, max_tokens=DEFAULT_MAX_TOKENS, prompt_version=PROMPT_VERSION
+    ) as span:
+        try:
+            response = await client.messages.create(
+                model=settings.extraction_model,
+                max_tokens=DEFAULT_MAX_TOKENS,
+                system=PROMPT_TEXT,
+                tools=[RECORD_EXTRACTION_TOOL],
+                tool_choice={"type": "tool", "name": "record_extraction"},
+                messages=[user_message],
+            )
+        except anthropic.AnthropicError as exc:
+            raise _classify_api_error(exc) from exc
+        record_model_response(
+            span,
+            response,
+            _compute_cost_usd(
+                settings.extraction_model,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            ),
         )
-    except anthropic.AnthropicError as exc:
-        raise _classify_api_error(exc) from exc
 
     if response.stop_reason != "tool_use":
         error_cls = (
@@ -841,38 +854,52 @@ async def _extract_one_block(
             "{{violations}}", _format_violations_for_prompt(violations)
         )
         try:
-            repair_response = await client.messages.create(
-                model=settings.extraction_model,
+            with model_call_span(
+                settings.extraction_model,
                 max_tokens=DEFAULT_MAX_TOKENS,
-                system=PROMPT_TEXT,
-                tools=[RECORD_EXTRACTION_TOOL],
-                tool_choice={"type": "tool", "name": "record_extraction"},
-                messages=[
-                    user_message,
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": tool_use_block.id,
-                                "name": tool_use_block.name,
-                                "input": tool_input,
-                            }
-                        ],
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_block.id,
-                                "content": repair_text,
-                                "is_error": True,
-                            }
-                        ],
-                    },
-                ],
-            )
+                prompt_version=REPAIR_PROMPT_VERSION,
+            ) as repair_span:
+                repair_response = await client.messages.create(
+                    model=settings.extraction_model,
+                    max_tokens=DEFAULT_MAX_TOKENS,
+                    system=PROMPT_TEXT,
+                    tools=[RECORD_EXTRACTION_TOOL],
+                    tool_choice={"type": "tool", "name": "record_extraction"},
+                    messages=[
+                        user_message,
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "id": tool_use_block.id,
+                                    "name": tool_use_block.name,
+                                    "input": tool_input,
+                                }
+                            ],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_block.id,
+                                    "content": repair_text,
+                                    "is_error": True,
+                                }
+                            ],
+                        },
+                    ],
+                )
+                record_model_response(
+                    repair_span,
+                    repair_response,
+                    _compute_cost_usd(
+                        settings.extraction_model,
+                        repair_response.usage.input_tokens,
+                        repair_response.usage.output_tokens,
+                    ),
+                )
         except Exception:  # a failed repair must never fail an otherwise-usable extraction
             logger.warning(
                 "schema repair call failed for record_extraction; falling back to "
@@ -1188,7 +1215,13 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
         # does, so there's never an extracted document that was silently
         # skipped, nor an index job for an extraction that rolled back.
         if settings.index_after_extraction:
-            session.add(Job(document_id=document_id, kind=JOB_KIND_INDEX))
+            session.add(
+                Job(
+                    document_id=document_id,
+                    kind=JOB_KIND_INDEX,
+                    traceparent=current_traceparent(),
+                )
+            )
     except ExtractionError:
         raise
     except Exception as exc:

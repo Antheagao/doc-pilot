@@ -18,6 +18,7 @@ callers run it via starlette's run_in_threadpool.
 """
 
 import hashlib
+import logging
 import math
 import re
 from collections.abc import Sequence
@@ -26,6 +27,8 @@ from typing import Protocol
 
 from app.config import Settings, get_settings
 from app.models import EMBEDDING_DIM
+
+logger = logging.getLogger(__name__)
 
 
 class Embedder(Protocol):
@@ -37,6 +40,12 @@ class Embedder(Protocol):
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]: ...
 
     def embed_query(self, text: str) -> list[float]: ...
+
+    def warm_up(self) -> None:
+        """Load whatever the first embed would otherwise load, so that
+        cost lands at process start instead of inside the first job or
+        search request."""
+        ...
 
 
 _WORD_RE = re.compile(r"\w+")
@@ -84,6 +93,9 @@ class HashingEmbedder:
 
     def embed_query(self, text: str) -> list[float]:
         return self._embed(text)
+
+    def warm_up(self) -> None:
+        pass
 
 
 # BGE's recommended instruction for the query side of short-query ->
@@ -141,6 +153,12 @@ class FastEmbedEmbedder:
     def embed_query(self, text: str) -> list[float]:
         return next(iter(self._load().embed([self._query_prefix + text]))).tolist()
 
+    def warm_up(self) -> None:
+        # One real embed, not just the session load: ONNX Runtime also
+        # does first-run work (thread pools, kernel selection) that a
+        # bare load leaves for the first caller.
+        self.embed_query("warm up")
+
 
 def build_embedder(settings: Settings) -> Embedder:
     if settings.embedding_backend == "hashing":
@@ -162,3 +180,14 @@ def get_embedder() -> Embedder:
     """The process-wide embedder. Also a FastAPI dependency
     (routers/search.py), so tests can swap it via dependency_overrides."""
     return build_embedder(get_settings())
+
+
+def warm_up_embedder() -> None:
+    """Best-effort warm-up of the process-wide embedder: a failure (no
+    network for the first model download, say) is logged, not raised --
+    the first real embed will retry the load and fail the job or request
+    properly if the problem persists."""
+    try:
+        get_embedder().warm_up()
+    except Exception:
+        logger.warning("embedder warm-up failed; the first embed will retry", exc_info=True)

@@ -43,6 +43,7 @@ from app.extraction import (
 )
 from app.pdf import count_pdf_pages, split_pdf_pages
 from app.retrieval.indexing import PageText
+from app.telemetry import DOCPILOT_PAGE_NUMBER, model_call_span, record_model_response
 
 # Versioned the same way the extraction prompt is (see app/extraction.py):
 # the filename stem is the prompt_version recorded on every DocumentPage.
@@ -64,28 +65,35 @@ async def _transcribe_block(
     page_number: int,
 ) -> PageText:
     start = time.perf_counter()
-    try:
-        response = await client.messages.create(
-            model=model,
-            max_tokens=TRANSCRIBE_MAX_TOKENS,
-            system=TRANSCRIBE_PROMPT_TEXT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        document_block,
-                        {"type": "text", "text": "Transcribe this page now."},
-                    ],
-                }
-            ],
-        )
-    except anthropic.AnthropicError as exc:
-        raise _classify_api_error(exc) from exc
-    latency_ms = int((time.perf_counter() - start) * 1000)
+    with model_call_span(
+        model,
+        max_tokens=TRANSCRIBE_MAX_TOKENS,
+        prompt_version=TRANSCRIBE_PROMPT_VERSION,
+        **{DOCPILOT_PAGE_NUMBER: page_number},
+    ) as span:
+        try:
+            response = await client.messages.create(
+                model=model,
+                max_tokens=TRANSCRIBE_MAX_TOKENS,
+                system=TRANSCRIBE_PROMPT_TEXT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            document_block,
+                            {"type": "text", "text": "Transcribe this page now."},
+                        ],
+                    }
+                ],
+            )
+        except anthropic.AnthropicError as exc:
+            raise _classify_api_error(exc) from exc
+        latency_ms = int((time.perf_counter() - start) * 1000)
 
-    input_tokens = response.usage.input_tokens
-    output_tokens = response.usage.output_tokens
-    cost_usd = _compute_cost_usd(model, input_tokens, output_tokens)
+        input_tokens = response.usage.input_tokens
+        output_tokens = response.usage.output_tokens
+        cost_usd = _compute_cost_usd(model, input_tokens, output_tokens)
+        record_model_response(span, response, cost_usd)
 
     if response.stop_reason != "end_turn":
         error_cls = (

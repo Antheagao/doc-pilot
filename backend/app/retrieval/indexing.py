@@ -20,6 +20,12 @@ from app.config import Settings
 from app.models import DocumentChunk, DocumentPage
 from app.retrieval.chunking import chunk_page, context_header, document_title
 from app.retrieval.embeddings import Embedder
+from app.telemetry import (
+    DOCPILOT_DOCUMENT_ID,
+    GEN_AI_OPERATION_NAME,
+    GEN_AI_REQUEST_MODEL,
+    tracer,
+)
 
 
 @dataclass
@@ -115,7 +121,16 @@ async def index_document_pages(
         return 0
 
     texts = [f"{header}\n{chunk.text}" if header else chunk.text for _, chunk, header in planned]
-    vectors = await run_in_threadpool(embedder.embed_documents, texts)
+    with tracer().start_as_current_span(
+        f"embeddings {embedder.name}",
+        attributes={
+            GEN_AI_OPERATION_NAME: "embeddings",
+            GEN_AI_REQUEST_MODEL: embedder.name,
+            DOCPILOT_DOCUMENT_ID: str(document_id),
+            "docpilot.chunk_count": len(texts),
+        },
+    ):
+        vectors = await run_in_threadpool(embedder.embed_documents, texts)
 
     session.add_all(
         DocumentChunk(

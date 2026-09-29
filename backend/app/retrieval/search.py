@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.models import Document, DocumentChunk
 from app.retrieval.embeddings import Embedder
+from app.telemetry import GEN_AI_DATA_SOURCE_ID, GEN_AI_OPERATION_NAME, tracer
 
 SearchMode = Literal["dense", "lexical", "hybrid"]
 SEARCH_MODES: tuple[SearchMode, ...] = ("dense", "lexical", "hybrid")
@@ -131,7 +132,7 @@ def reciprocal_rank_fusion(
     return sorted(scores.items(), key=lambda item: item[1], reverse=True)
 
 
-async def search(
+async def _search(
     session: AsyncSession,
     query: str,
     *,
@@ -141,9 +142,6 @@ async def search(
     candidates: int = DEFAULT_CANDIDATES,
     document_ids: list[uuid.UUID] | None = None,
 ) -> list[SearchHit]:
-    """Top-k chunks for `query`. document_ids restricts the search to
-    those documents (the retrieval eval scopes itself to its own corpus
-    this way); None searches everything."""
     if mode not in SEARCH_MODES:
         raise ValueError(f"unknown search mode {mode!r}")
 
@@ -199,3 +197,51 @@ async def search(
             )
         )
     return hits
+
+
+async def search(
+    session: AsyncSession,
+    query: str,
+    *,
+    embedder: Embedder,
+    k: int = 5,
+    mode: SearchMode = "hybrid",
+    candidates: int = DEFAULT_CANDIDATES,
+    document_ids: list[uuid.UUID] | None = None,
+) -> list[SearchHit]:
+    """Top-k chunks for `query`. document_ids restricts the search to
+    those documents (the retrieval eval scopes itself to its own corpus
+    this way); None searches everything.
+
+    Traced as a GenAI `retrieval` span. The query text is deliberately
+    not recorded (see app/telemetry.py on content capture); the mode,
+    k, and how many hits each side contributed are.
+    """
+    with tracer().start_as_current_span(
+        "retrieval document_chunks",
+        attributes={
+            GEN_AI_OPERATION_NAME: "retrieval",
+            GEN_AI_DATA_SOURCE_ID: "document_chunks",
+            "docpilot.search.mode": mode,
+            "docpilot.search.k": k,
+        },
+    ) as span:
+        hits = await _search(
+            session,
+            query,
+            embedder=embedder,
+            k=k,
+            mode=mode,
+            candidates=candidates,
+            document_ids=document_ids,
+        )
+        span.set_attribute("docpilot.search.results", len(hits))
+        span.set_attribute(
+            "docpilot.search.results_with_dense_rank",
+            sum(hit.dense_rank is not None for hit in hits),
+        )
+        span.set_attribute(
+            "docpilot.search.results_with_lexical_rank",
+            sum(hit.lexical_rank is not None for hit in hits),
+        )
+        return hits
