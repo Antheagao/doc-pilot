@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-417 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+423 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -134,12 +134,16 @@ flowchart LR
     E -. "same txn:<br/>enqueue index job" .-> I["Index job<br/>per-page VLM transcription"]
     I --> K[("document_pages +<br/>document_chunks<br/>pgvector + tsvector")]
     K --> S["GET /search<br/>hybrid dense + full-text<br/>page citations"]
-    Q["POST /ask"] --> A["Agent loop<br/>Claude Opus 5.5 + tools"]
+    Q["POST /ask · /ask/stream<br/>spend cap + rate limit"] --> A["Agent loop<br/>Claude Opus 5.5 + tools"]
     A --> S
     A --> E
+    A --> RUN[("ask_runs<br/>answer, citations,<br/>evidence, cost, trace")]
+    RUN --> F["Feedback<br/>was this right?"]
+    RUN -. "sampled:<br/>enqueue judge job" .-> J["Judge job<br/>groundedness grader"]
+    J --> RUN
 ```
 
-This is the data-flow shape (what happens to a document), not the deployment topology -- for that, `docker compose up --build` runs five services: `db`, a one-shot `migrate`, `api`, `worker`, and `frontend` (see the Quickstart above and `docker-compose.yml`).
+This is the data-flow shape (what happens to a document and a question), not the deployment topology -- for that, `docker compose up --build` runs five services: `db`, a one-shot `migrate`, `api`, `worker`, and `frontend`, plus an opt-in `jaeger` for traces (see the Quickstart above and `docker-compose.yml`). Every job -- extract, index, judge -- goes through the same Postgres `SKIP LOCKED` queue and the same worker, and carries the traceparent of whatever enqueued it.
 
 ## Why these tech choices
 
@@ -322,9 +326,10 @@ doc-pilot is currently a **single-user local tool** and its security posture is 
 - **Retrieved text is untrusted data, too.** Transcriptions -- including the eval corpus's prompt-injection receipt -- land in the search index verbatim, and `/search` returns them as data. The `/ask` agent feeds them back into a model, so its system prompt treats everything inside tool results as document content, never instructions, and the agent eval includes the injection receipt as a scored question.
 - **`/ask` is the one API route that calls the model.** It is capped per question (steps and dollars), and it is why the api service now gets `ANTHROPIC_API_KEY` in `docker-compose.yml` -- every other route still runs without it.
 - **Spend is capped per day.** Uploads (each queues a billed extraction and transcription) and `/ask` questions are refused with `429` and a `Retry-After` once the model spend recorded since midnight UTC -- extraction, transcription, the agent, its grader -- reaches `DAILY_BUDGET_USD` ($5 by default; `0` turns it off; `app/budget.py`). The check runs before anything is stored or called. It's a soft cap: work already admitted finishes, so a day can end over budget by at most what was in flight (each question is itself capped at `AGENT_MAX_COST_USD`). `GET /stats` shows today's spend against the budget.
+- **Spend rate is capped per client.** So one client can't burn the whole day's budget in a minute and lock everyone else out until midnight, `/ask` and `/ask/stream` share a per-client sliding window (`ASK_RATE_LIMIT_PER_MINUTE`, 10 by default) and uploads have their own (`UPLOAD_RATE_LIMIT_PER_MINUTE`, off by default -- dropping in a stack of receipts at once is normal local use), answering `429` with `Retry-After` (`app/ratelimit.py`). It's in-memory and per process, which fits the single API process here; scaling the API out would need a shared store, and behind a reverse proxy uvicorn needs `--proxy-headers` for the client address to be the real one.
 - **The dev database binds to loopback only**, so its dev-grade credentials are never LAN-reachable.
 
-**Before the hosted demo ships**, the threat model changes and three things become blocking: some form of auth (even a single bearer token), per-client rate limiting (the daily spend cap bounds the *cost* of unauthenticated traffic, but one client can still spend the whole day's budget and lock everyone else out until midnight), and a storage quota with cleanup for uploads.
+**Before the hosted demo ships**, the threat model changes and two things become blocking: some form of auth (even a single bearer token -- the spend cap and rate limits bound what anonymous traffic can cost, not who can use it), and a storage quota with cleanup for uploads.
 
 ## Evals
 

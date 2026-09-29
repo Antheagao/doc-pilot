@@ -69,6 +69,13 @@ services:
       # since midnight UTC reaches this (USD); 0 turns the cap off. See
       # app/budget.py.
       DAILY_BUDGET_USD: ${DAILY_BUDGET_USD:-5}
+      # Per-client requests per minute on the billed routes (0 = off); see
+      # app/ratelimit.py. Behind Docker's port mapping every host
+      # connection can arrive from the bridge gateway's address, so this is
+      # effectively a global limit here -- behind a real reverse proxy, run
+      # uvicorn with --proxy-headers for true per-client limits.
+      ASK_RATE_LIMIT_PER_MINUTE: ${ASK_RATE_LIMIT_PER_MINUTE:-10}
+      UPLOAD_RATE_LIMIT_PER_MINUTE: ${UPLOAD_RATE_LIMIT_PER_MINUTE:-0}
       # Only POST /ask (the question-answering agent, app/agent/) calls the
       # model from the API process; every other route runs without it, and
       # /ask returns 503 when this is empty.

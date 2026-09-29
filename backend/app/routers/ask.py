@@ -35,6 +35,7 @@ from app.db import get_session
 from app.evals.online import record_ask_run
 from app.extraction import ExtractionError, NonRetryableExtractionError, _build_client
 from app.models import AskRun
+from app.ratelimit import limit_ask
 from app.retrieval.embeddings import Embedder, get_embedder
 from app.schemas import (
     AskFeedbackRequest,
@@ -106,7 +107,7 @@ def ask_response(run: AskRun) -> AskResponse:
     )
 
 
-@router.post("", response_model=AskResponse)
+@router.post("", response_model=AskResponse, dependencies=[Depends(limit_ask)])
 async def ask(
     request: AskRequest,
     session: AsyncSession = Depends(get_session),
@@ -191,7 +192,7 @@ async def stream_answer(
                 await task
 
 
-@router.post("/stream")
+@router.post("/stream", dependencies=[Depends(limit_ask)])
 async def ask_stream(
     request: AskRequest,
     session: AsyncSession = Depends(get_session),

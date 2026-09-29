@@ -125,6 +125,12 @@ class Settings(BaseSettings):
     # its grader -- reaches this many dollars. A soft cap: work already
     # admitted finishes. 0 turns it off.
     daily_budget_usd: float = Field(default=5.0, ge=0.0)
+    # Per-client requests per minute (app/ratelimit.py), so no one client
+    # can spend the day's budget in a minute. 0 turns a limit off. /ask is
+    # limited by default (no person asks ten questions a minute); uploads
+    # aren't, since dropping in a stack of receipts at once is normal.
+    ask_rate_limit_per_minute: int = Field(default=10, ge=0)
+    upload_rate_limit_per_minute: int = Field(default=0, ge=0)
 
     # Online evaluation (app/evals/online.py): the share of answered /ask
     # questions (0.0-1.0) that get a background 'judge' job running the

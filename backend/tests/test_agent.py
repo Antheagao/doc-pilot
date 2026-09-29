@@ -222,7 +222,11 @@ def _cite_first_record(_unused, field_line: str):
 
 
 SETTINGS = Settings(
-    agent_model="claude-opus-5-5", agent_effort="medium", anthropic_api_key="test", daily_budget_usd=0
+    agent_model="claude-opus-5-5",
+    agent_effort="medium",
+    anthropic_api_key="test",
+    daily_budget_usd=0,
+    ask_rate_limit_per_minute=0,
 )
 
 
@@ -407,7 +411,7 @@ def test_unresolvable_citations_are_counted_not_trusted() -> None:
 async def test_ask_endpoint_requires_an_api_key(client: AsyncClient) -> None:
     from app.config import get_settings
 
-    app.dependency_overrides[get_settings] = lambda: Settings(anthropic_api_key=None)
+    app.dependency_overrides[get_settings] = lambda: Settings(anthropic_api_key=None, ask_rate_limit_per_minute=0)
 
     response = await client.post("/ask", json={"question": "anything"})
 
@@ -633,7 +637,7 @@ async def test_stream_turns_api_errors_into_an_error_event(
 async def test_stream_refusals_happen_before_streaming(client: AsyncClient) -> None:
     from app.config import get_settings
 
-    app.dependency_overrides[get_settings] = lambda: Settings(anthropic_api_key=None)
+    app.dependency_overrides[get_settings] = lambda: Settings(anthropic_api_key=None, ask_rate_limit_per_minute=0)
     assert (await client.post("/ask/stream", json={"question": "q"})).status_code == 503
     assert (await client.post("/ask/stream", json={"question": ""})).status_code == 422
 

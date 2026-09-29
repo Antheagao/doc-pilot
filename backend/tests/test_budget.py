@@ -34,7 +34,8 @@ def _run(**overrides) -> AskRun:
 
 def _cap(tmp_path, budget: float) -> None:
     app.dependency_overrides[get_settings] = lambda: Settings(
-        upload_dir=str(tmp_path), daily_budget_usd=budget, anthropic_api_key="test"
+        upload_dir=str(tmp_path), daily_budget_usd=budget, anthropic_api_key="test",
+        ask_rate_limit_per_minute=0,
     )
 
 

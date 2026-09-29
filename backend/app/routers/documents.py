@@ -11,6 +11,7 @@ from app.budget import enforce_daily_budget
 from app.config import Settings, get_settings, resolve_upload_dir
 from app.db import get_session
 from app.models import Document, ExtractedField, Extraction, Job
+from app.ratelimit import limit_upload
 from app.schemas import (
     DocumentCreateResponse,
     DocumentDetail,
@@ -94,7 +95,12 @@ async def _read_limited(file: UploadFile, max_size: int) -> bytes:
     return b"".join(chunks)
 
 
-@router.post("", response_model=DocumentCreateResponse, status_code=201)
+@router.post(
+    "",
+    response_model=DocumentCreateResponse,
+    status_code=201,
+    dependencies=[Depends(limit_upload)],
+)
 async def upload_document(
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
