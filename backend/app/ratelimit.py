@@ -71,9 +71,13 @@ def _enforce(request: Request, bucket: str, limit: int) -> None:
         )
 
 
-def limit_ask(request: Request, settings: Settings = Depends(get_settings)) -> None:
+# async on purpose, though nothing inside awaits: FastAPI runs plain `def`
+# dependencies in its threadpool, where concurrent requests would race on
+# the limiter's check-then-record (overshooting the limit, or popping an
+# emptied deque). On the event loop each check runs to completion alone.
+async def limit_ask(request: Request, settings: Settings = Depends(get_settings)) -> None:
     _enforce(request, "ask", settings.ask_rate_limit_per_minute)
 
 
-def limit_upload(request: Request, settings: Settings = Depends(get_settings)) -> None:
+async def limit_upload(request: Request, settings: Settings = Depends(get_settings)) -> None:
     _enforce(request, "upload", settings.upload_rate_limit_per_minute)

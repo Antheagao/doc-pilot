@@ -235,3 +235,19 @@ async def test_stats_report_spend_by_stage_and_online_quality(
     if was["judged"] == 0:  # exact only on a DB with no earlier verdicts
         assert ask["judge_grounded_rate"] == pytest.approx(0.5)
         assert ask["judge_answers_rate"] == pytest.approx(1.0)
+
+
+async def test_a_judge_job_that_fails_for_good_marks_its_run(db_session: AsyncSession) -> None:
+    """Otherwise the run reads 'queued for grading' forever."""
+    from app.worker import MAX_ATTEMPTS, fail_job
+
+    run = _run(judge_sampled=True)
+    job = await _stored(db_session, run)
+    job.attempts = MAX_ATTEMPTS
+    await db_session.commit()
+
+    await fail_job(db_session, job, NonRetryableExtractionError("unpriced model"))
+
+    await db_session.refresh(run)
+    assert run.judged_at is not None and run.judge_grounded is None
+    assert run.judge_error == "grading failed: NonRetryableExtractionError: unpriced model"

@@ -19,3 +19,12 @@ class Base(DeclarativeBase):
 async def get_session() -> AsyncGenerator[AsyncSession]:
     async with async_session_maker() as session:
         yield session
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """For work that outlives its request -- a streamed /ask run keeps
+    going after its client disconnects, so it can't borrow the request's
+    session, which FastAPI closes when the response ends. A dependency so
+    tests can hand it their own transaction."""
+    return async_session_maker
+

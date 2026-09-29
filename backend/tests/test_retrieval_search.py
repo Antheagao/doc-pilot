@@ -387,3 +387,17 @@ async def test_dense_search_skips_chunks_that_share_nothing_with_the_query(
     hits = await _search(db_session, "ceramic mug", ids, mode="dense")
 
     assert [hit.filename for hit in hits] == ["mug.png"]
+
+
+async def test_hnsw_ef_search_covers_the_tie_margin(db_session: AsyncSession) -> None:
+    """An HNSW scan returns at most ef_search rows; the tie-break margin
+    is only fetched if ef_search covers limit + margin."""
+    from sqlalchemy import text
+
+    from app.retrieval.search import _TIE_MARGIN
+
+    ids = await _index_corpus(db_session)
+    await search(db_session, "desk lamp", embedder=EMBEDDER, mode="dense", candidates=50, document_ids=list(ids.values()))
+
+    ef_search = (await db_session.execute(text("SHOW hnsw.ef_search"))).scalar_one()
+    assert int(ef_search) == 50 + _TIE_MARGIN

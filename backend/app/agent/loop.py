@@ -247,7 +247,12 @@ async def _run_tool(ctx: ToolContext, block: Any) -> tuple[dict[str, Any], ToolC
         try:
             if handler is None:
                 raise ToolError(f"unknown tool {block.name!r}")
-            content = await handler(ctx, dict(block.input or {}))
+            # A savepoint per call: a tool whose SQL fails (a timeout, a bad
+            # cast) rolls back to here instead of leaving the transaction
+            # aborted -- which would fail every later tool call and then the
+            # INSERT that stores the (already paid-for) answer.
+            async with ctx.session.begin_nested():
+                content = await handler(ctx, dict(block.input or {}))
             is_error = False
         except ToolError as exc:
             content = [{"type": "text", "text": f"Error: {exc}"}]

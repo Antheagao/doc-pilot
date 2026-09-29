@@ -96,8 +96,10 @@ async def _dense_ranking(
     limit: int,
     document_ids: list[uuid.UUID] | None,
 ) -> list[tuple[uuid.UUID, float]]:
+    # An HNSW scan yields at most ef_search rows, so it must cover the tie
+    # margin too, or the margin rows are never fetched.
     await session.execute(
-        select(func.set_config("hnsw.ef_search", str(max(limit, 40)), True))
+        select(func.set_config("hnsw.ef_search", str(max(limit + _TIE_MARGIN, 40)), True))
     )
     distance = DocumentChunk.embedding.cosine_distance(query_vector)
     # The inner query is the shape the HNSW index serves (ORDER BY distance

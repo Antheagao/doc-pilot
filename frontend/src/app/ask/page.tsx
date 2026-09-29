@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   askQuestionStream,
   getAskRun,
+  StreamInterruptedError,
   listAskRuns,
   sendAskFeedback,
   ApiError,
@@ -233,7 +234,6 @@ export default function AskPage() {
         break;
       case "answer":
         setResponse(event.run);
-        refreshHistory();
         break;
       case "error":
         setError(
@@ -263,10 +263,13 @@ export default function AskPage() {
             : err.status === 429
               ? `Not right now: ${err.message}.`
               : `API error: ${err.message}`
-          : "Could not reach the API. Is the backend running?"
+          : err instanceof StreamInterruptedError
+            ? `${err.message} The agent keeps working on the server; the answer will appear under recent questions.`
+            : "Could not reach the API. Is the backend running?"
       );
     } finally {
       setLoading(false);
+      refreshHistory();
     }
   }
 

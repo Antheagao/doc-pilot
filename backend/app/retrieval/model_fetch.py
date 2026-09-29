@@ -82,7 +82,16 @@ def ensure_pinned_model(model_name: str, dest_dir: str | Path | None = None) -> 
     try:
         archive = work / "model.tar.gz"
         logger.info("downloading pinned embedding model %s from %s", model_name, pinned.url)
-        digest = _download(pinned.url, archive)
+        try:
+            digest = _download(pinned.url, archive)
+        except OSError as exc:  # URLError, timeouts, disk errors
+            raise ModelFetchError(
+                f"could not download the pinned {model_name} from {pinned.url}: {exc}. "
+                "Allow outbound HTTPS to that host, or copy the model over from a machine that "
+                "can (`python scripts/fetch_embedding_model.py` prints where it lands) and set "
+                "EMBEDDING_MODEL_PATH to it. There is deliberately no fallback to another "
+                "export: it would serve a model the retrieval eval never measured."
+            ) from exc
         if digest != pinned.sha256:
             raise ModelFetchError(
                 f"{pinned.url} has SHA-256 {digest}, expected {pinned.sha256}; refusing to load it"

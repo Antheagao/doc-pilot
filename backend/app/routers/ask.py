@@ -16,7 +16,8 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,13 +26,13 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.loop import answer_question
 from app.agent.tools import ToolContext
 from app.budget import enforce_daily_budget
 from app.config import Settings, get_settings
-from app.db import get_session
+from app.db import get_session, get_session_factory
 from app.evals.online import record_ask_run
 from app.extraction import ExtractionError, NonRetryableExtractionError, _build_client
 from app.models import AskRun
@@ -141,8 +142,13 @@ def _sse(event: dict[str, Any]) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event, default=str)}\n\n"
 
 
+# Streamed runs in flight. The event loop only keeps weak references to
+# tasks, and a run whose client left must still finish and be stored.
+_RUNS: set[asyncio.Task] = set()
+
+
 async def stream_answer(
-    session: AsyncSession,
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
     embedder: Embedder,
     settings: Settings,
     client: anthropic.AsyncAnthropic,
@@ -157,20 +163,24 @@ async def stream_answer(
     taken are billed either way, so the run finishes (it is capped per
     question) and is stored, which keeps it counted against the daily
     budget. Cancelling it instead would let a client that disconnects
-    early spend without a trace."""
+    early spend without a trace. So the run is its own task with its own
+    session: a disconnect can land while the response is mid-send, with
+    this generator suspended and never resumed, and FastAPI then closes the
+    request's session -- which the run must not be using."""
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
     async def run() -> None:
         try:
-            result = await answer_question(
-                ToolContext(session=session, embedder=embedder),
-                question,
-                settings,
-                client,
-                on_event=queue.put,
-            )
-            stored = await record_ask_run(session, question, result, settings)
-            await queue.put({"type": "answer", "run": ask_response(stored).model_dump(mode="json")})
+            async with session_factory() as session:
+                result = await answer_question(
+                    ToolContext(session=session, embedder=embedder),
+                    question,
+                    settings,
+                    client,
+                    on_event=queue.put,
+                )
+                stored = await record_ask_run(session, question, result, settings)
+                await queue.put({"type": "answer", "run": ask_response(stored).model_dump(mode="json")})
         except NonRetryableExtractionError as exc:
             await queue.put({"type": "error", "status": 502, "detail": f"model request rejected: {exc}"})
         except ExtractionError as exc:
@@ -182,12 +192,16 @@ async def stream_answer(
             await queue.put(_DONE)
 
     task = asyncio.create_task(run())
+    _RUNS.add(task)
+    task.add_done_callback(_RUNS.discard)
     try:
         while (event := await queue.get()) is not _DONE:
             yield _sse(event)
     finally:
         if not task.done():
-            # Shielded: a disconnect cancels this generator, not the run.
+            # When the generator is closed normally, hold the response
+            # open until the run is stored. Shielded: the disconnect that
+            # closed it must not cancel the run.
             with anyio.CancelScope(shield=True):
                 await task
 
@@ -199,6 +213,7 @@ async def ask_stream(
     embedder: Embedder = Depends(get_embedder),
     settings: Settings = Depends(get_settings),
     client: anthropic.AsyncAnthropic | None = Depends(get_anthropic_client),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> StreamingResponse:
     """POST /ask, streamed. Everything that can refuse the question (a
     missing key, the daily budget, validation) is checked first and
@@ -208,7 +223,7 @@ async def ask_stream(
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
     await enforce_daily_budget(session, settings)
     return StreamingResponse(
-        stream_answer(session, embedder, settings, client, request.question),
+        stream_answer(session_factory, embedder, settings, client, request.question),
         media_type="text/event-stream",
         # No proxy buffering, no caching: events must arrive as they happen.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

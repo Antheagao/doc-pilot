@@ -116,3 +116,12 @@ async def test_a_zero_limit_is_off(client: AsyncClient, fresh_limiter, tmp_path)
 def test_limits_cannot_be_negative() -> None:
     with pytest.raises(ValueError):
         Settings(ask_rate_limit_per_minute=-1)
+
+
+def test_limit_checks_run_on_the_event_loop() -> None:
+    """A plain `def` dependency runs in FastAPI's threadpool, where two
+    requests could interleave the limiter's check-then-record."""
+    import inspect
+
+    assert inspect.iscoroutinefunction(ratelimit.limit_ask)
+    assert inspect.iscoroutinefunction(ratelimit.limit_upload)

@@ -97,6 +97,9 @@ class Job(Base):
 
 class Extraction(Base):
     __tablename__ = "extractions"
+    # The daily budget (app/budget.py) sums today's spend on every billed
+    # request; these time indexes keep that from scanning all history.
+    __table_args__ = (Index("ix_extractions_created_at", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -162,6 +165,7 @@ class DocumentPage(Base):
     __tablename__ = "document_pages"
     __table_args__ = (
         UniqueConstraint("document_id", "page_number", name="uq_document_pages_document_page"),
+        Index("ix_document_pages_created_at", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -271,6 +275,7 @@ class AskRun(Base):
     __table_args__ = (
         CheckConstraint("feedback IN ('up', 'down')", name="ck_ask_runs_feedback"),
         Index("ix_ask_runs_created_at", "created_at"),
+        Index("ix_ask_runs_judged_at", "judged_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

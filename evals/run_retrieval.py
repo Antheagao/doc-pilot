@@ -133,6 +133,12 @@ def main() -> int:
     from app.retrieval.embeddings import build_embedder
     from app.retrieval.indexing import ChunkingConfig
 
+    if args.write_snapshot and get_settings().embedding_backend != "hashing":
+        # Refused up front, not after a full run: the snapshot is the
+        # offline baseline the test suite checks exactly.
+        print("error: --write-snapshot needs --embedder hashing", file=sys.stderr)
+        return 2
+
     out_dir = Path(args.out) if args.out else None
     if args.check and out_dir is None:
         import tempfile

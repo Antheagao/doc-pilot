@@ -645,12 +645,19 @@ async def test_stream_refusals_happen_before_streaming(client: AsyncClient) -> N
 async def test_a_reader_that_leaves_early_does_not_lose_the_run(db_session: AsyncSession) -> None:
     """The steps already taken are billed, so the run finishes and is
     stored (and counted against the daily budget) even with no reader."""
+    from contextlib import asynccontextmanager
+
     from app.models import AskRun
     from app.routers.ask import stream_answer
 
     await _seed(db_session)
+
+    @asynccontextmanager
+    async def shared_session():
+        yield db_session
+
     question = f"Northgate total? {uuid.uuid4()}"
-    stream = stream_answer(db_session, EMBEDDER, SETTINGS, _northgate_client(), question)
+    stream = stream_answer(shared_session, EMBEDDER, SETTINGS, _northgate_client(), question)
 
     first = await anext(stream)
     await stream.aclose()
@@ -658,6 +665,54 @@ async def test_a_reader_that_leaves_early_does_not_lose_the_run(db_session: Asyn
     assert first.startswith("event: model_call")
     stored = (await db_session.execute(select(AskRun).where(AskRun.question == question))).scalar_one()
     assert stored.status == "answered" and stored.steps == 2
+
+
+async def test_a_tool_whose_sql_fails_does_not_lose_the_answer(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failed statement rolls back to the tool call's savepoint, so the
+    transaction can still store the (paid-for) answer."""
+    from sqlalchemy import text
+
+    from app.agent.tools import TOOL_HANDLERS
+
+    async def broken(ctx, tool_input):
+        await ctx.session.execute(text("SELECT 1 / 0"))
+
+    monkeypatch.setitem(TOOL_HANDLERS, "query_extractions", broken)
+    fake = _client([
+        _message([_tool_use("query_extractions", {"vendor": "Northgate"})], "tool_use"),
+        _message([_text("I couldn't look that up.")], "end_turn"),
+    ])
+
+    body = await _ask(client, db_session, SETTINGS, fake)
+
+    assert body["status"] == "answered" and body["tool_calls"][0]["is_error"] is True
+    assert (await client.get(f"/ask/runs/{body['id']}")).status_code == 200
+
+
+async def test_streamed_runs_use_a_session_of_their_own(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Not the request's: FastAPI closes that when the response ends, and a
+    run outlives a client that disconnects mid-stream."""
+    from contextlib import asynccontextmanager
+
+    from app.db import get_session_factory
+
+    opened = []
+
+    @asynccontextmanager
+    async def recording_factory():
+        opened.append(1)
+        yield db_session
+
+    app.dependency_overrides[get_session_factory] = lambda: recording_factory
+
+    response = await _stream(client, db_session, SETTINGS, _northgate_client())
+
+    assert _sse_events(response.text)[-1]["type"] == "answer"
+    assert opened == [1]
 
 
 async def test_ask_endpoint_validates_the_question(client: AsyncClient) -> None:

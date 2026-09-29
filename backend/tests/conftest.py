@@ -1,11 +1,12 @@
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.db import engine, get_session
+from app.db import engine, get_session, get_session_factory
 from app.main import app
 
 
@@ -49,7 +50,12 @@ async def client(db_session: AsyncSession, tmp_path) -> AsyncGenerator[AsyncClie
             upload_rate_limit_per_minute=0,
         )
 
+    @asynccontextmanager
+    async def shared_session() -> AsyncGenerator[AsyncSession]:
+        yield db_session
+
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[get_session_factory] = lambda: shared_session
     app.dependency_overrides[get_settings] = override_get_settings
     try:
         transport = ASGITransport(app=app)

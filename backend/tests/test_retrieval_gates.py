@@ -192,3 +192,38 @@ def test_archive_entries_cannot_escape_the_target(tmp_path, pinned) -> None:
 
 def test_models_that_are_not_pinned_are_left_to_fastembed(tmp_path) -> None:
     assert ensure_pinned_model("some/other-model", tmp_path) is None
+
+
+def test_a_download_failure_says_how_to_recover(tmp_path, pinned) -> None:
+    pinned(url=(tmp_path / "missing.tar.gz").as_uri())
+
+    with pytest.raises(ModelFetchError, match="EMBEDDING_MODEL_PATH"):
+        ensure_pinned_model("test/model", tmp_path / "models")
+
+
+def test_only_the_offline_run_can_become_the_snapshot(tmp_path) -> None:
+    import os
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[2]
+    before = SNAPSHOT_PATH.read_bytes()
+
+    try:
+        run = subprocess.run(
+            [
+                sys.executable, str(repo / "evals" / "run_retrieval.py"),
+                "--embedder", "fastembed", "--write-snapshot",
+                # If the guard ever breaks, the run's artifact lands here,
+                # not in the committed results.
+                "--out", str(tmp_path), "--chunk-sizes", "200", "--modes", "lexical",
+            ],
+            capture_output=True, text=True, cwd=repo, check=False,
+            env={**os.environ, "EMBEDDING_CACHE_DIR": str(tmp_path / "models")},
+        )
+        assert run.returncode == 2 and "--embedder hashing" in run.stderr
+        assert SNAPSHOT_PATH.read_bytes() == before
+    finally:
+        # ...and the committed snapshot is put back.
+        if SNAPSHOT_PATH.read_bytes() != before:
+            SNAPSHOT_PATH.write_bytes(before)

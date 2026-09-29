@@ -419,7 +419,10 @@ export function parseSseFrames(buffer: string): { events: AskEvent[]; rest: stri
 
 /** Ask with live progress. Refusals that happen before the stream starts
  * (no API key, the daily budget, validation) throw ApiError like any other
- * call; failures after it starts arrive as an `error` event. */
+ * call; failures after it starts arrive as an `error` event. A stream that
+ * ends with neither (a dropped connection, a proxy timeout) throws
+ * StreamInterruptedError -- the run itself keeps going on the server and
+ * is stored, so it shows up under recent questions. */
 export async function askQuestionStream(
   question: string,
   onEvent: (event: AskEvent) => void
@@ -433,12 +436,24 @@ export async function askQuestionStream(
   if (!res.body) throw new ApiError(res.status, "the response had no body to stream");
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
+  let finished = false;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
     const parsed = parseSseFrames(buffer + value);
     buffer = parsed.rest;
-    parsed.events.forEach(onEvent);
+    for (const event of parsed.events) {
+      if (event.type === "answer" || event.type === "error") finished = true;
+      onEvent(event);
+    }
+  }
+  if (!finished) throw new StreamInterruptedError();
+}
+
+export class StreamInterruptedError extends Error {
+  constructor() {
+    super("The connection closed before the answer arrived.");
+    this.name = "StreamInterruptedError";
   }
 }
 

@@ -74,7 +74,14 @@ from app.extraction import (
     NonRetryableExtractionError,
     process_document_job,
 )
-from app.models import JOB_KIND_EXTRACT, JOB_KIND_INDEX, JOB_KIND_JUDGE, Document, Job
+from app.models import (
+    JOB_KIND_EXTRACT,
+    JOB_KIND_INDEX,
+    JOB_KIND_JUDGE,
+    AskRun,
+    Document,
+    Job,
+)
 from app.retrieval.embeddings import warm_up_embedder
 from app.retrieval.index_job import process_index_job
 from app.telemetry import (
@@ -280,6 +287,12 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
             document = await session.get(Document, job.document_id)
             if document is not None:
                 document.status = "refused" if refused else "failed"
+        elif job.kind == JOB_KIND_JUDGE and job.ask_run_id is not None:
+            # Otherwise the run stays "queued for grading" forever.
+            run = await session.get(AskRun, job.ask_run_id)
+            if run is not None and run.judged_at is None:
+                run.judge_error = f"grading failed: {type(exc).__name__}: {exc}"[:500]
+                run.judged_at = datetime.now(UTC)
         await session.commit()
         if refused:
             logger.info("failed job %s permanently (model refusal)", job.id)
