@@ -168,3 +168,37 @@ async def test_harness_runs_scores_and_caps_cost(tmp_path) -> None:
 def test_empty_results_render_a_how_to_run_note() -> None:
     assert "run_agent.py" in render_agent_table([])
     assert summarize([])["n"] == 0
+
+
+async def test_harness_with_judge_records_verdicts_and_agreement() -> None:
+    cases = _cases()
+    _, questions = load_questions(cases)
+    picked = [q for q in questions if q.id == "total-coffee"]
+    usage = SimpleNamespace(
+        input_tokens=1000, output_tokens=100, cache_read_input_tokens=0, cache_creation_input_tokens=0
+    )
+    agent = SimpleNamespace(
+        beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(
+            id="m", model="claude-opus-5-5", stop_reason="end_turn", stop_details=None, usage=usage,
+            content=[SimpleNamespace(type="text", text="It came to $12.09.", citations=None)],
+        ))))
+    )
+    verdict = {"unsupported_or_wrong_claims": [], "correct": True, "grounded": False, "score": 3, "explanation": "x"}
+    judge = SimpleNamespace(
+        beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(
+            id="j", model="claude-sonnet-5-5", stop_reason="end_turn", usage=usage,
+            content=[SimpleNamespace(type="text", text=json.dumps(verdict))],
+        ))))
+    )
+
+    result = await run_agent_eval(
+        engine, cases, load_gold_corpus(cases), picked,
+        settings=Settings(agent_model="claude-opus-5-5"), embedder=HashingEmbedder(),
+        max_cost_usd=1.0, client=agent, judge=True, judge_client=judge,
+    )
+
+    (entry,) = result.per_question
+    assert entry["judge"]["correct"] is True and entry["judge"]["grounded"] is False
+    assert result.summary["judge_correct"] == 1.0
+    assert result.summary["judge_grounded"] == 0.0
+    assert result.summary["judge_vs_rubric"]["agreement"] == 1.0

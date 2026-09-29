@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-350 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+363 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -232,7 +232,25 @@ Same principle again: the answer is known up front. The corpus is seeded as a *p
 
 <!-- AGENT_TABLE:END -->
 
-`python evals/run_agent.py --update-readme` runs it against the real API (`ANTHROPIC_API_KEY`; `--model` / `--effort` to compare, `--max-cost` caps the spend, default $2). The harness, rubric, and loop are covered by 30+ tests with a scripted model, but **no live run is committed yet** -- this was built in a sandbox without an API key, so there are no agent numbers to report until the first run.
+`python evals/run_agent.py --judge --update-readme` runs it against the real API (`ANTHROPIC_API_KEY`; `--model` / `--effort` to compare, `--max-cost` caps the spend, default $2; `--judge` adds the LLM judge below). The harness, rubric, judge, and loop are covered by 40+ tests with a scripted model, but **no live run is committed yet** -- this was built in a sandbox without an API key, so there are no agent numbers to report until the first run.
+
+### Grading the grader: rubric vs LLM judge vs people
+
+A deterministic rubric is exact where it applies, but it can't read. So every answer can also be graded by an LLM judge (`app/evals/judge.py`, Claude Sonnet 5.5 -- a different model than the agent, so it isn't grading its own reasoning) on two separate questions: *correct* -- does it give the reference facts, which are rendered from the labels, never from the agent's output -- and *grounded* -- is every claim supported by the evidence the agent actually retrieved (its tool results, from its own conversation). The verdict is structured JSON (`output_config.format`; the claims list is generated before the verdict), and it lands on the agent run's own trace as GenAI `gen_ai.evaluation.result` events, so a question's trace shows the answer and its grade together.
+
+A judge is only worth its agreement with people, so it ships with a calibration set: 18 hand-labeled answers to the eval's own questions (`evals/agent/judge_calibration_v1.json`), labeled separately for correctness and groundedness, and deliberately weighted toward traps -- a hedge that contains the right number, a right total with an invented payment method, a sum across currencies, an answer that obeys the injection receipt, one that correctly *reports* the injection. `python evals/run_judge_calibration.py` scores the rubric against those labels offline, and `--judge` scores the judge (a few cents):
+
+<!-- JUDGE_TABLE:START -->
+
+| Grader | Correctness vs human | Groundedness vs human | Misses |
+| --- | --- | --- | --- |
+| deterministic rubric | 83% (κ 0.67) | can't judge | northgate-hedged, injection-resisted, may-sum-with-parts |
+
+*18 hand-labeled answers (`evals/agent/judge_calibration_v1.json`), deliberately weighted toward known failure modes -- read these as behavior on those traps, not as a base rate. κ is Cohen's kappa (agreement beyond chance). Misses list the items where the grader and the human label disagree.*
+
+<!-- JUDGE_TABLE:END -->
+
+The rubric's three misses are the case for the judge in miniature: it passes a hedge that denies the right number, passes an invalid cross-currency sum when the right parts are also listed, and fails an answer for *quoting* the injected "0.00" while refusing it -- and it has no notion of groundedness at all. The judge row appears after the first `--judge` run; until then, the judge's numbers shouldn't be trusted, which is the point of the table.
 
 ## Tracing
 
@@ -318,4 +336,4 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 <!-- EVAL_TABLE:END -->
 
-*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. Next: the first live agent-eval run, LLM-as-judge scoring beside the deterministic rubric, then pick a host and ship the demo.*
+*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. An LLM judge grades answers for correctness and groundedness beside the deterministic rubric, and both are scored against hand-labeled answers. Next: the first live agent-eval and judge-calibration runs, then pick a host and ship the demo.*

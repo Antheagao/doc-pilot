@@ -108,6 +108,16 @@ class Settings(BaseSettings):
     # of failing the request. Claude API only -- turn off elsewhere.
     agent_refusal_fallback: bool = True
 
+    # --- LLM-as-judge (app/evals/judge.py) --------------------------------
+    # Grades agent answers for correctness (against label-derived reference
+    # facts) and groundedness (against the evidence the agent retrieved).
+    # A different model family member than the agent, so it isn't grading
+    # its own reasoning; validated against human labels before its numbers
+    # are trusted (evals/run_judge_calibration.py).
+    judge_model: str = "claude-sonnet-5-5"
+    judge_effort: str = "medium"
+    judge_max_tokens: int = 8000
+
 
 @lru_cache
 def get_settings() -> Settings:

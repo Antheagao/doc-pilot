@@ -461,3 +461,28 @@ async def test_agent_run_is_an_invoke_agent_span_over_chat_and_tool_spans(
     assert agent.attributes["docpilot.agent.status"] == "answered"
     assert agent.attributes["docpilot.agent.tool_calls"] == 1
     assert result.trace_id == format(agent.context.trace_id, "032x")
+
+
+async def test_judge_verdict_lands_on_the_agent_runs_trace(spans) -> None:
+    import json as _json
+    from types import SimpleNamespace
+
+    from app.evals.judge import judge_answer
+
+    with telemetry.tracer().start_as_current_span("invoke_agent doc-pilot-ask") as agent_span:
+        traceparent = telemetry.current_traceparent()
+    usage = SimpleNamespace(input_tokens=10, output_tokens=5, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+    payload = {"unsupported_or_wrong_claims": ["x"], "correct": False, "grounded": True, "score": 2, "explanation": "e"}
+    client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(
+        id="j", model="claude-sonnet-5-5", stop_reason="end_turn", usage=usage,
+        content=[SimpleNamespace(type="text", text=_json.dumps(payload))],
+    )))))
+
+    await judge_answer("q", "r", "e", "a", Settings(judge_model="claude-sonnet-5-5"), client=client, traceparent=traceparent)
+
+    (evaluate,) = _named(spans, "evaluate agent_answer")
+    assert evaluate.context.trace_id == agent_span.get_span_context().trace_id
+    events = {e.attributes["gen_ai.evaluation.name"]: e for e in evaluate.events if e.name == "gen_ai.evaluation.result"}
+    assert events["correctness"].attributes["gen_ai.evaluation.score.label"] == "fail"
+    assert events["groundedness"].attributes["gen_ai.evaluation.score.value"] == 1.0
+    assert _named(spans, "chat claude-sonnet-5-5")[0].parent.span_id == evaluate.context.span_id

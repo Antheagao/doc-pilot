@@ -168,7 +168,7 @@ def _money(value: Any) -> str:
     return f"{Decimal(str(value)):.2f}" if isinstance(value, int | float) else str(value)
 
 
-def _record_lines(record: DocumentRecord) -> list[tuple[str, str]]:
+def record_lines(record: DocumentRecord) -> list[tuple[str, str]]:
     """(field, text) for each line of a record's search_result."""
     fields = record.fields
     lines = [
@@ -326,7 +326,7 @@ def _matches(record: DocumentRecord, tool_input: dict[str, Any], date_from, date
     )
 
 
-def _summary(matches: list[DocumentRecord]) -> str:
+def extraction_summary(matches: list[DocumentRecord]) -> str:
     """Counts and per-currency sums, computed here in Decimal -- the model
     is told never to add amounts itself."""
     sums: dict[str, Decimal] = {}
@@ -358,9 +358,9 @@ async def query_extractions(ctx: ToolContext, tool_input: dict[str, Any]) -> lis
     records = await load_records(ctx.session, ctx.document_ids)
     matches = [r for r in records if _matches(r, tool_input, date_from, date_to)]
 
-    content: list[dict[str, Any]] = [{"type": "text", "text": _summary(matches)}]
+    content: list[dict[str, Any]] = [{"type": "text", "text": extraction_summary(matches)}]
     for record in matches[:RECORDS_MAX]:
-        lines = _record_lines(record)
+        lines = record_lines(record)
         source = Source(
             source=f"{SOURCE_SCHEME}/{record.document_id}/extraction",
             kind="record",

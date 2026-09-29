@@ -43,6 +43,7 @@ from app.telemetry import (
     GEN_AI_REQUEST_MODEL,
     GEN_AI_TOOL_CALL_ID,
     GEN_AI_TOOL_NAME,
+    current_traceparent,
     model_call_span,
     record_model_response,
     tracer,
@@ -112,6 +113,9 @@ class AgentResult:
     latency_ms: int = 0
     refusal_category: str | None = None
     trace_id: str | None = None
+    # W3C traceparent of the run's invoke_agent span, so later work about
+    # this answer (the eval's LLM judge) can attach to the same trace.
+    traceparent: str | None = None
     # Citations whose source this run never registered -- should never
     # happen with API-generated citations; counted rather than trusted.
     unresolved_citations: int = 0
@@ -133,15 +137,24 @@ def call_cost_usd(requested_model: str, response: Any) -> float:
     return (input_cost + price_out * usage.output_tokens) / 1_000_000
 
 
-def _request_options(settings: Settings) -> dict[str, Any]:
+def model_request_options(model: str, effort: str, refusal_fallback: bool) -> dict[str, Any]:
+    """Per-model request options: effort + adaptive thinking where the
+    model takes them, server-side refusal fallback where it's offered.
+    Shared with the LLM judge (app/evals/judge.py)."""
     options: dict[str, Any] = {}
-    if settings.agent_model in _EFFORT_MODELS:
-        options["output_config"] = {"effort": settings.agent_effort}
+    if model in _EFFORT_MODELS:
+        options["output_config"] = {"effort": effort}
         options["thinking"] = {"type": "adaptive"}
-    if settings.agent_refusal_fallback and settings.agent_model in _FALLBACK_MODELS:
+    if refusal_fallback and model in _FALLBACK_MODELS:
         options["betas"] = [FALLBACK_BETA]
         options["fallbacks"] = "default"
     return options
+
+
+def _request_options(settings: Settings) -> dict[str, Any]:
+    return model_request_options(
+        settings.agent_model, settings.agent_effort, settings.agent_refusal_fallback
+    )
 
 
 def _resolve_citation(raw: Any, sources: dict[str, Source]) -> dict[str, Any] | None:
@@ -294,6 +307,7 @@ async def answer_question(
         span_context = agent_span.get_span_context()
         if span_context.is_valid:
             result.trace_id = format(span_context.trace_id, "032x")
+            result.traceparent = current_traceparent()
 
         for _ in range(settings.agent_max_steps):
             with model_call_span(

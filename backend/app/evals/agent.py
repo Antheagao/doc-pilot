@@ -298,6 +298,27 @@ def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
         "mean_cost_usd": _mean([e["cost_usd"] for e in ran]),
         "latency_p50_ms": statistics.median(latencies) if latencies else None,
         "statuses": {s: sum(e["status"] == s for e in ran) for s in sorted({e["status"] for e in ran})},
+        **_judge_summary(ran),
+    }
+
+
+def _judge_summary(ran: list[dict[str, Any]]) -> dict[str, Any]:
+    """Judge rates and its agreement with the rubric, when the run was
+    judged. Rubric-vs-judge agreement is the cheap, every-run signal; the
+    calibration set (evals/run_judge_calibration.py) is where the judge is
+    checked against people."""
+    judged = [e for e in ran if e.get("judge") and e["judge"].get("error") is None]
+    if not judged:
+        return {}
+    from app.evals.judge import agreement
+
+    return {
+        "judge_correct": _mean([float(e["judge"]["correct"]) for e in judged]),
+        "judge_grounded": _mean([float(e["judge"]["grounded"]) for e in judged]),
+        "judge_errors": sum(1 for e in ran if e.get("judge") and e["judge"].get("error")),
+        "judge_vs_rubric": agreement(
+            [(e["judge"]["correct"], e["scores"]["correct"]) for e in judged]
+        ),
     }
 
 
@@ -312,7 +333,12 @@ async def run_agent_eval(
     max_cost_usd: float,
     question_set_version: str = "v1",
     client=None,
+    judge: bool = False,
+    judge_client=None,
 ) -> AgentRunResult:
+    """Run every question (until the cost cap), score each answer with the
+    rubric, and -- with judge=True -- also with the LLM judge
+    (app/evals/judge.py), whose spend counts toward the same cap."""
     started_at = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     entries: list[dict[str, Any]] = []
     spent = 0.0
@@ -380,6 +406,12 @@ async def run_agent_eval(
                         "scores": score_answer(question, result, doc_id_of),
                     }
                 )
+                if judge:
+                    from app.evals.judge import judge_agent_result
+
+                    verdict = await judge_agent_result(question, result, settings, client=judge_client)
+                    spent += verdict.cost_usd
+                    entry["judge"] = asdict(verdict)
                 entries.append(entry)
         finally:
             await session.close()
@@ -436,11 +468,12 @@ def render_agent_table(results: list[dict[str, Any]]) -> str:
             "`--max-cost`).*"
         )
     header = (
-        "| Model | Effort | Qs | Correct | Cites relevant | Citation precision | "
+        "| Model | Effort | Qs | Correct | Judge: correct | Judge: grounded | Judge~rubric κ "
+        "| Cites relevant | Citation precision | "
         + " | ".join(t.replace("_", " ").title() for t in _TYPES)
         + " | Steps | $/q | p50 latency |"
     )
-    divider = "|" + " --- |" * (9 + len(_TYPES))
+    divider = "|" + " --- |" * (12 + len(_TYPES))
     rows = []
     for result in results:
         s = result["summary"]
@@ -449,6 +482,9 @@ def render_agent_table(results: list[dict[str, Any]]) -> str:
             result["effort"],
             f"{s['n']}" + (f" (+{result['n_skipped_cost_cap']} capped)" if result["n_skipped_cost_cap"] else ""),
             _pct(s["accuracy"]),
+            _pct(s.get("judge_correct")),
+            _pct(s.get("judge_grounded")),
+            f"{s['judge_vs_rubric']['kappa']:.2f}" if s.get("judge_vs_rubric") else "n/a",
             _pct(s["cites_relevant"]),
             _pct(s["citation_precision"]),
             *(_pct(result["by_type"].get(t, {}).get("accuracy")) for t in _TYPES),
@@ -460,7 +496,8 @@ def render_agent_table(results: list[dict[str, Any]]) -> str:
     caption = (
         "*Correct = the deterministic rubric passed (every expected number to the cent, date, "
         "or name present; abstain questions state no amount; the injection receipt's forbidden "
-        "0.00 absent). Cites relevant = answerable questions whose citations include a document "
+        "0.00 absent). Judge columns (with `--judge`): the LLM judge's correctness and "
+        "groundedness rates and its kappa against the rubric. Cites relevant = answerable questions whose citations include a document "
         "the question is about; citation precision = share of cited documents that are relevant. "
         "Per-type columns are Correct within that type.*"
     )

@@ -37,6 +37,10 @@ def _parse_args() -> argparse.Namespace:
         help="stop launching questions once spend reaches this (USD)",
     )
     parser.add_argument("--only", default=None, help="comma-separated question ids to run")
+    parser.add_argument(
+        "--judge", action="store_true",
+        help="also grade every answer with the LLM judge (JUDGE_MODEL); its spend counts toward --max-cost",
+    )
     parser.add_argument("--out", default=None, help="output directory for the result JSON")
     parser.add_argument("--report-only", action="store_true", help="render the table; run nothing")
     parser.add_argument(
@@ -98,6 +102,7 @@ def main() -> int:
                     embedder=build_embedder(settings),
                     max_cost_usd=args.max_cost,
                     question_set_version=version,
+                    judge=args.judge,
                 )
             finally:
                 await engine.dispose()
@@ -111,7 +116,14 @@ def main() -> int:
                 continue
             mark = "PASS" if entry["scores"]["correct"] else "FAIL"
             tools = ",".join(call["name"] for call in entry["tool_calls"]) or "-"
-            print(f"  {mark}  {entry['id']:<20} ${entry['cost_usd']:.4f}  tools={tools}")
+            judged = ""
+            if entry.get("judge"):
+                verdict = entry["judge"]
+                judged = (
+                    f"  judge={verdict['error']}" if verdict["error"]
+                    else f"  judge: correct={verdict['correct']} grounded={verdict['grounded']}"
+                )
+            print(f"  {mark}  {entry['id']:<20} ${entry['cost_usd']:.4f}  tools={tools}{judged}")
             if not entry["scores"]["correct"]:
                 print(f"        checks={entry['scores']['checks']}  answer={entry['answer'][:160]!r}")
 
