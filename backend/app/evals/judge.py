@@ -36,7 +36,12 @@ from app.agent.loop import AgentResult, call_cost_usd, model_request_options
 from app.agent.tools import extraction_summary, record_lines
 from app.config import Settings
 from app.evals.dataset import EVALS_DIR, EvalCase
-from app.extraction import PROMPTS_DIR, _build_client, _classify_api_error
+from app.extraction import (
+    PROMPTS_DIR,
+    _build_client,
+    _classify_api_error,
+    _ensure_model_priced,
+)
 from app.records import DocumentRecord
 from app.telemetry import (
     context_from_traceparent,
@@ -160,12 +165,18 @@ def render_evidence_from_cases(cases: list[EvalCase]) -> str:
     return "\n\n".join(sections)
 
 
+def _escape(text: str) -> str:
+    """Untrusted text (document content, the agent's answer) must not be
+    able to close its tag and open a fake <reference_facts> of its own."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _judge_input(question: str, reference: str, evidence: str, answer: str) -> str:
     return (
-        f"<question>\n{question}\n</question>\n\n"
+        f"<question>\n{_escape(question)}\n</question>\n\n"
         f"<reference_facts>\n{reference}\n</reference_facts>\n\n"
-        f"<evidence>\n{evidence}\n</evidence>\n\n"
-        f"<answer>\n{answer or '(empty answer)'}\n</answer>"
+        f"<evidence>\n{_escape(evidence)}\n</evidence>\n\n"
+        f"<answer>\n{_escape(answer) or '(empty answer)'}\n</answer>"
     )
 
 
@@ -190,9 +201,15 @@ async def judge_answer(
     `traceparent` is given), carrying GenAI `gen_ai.evaluation.result`
     events, so a question's trace shows the answer and its grade together.
     """
-    client = client or _build_client(settings)
     model = settings.judge_model
-    options = model_request_options(model, settings.judge_effort, settings.agent_refusal_fallback)
+    # Before any request is sent: an unpriced model would otherwise be
+    # billed and only then fail to price.
+    _ensure_model_priced(model)
+    client = client or _build_client(settings)
+    # Never a refusal fallback for the judge: a verdict from a different
+    # model would silently change the grader being calibrated. A refusal
+    # comes back as an error verdict -- excluded from the stats, counted.
+    options = model_request_options(model, settings.judge_effort, refusal_fallback=False)
     options.setdefault("output_config", {})["format"] = {"type": "json_schema", "schema": JUDGE_SCHEMA}
 
     with tracer().start_as_current_span(
@@ -222,7 +239,14 @@ async def judge_answer(
         if response.stop_reason in ("refusal", "max_tokens"):
             verdict.error = response.stop_reason
             return verdict
-        text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
+        # Only the final attempt's text: anything before a `fallback`
+        # boundary belongs to a declined attempt. (Fallback is off for the
+        # judge, so this is a guard, not the normal path.)
+        content = list(response.content)
+        types = [getattr(b, "type", None) for b in content]
+        if "fallback" in types:
+            content = content[len(types) - types[::-1].index("fallback") :]
+        text = "".join(b.text for b in content if getattr(b, "type", None) == "text")
         # Parse everything before assigning anything: a half-read verdict
         # must never be counted as a verdict.
         try:
@@ -409,6 +433,8 @@ async def run_calibration(
     rubric = rubric_verdicts(items)
     verdicts: list[JudgeVerdict] | None = None
     if with_judge:
+        _ensure_model_priced(settings.judge_model)
+        client = client or _build_client(settings)  # one connection pool for the run
         verdicts = []
         spent = 0.0
         for item in items:
@@ -476,7 +502,8 @@ def render_calibration_table(results: list[dict[str, Any]]) -> str:
         misses = [
             d["id"]
             for d in result["disagreements"]
-            if d.get("judge_correct") != d["human_correct"] or d.get("judge_grounded") != d["human_grounded"]
+            if d.get("judge_error") is None
+            and (d.get("judge_correct") != d["human_correct"] or d.get("judge_grounded") != d["human_grounded"])
         ]
         errors = f" ({summary['judge_errors']} unreadable)" if summary.get("judge_errors") else ""
         rows.append(

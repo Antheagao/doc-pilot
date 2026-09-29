@@ -312,3 +312,21 @@ async def test_amount_aliases_match_typed_amounts(db_session: AsyncSession) -> N
     ).scalar_one()
     assert chunk.search_aliases == "27.82 euro"
     assert "27.82" not in chunk.text  # aliases are search-only, never cited
+
+
+async def test_chunks_reindexed_mid_search_are_skipped_not_a_500(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.retrieval import search as search_module
+
+    ids = await _index_corpus(db_session)
+    real = search_module._lexical_ranking
+
+    async def with_a_vanished_chunk(*args, **kwargs):
+        return [(uuid.uuid4(), 9.9), *await real(*args, **kwargs)]
+
+    monkeypatch.setattr(search_module, "_lexical_ranking", with_a_vanished_chunk)
+
+    hits = await _search(db_session, "ceramic mug", ids, mode="lexical")
+
+    assert hits and hits[0].filename == "bakery.png"

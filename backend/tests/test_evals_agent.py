@@ -202,3 +202,58 @@ async def test_harness_with_judge_records_verdicts_and_agreement() -> None:
     assert result.summary["judge_correct"] == 1.0
     assert result.summary["judge_grounded"] == 0.0
     assert result.summary["judge_vs_rubric"]["agreement"] == 1.0
+
+
+async def test_api_errors_are_recorded_per_question_and_the_run_continues(monkeypatch) -> None:
+    """A 529 on one question (agent or judge) must not throw away the run."""
+    cases = _cases()
+    _, questions = load_questions(cases)
+    picked = [q for q in questions if q.id in ("total-coffee", "total-bike")]
+    usage = SimpleNamespace(input_tokens=100, output_tokens=10, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+    ok = SimpleNamespace(
+        id="m", model="claude-opus-5-5", stop_reason="end_turn", stop_details=None, usage=usage,
+        content=[SimpleNamespace(type="text", text="$92.82", citations=None)],
+    )
+    import anthropic
+    import httpx
+
+    overloaded = anthropic.InternalServerError(
+        "overloaded", response=httpx.Response(529, request=httpx.Request("POST", "https://x")), body=None
+    )
+    agent = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(side_effect=[overloaded, ok]))))
+    judge = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(side_effect=overloaded))))
+
+    result = await run_agent_eval(
+        engine, cases, load_gold_corpus(cases), picked,
+        settings=Settings(agent_model="claude-opus-5-5"), embedder=HashingEmbedder(),
+        max_cost_usd=1.0, client=agent, judge=True, judge_client=judge,
+    )
+
+    first, second = result.per_question
+    assert first["error"].startswith("ExtractionError") and "scores" not in first
+    assert second["scores"]["correct"] is True
+    assert second["judge"]["error"].startswith("ExtractionError")
+    assert result.summary["api_errors"] == 1
+    # Every judge call failed: still reported, not hidden.
+    assert result.summary["judge_errors"] == 1 and result.summary["judge_correct"] is None
+
+
+async def test_one_client_per_run(monkeypatch) -> None:
+    from app.evals import agent as agent_module
+
+    built = []
+    usage = SimpleNamespace(input_tokens=10, output_tokens=1, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+    fake = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(
+        id="m", model="claude-opus-5-5", stop_reason="end_turn", stop_details=None, usage=usage,
+        content=[SimpleNamespace(type="text", text="n/a", citations=None)],
+    )))))
+    monkeypatch.setattr(agent_module, "_build_client", lambda settings: built.append(1) or fake)
+    cases = _cases()
+    _, questions = load_questions(cases)
+
+    await run_agent_eval(
+        engine, cases, load_gold_corpus(cases), questions[:3],
+        settings=Settings(agent_model="claude-opus-5-5"), embedder=HashingEmbedder(), max_cost_usd=1.0,
+    )
+
+    assert built == [1]

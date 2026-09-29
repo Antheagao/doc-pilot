@@ -40,6 +40,7 @@ from app.config import Settings
 from app.evals.corpus import seed_labeled_corpus
 from app.evals.dataset import EVALS_DIR, EvalCase
 from app.evals.retrieval import GoldDoc
+from app.extraction import ExtractionError, _build_client
 from app.retrieval.embeddings import Embedder
 from app.retrieval.indexing import ChunkingConfig
 
@@ -282,6 +283,7 @@ def _mean(values: list[float]) -> float | None:
 
 def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
     ran = [e for e in entries if "scores" in e]
+    errored = [e for e in entries if "error" in e]
     answerable = [e for e in ran if "cites_relevant" in e["scores"]]
     precisions = [
         e["scores"]["citation_precision"] for e in answerable if e["scores"]["citation_precision"] is not None
@@ -298,6 +300,7 @@ def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
         "mean_cost_usd": _mean([e["cost_usd"] for e in ran]),
         "latency_p50_ms": statistics.median(latencies) if latencies else None,
         "statuses": {s: sum(e["status"] == s for e in ran) for s in sorted({e["status"] for e in ran})},
+        "api_errors": len(errored),
         **_judge_summary(ran),
     }
 
@@ -307,15 +310,17 @@ def _judge_summary(ran: list[dict[str, Any]]) -> dict[str, Any]:
     judged. Rubric-vs-judge agreement is the cheap, every-run signal; the
     calibration set (evals/run_judge_calibration.py) is where the judge is
     checked against people."""
-    judged = [e for e in ran if e.get("judge") and e["judge"].get("error") is None]
-    if not judged:
+    with_judge = [e for e in ran if e.get("judge")]
+    if not with_judge:
         return {}
+    judged = [e for e in with_judge if e["judge"].get("error") is None]
     from app.evals.judge import agreement
 
     return {
+        "judge_cost_usd": sum(e.get("judge_cost_usd", 0.0) for e in with_judge),
         "judge_correct": _mean([float(e["judge"]["correct"]) for e in judged]),
         "judge_grounded": _mean([float(e["judge"]["grounded"]) for e in judged]),
-        "judge_errors": sum(1 for e in ran if e.get("judge") and e["judge"].get("error")),
+        "judge_errors": len(with_judge) - len(judged),
         "judge_vs_rubric": agreement(
             [(e["judge"]["correct"], e["scores"]["correct"]) for e in judged]
         ),
@@ -342,6 +347,14 @@ async def run_agent_eval(
     started_at = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     entries: list[dict[str, Any]] = []
     spent = 0.0
+    # One client (one connection pool) per run for each role, not one per
+    # question.
+    client = client or _build_client(settings)
+    if judge:
+        from app.extraction import _ensure_model_priced
+
+        _ensure_model_priced(settings.judge_model)
+        judge_client = judge_client or _build_client(settings)
 
     async with engine.connect() as connection:
         transaction = await connection.begin()
@@ -372,12 +385,20 @@ async def run_agent_eval(
                     entries.append(entry)
                     continue
                 start = time.perf_counter()
-                result = await answer_question(
-                    ToolContext(session=session, embedder=embedder, document_ids=scope),
-                    question.question,
-                    settings,
-                    client,
-                )
+                try:
+                    result = await answer_question(
+                        ToolContext(session=session, embedder=embedder, document_ids=scope),
+                        question.question,
+                        settings,
+                        client,
+                    )
+                except ExtractionError as exc:
+                    # One question's API failure (a 529, a 400) is recorded
+                    # and the run goes on -- the answers already paid for
+                    # still get written.
+                    entry["error"] = f"{type(exc).__name__}: {exc}"[:500]
+                    entries.append(entry)
+                    continue
                 spent += result.cost_usd
                 entry.update(
                     {
@@ -407,11 +428,18 @@ async def run_agent_eval(
                     }
                 )
                 if judge:
-                    from app.evals.judge import judge_agent_result
+                    from app.evals.judge import JudgeVerdict, judge_agent_result
 
-                    verdict = await judge_agent_result(question, result, settings, client=judge_client)
+                    try:
+                        verdict = await judge_agent_result(question, result, settings, client=judge_client)
+                    except ExtractionError as exc:
+                        verdict = JudgeVerdict(
+                            None, None, None, [], "", settings.judge_model,
+                            error=f"{type(exc).__name__}: {exc}"[:500],
+                        )
                     spent += verdict.cost_usd
                     entry["judge"] = asdict(verdict)
+                    entry["judge_cost_usd"] = verdict.cost_usd
                 entries.append(entry)
         finally:
             await session.close()
@@ -497,7 +525,8 @@ def render_agent_table(results: list[dict[str, Any]]) -> str:
         "*Correct = the deterministic rubric passed (every expected number to the cent, date, "
         "or name present; abstain questions state no amount; the injection receipt's forbidden "
         "0.00 absent). Judge columns (with `--judge`): the LLM judge's correctness and "
-        "groundedness rates and its kappa against the rubric. Cites relevant = answerable questions whose citations include a document "
+        "groundedness rates and its kappa against the rubric; $/q is the agent's spend alone "
+        "(judge spend is `summary.judge_cost_usd` in the artifact). Cites relevant = answerable questions whose citations include a document "
         "the question is about; citation precision = share of cited documents that are relevant. "
         "Per-type columns are Correct within that type.*"
     )

@@ -254,6 +254,10 @@ async def _search(
 
     hits = []
     for chunk_id, score in ranked:
+        if chunk_id not in by_id:
+            # Re-indexed (deleted and re-inserted) between the ranking and
+            # this fetch; the document's new chunks show up next search.
+            continue
         chunk, filename = by_id[chunk_id]
         hits.append(
             SearchHit(

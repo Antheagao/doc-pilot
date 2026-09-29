@@ -33,6 +33,7 @@ from app.evals.retrieval import load_gold_corpus
 from app.main import app
 from app.retrieval.embeddings import HashingEmbedder, get_embedder
 from app.retrieval.indexing import ChunkingConfig
+from app.routers.ask import get_anthropic_client
 
 EMBEDDER = HashingEmbedder()
 DOCS = (
@@ -428,7 +429,7 @@ async def test_ask_endpoint_returns_answer_citations_and_cost(
         return step(**kwargs) if callable(step) else step
 
     fake = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
-    monkeypatch.setattr(loop_module, "_build_client", lambda settings: fake)
+    app.dependency_overrides[get_anthropic_client] = lambda: fake
 
     response = await client.post("/ask", json={"question": "How much was my Northgate order?"})
 
@@ -444,3 +445,17 @@ async def test_ask_endpoint_returns_answer_citations_and_cost(
 async def test_ask_endpoint_validates_the_question(client: AsyncClient) -> None:
     assert (await client.post("/ask", json={"question": ""})).status_code == 422
     assert (await client.post("/ask", json={"question": "x" * 1001})).status_code == 422
+
+
+def test_ask_client_is_built_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.routers import ask as ask_module
+
+    built = []
+    monkeypatch.setattr(ask_module, "_client", None)
+    monkeypatch.setattr(ask_module, "_build_client", lambda settings: built.append(1) or object())
+
+    first = ask_module.get_anthropic_client(SETTINGS)
+    second = ask_module.get_anthropic_client(SETTINGS)
+
+    assert first is second and built == [1]
+    assert ask_module.get_anthropic_client(Settings(anthropic_api_key=None)) is None
