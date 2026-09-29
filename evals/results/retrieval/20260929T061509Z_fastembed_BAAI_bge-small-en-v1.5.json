@@ -1,0 +1,4041 @@
+{
+  "embedder": "fastembed:BAAI/bge-small-en-v1.5",
+  "query_set_version": "v1",
+  "dataset_version": "v1",
+  "started_at_utc": "20260929T061509Z",
+  "n_docs": 25,
+  "n_queries": 109,
+  "configs": [
+    {
+      "mode": "lexical",
+      "chunking": {
+        "max_chars": 0,
+        "overlap_chars": 0,
+        "context_headers": false
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 25,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.3732415902140672,
+        "recall@3": 0.596788990825688,
+        "recall@5": 0.637920489296636,
+        "recall@10": 0.6412844036697248,
+        "mrr": 0.6134556574923546,
+        "ndcg@10": 0.6166036599244737
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.8,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 0.9,
+          "ndcg@10": 0.9261859507142916
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.37277777777777776,
+          "recall@3": 0.885,
+          "recall@5": 0.9944444444444444,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.016666666666666666,
+          "recall@3": 0.016666666666666666,
+          "recall@5": 0.02333333333333333,
+          "recall@10": 0.030000000000000002,
+          "mrr": 0.04555555555555556,
+          "ndcg@10": 0.028838785765909813
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.3333333333333333,
+          "recall@3": 0.6666666666666666,
+          "recall@5": 0.6666666666666666,
+          "recall@10": 0.6666666666666666,
+          "mrr": 0.6666666666666666,
+          "ndcg@10": 0.6246776683532517
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.2777777777777778,
+          "recall@3": 0.5,
+          "recall@5": 0.5555555555555556,
+          "recall@10": 0.5555555555555556,
+          "mrr": 0.3888888888888889,
+          "ndcg@10": 0.442535533061076
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 6.654830999650585,
+      "hardest": [
+        {
+          "id": "item-para-aa-batteries-8-pack",
+          "type": "item_paraphrase",
+          "query": "double-A cells for the remote control",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-ballpoint-pen-12-pack",
+          "type": "item_paraphrase",
+          "query": "a box of writing instruments",
+          "relevant": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-canvas-tote-bag",
+          "type": "item_paraphrase",
+          "query": "cloth carryall for groceries",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-cedar-bird-feeder",
+          "type": "item_paraphrase",
+          "query": "something to attract songbirds to the yard",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-ceramic-mug-12oz",
+          "type": "item_paraphrase",
+          "query": "a cup for hot drinks",
+          "relevant": [
+            "007-skewed-garden-center",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-dog-chew-toy",
+          "type": "item_paraphrase",
+          "query": "something for my puppy to gnaw on",
+          "relevant": [
+            "003-clean-stationery-order",
+            "011-noisy-print-shop",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-extension-cord-25ft",
+          "type": "item_paraphrase",
+          "query": "long power cable for an outlet",
+          "relevant": [
+            "017-handwriting-farm-stand",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-furnace-filter-16x20",
+          "type": "item_paraphrase",
+          "query": "replacement part for the home heating system",
+          "relevant": [
+            "006-clean-electronics-invoice",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "025-adversarial-office-order-injection"
+          ],
+          "ranked": [
+            "014-noisy-home-goods"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-garden-trowel",
+          "type": "item_paraphrase",
+          "query": "hand tool for digging in flower beds",
+          "relevant": [
+            "002-clean-hardware-invoice",
+            "008-skewed-pet-supply",
+            "009-skewed-outdoor-supply",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-herbal-tea-sampler",
+          "type": "item_paraphrase",
+          "query": "assortment of caffeine-free infusions",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "005-clean-bakery-receipt",
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "mode": "dense",
+      "chunking": {
+        "max_chars": 0,
+        "overlap_chars": 0,
+        "context_headers": false
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 25,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.3853211009174312,
+        "recall@3": 0.6140672782874618,
+        "recall@5": 0.7227828746177369,
+        "recall@10": 0.8435779816513762,
+        "mrr": 0.7834795848152567,
+        "ndcg@10": 0.740246940050799
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.2,
+          "recall@3": 0.2,
+          "recall@5": 0.2,
+          "recall@10": 0.6,
+          "mrr": 0.2667647058823529,
+          "ndcg@10": 0.3209059406207233
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.26166666666666666,
+          "recall@3": 0.5588888888888889,
+          "recall@5": 0.7216666666666666,
+          "recall@10": 0.8144444444444444,
+          "mrr": 0.8453418803418804,
+          "ndcg@10": 0.7573452092946085
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.18555555555555556,
+          "recall@3": 0.3722222222222222,
+          "recall@5": 0.5544444444444444,
+          "recall@10": 0.7922222222222222,
+          "mrr": 0.7205555555555556,
+          "ndcg@10": 0.632170342550978
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.5416666666666666,
+          "recall@3": 0.8333333333333334,
+          "recall@5": 0.9166666666666666,
+          "recall@10": 0.9583333333333334,
+          "mrr": 1.0,
+          "ndcg@10": 0.9243007188210915
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.85,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 0.9666666666666666,
+          "ndcg@10": 0.975
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.4074074074074074,
+          "recall@3": 0.7222222222222222,
+          "recall@5": 0.7777777777777778,
+          "recall@10": 0.8333333333333334,
+          "mrr": 0.653066378066378,
+          "ndcg@10": 0.686173105229963
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 9.094043000004604,
+      "hardest": [
+        {
+          "id": "amount-order-totaling-124-16",
+          "type": "amount",
+          "query": "order totaling $124.16",
+          "relevant": [
+            "006-clean-electronics-invoice"
+          ],
+          "ranked": [
+            "025-adversarial-office-order-injection",
+            "022-missing-field-receipt-no-vendor",
+            "021-missing-field-grocery-no-tax",
+            "010-skewed-general-store",
+            "008-skewed-pet-supply",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "023-missing-field-order-no-currency",
+            "003-clean-stationery-order",
+            "004-clean-bike-shop-ticket"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.05,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "amount-receipt-with-a-total-of-425-58",
+          "type": "amount",
+          "query": "receipt with a total of $425.58",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "015-handwriting-candle-co",
+            "001-clean-coffee-receipt",
+            "021-missing-field-grocery-no-tax",
+            "020-dense-electronics-order",
+            "003-clean-stationery-order",
+            "010-skewed-general-store",
+            "013-noisy-tea-house",
+            "012-noisy-florist-glare",
+            "025-adversarial-office-order-injection"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.058823529411764705,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "vendor-para-home-decor-store",
+          "type": "vendor_paraphrase",
+          "query": "home decor store",
+          "relevant": [
+            "014-noisy-home-goods"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "008-skewed-pet-supply",
+            "020-dense-electronics-order",
+            "025-adversarial-office-order-injection",
+            "012-noisy-florist-glare",
+            "021-missing-field-grocery-no-tax",
+            "007-skewed-garden-center",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "024-eur-bakery-berlin"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.07142857142857142,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-kw-stainless-water-bottle",
+          "type": "item_keyword",
+          "query": "Stainless Water Bottle",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [
+            "007-skewed-garden-center",
+            "006-clean-electronics-invoice",
+            "008-skewed-pet-supply",
+            "002-clean-hardware-invoice",
+            "022-missing-field-receipt-no-vendor",
+            "013-noisy-tea-house",
+            "019-dense-hardware-warehouse",
+            "010-skewed-general-store",
+            "024-eur-bakery-berlin",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.07692307692307693,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-throw-pillow-cover",
+          "type": "item_paraphrase",
+          "query": "cushion case for the sofa",
+          "relevant": [
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "023-missing-field-order-no-currency",
+            "010-skewed-general-store",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "011-noisy-print-shop",
+            "003-clean-stationery-order",
+            "001-clean-coffee-receipt",
+            "013-noisy-tea-house",
+            "016-handwriting-bakery-note"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.08333333333333333,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "vendor-para-shop-selling-fine-paper-and-greeting-cards",
+          "type": "vendor_paraphrase",
+          "query": "shop selling fine paper and greeting cards",
+          "relevant": [
+            "003-clean-stationery-order"
+          ],
+          "ranked": [
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order",
+            "025-adversarial-office-order-injection",
+            "012-noisy-florist-glare",
+            "007-skewed-garden-center",
+            "005-clean-bakery-receipt",
+            "013-noisy-tea-house",
+            "024-eur-bakery-berlin",
+            "022-missing-field-receipt-no-vendor",
+            "019-dense-hardware-warehouse"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.08333333333333333,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "vendor-para-flower-shop",
+          "type": "vendor_paraphrase",
+          "query": "flower shop",
+          "relevant": [
+            "012-noisy-florist-glare"
+          ],
+          "ranked": [
+            "007-skewed-garden-center",
+            "005-clean-bakery-receipt",
+            "018-dense-office-outfitters",
+            "015-handwriting-candle-co",
+            "024-eur-bakery-berlin",
+            "008-skewed-pet-supply",
+            "010-skewed-general-store",
+            "023-missing-field-order-no-currency",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.09090909090909091,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "amount-the-12-09-purchase",
+          "type": "amount",
+          "query": "the $12.09 purchase",
+          "relevant": [
+            "001-clean-coffee-receipt"
+          ],
+          "ranked": [
+            "025-adversarial-office-order-injection",
+            "008-skewed-pet-supply",
+            "022-missing-field-receipt-no-vendor",
+            "013-noisy-tea-house",
+            "010-skewed-general-store",
+            "021-missing-field-grocery-no-tax",
+            "023-missing-field-order-no-currency",
+            "015-handwriting-candle-co",
+            "014-noisy-home-goods",
+            "001-clean-coffee-receipt"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.1,
+            "ndcg@10": 0.2890648263178879
+          }
+        },
+        {
+          "id": "item-para-stainless-water-bottle",
+          "type": "item_paraphrase",
+          "query": "reusable metal flask for drinks",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "014-noisy-home-goods",
+            "006-clean-electronics-invoice",
+            "008-skewed-pet-supply",
+            "021-missing-field-grocery-no-tax",
+            "018-dense-office-outfitters"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.5,
+            "mrr": 0.1,
+            "ndcg@10": 0.17723928678404774
+          }
+        },
+        {
+          "id": "amount-invoice-that-came-to-494-13",
+          "type": "amount",
+          "query": "invoice that came to 494.13",
+          "relevant": [
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "003-clean-stationery-order",
+            "025-adversarial-office-order-injection",
+            "001-clean-coffee-receipt",
+            "017-handwriting-farm-stand",
+            "011-noisy-print-shop",
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse",
+            "024-eur-bakery-berlin",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.125,
+            "ndcg@10": 0.31546487678572877
+          }
+        }
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "chunking": {
+        "max_chars": 0,
+        "overlap_chars": 0,
+        "context_headers": false
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 25,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.43577981651376146,
+        "recall@3": 0.7016819571865444,
+        "recall@5": 0.8116207951070337,
+        "recall@10": 0.9198776758409786,
+        "mrr": 0.8259104809563526,
+        "ndcg@10": 0.8180876260842135
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.6,
+          "recall@3": 0.6,
+          "recall@5": 0.6,
+          "recall@10": 1.0,
+          "mrr": 0.6571428571428571,
+          "ndcg@10": 0.7333333333333333
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.3561111111111111,
+          "recall@3": 0.8183333333333334,
+          "recall@5": 0.9877777777777778,
+          "recall@10": 1.0,
+          "mrr": 0.9833333333333333,
+          "ndcg@10": 0.9744907344633142
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.15777777777777777,
+          "recall@3": 0.31444444444444447,
+          "recall@5": 0.5027777777777778,
+          "recall@10": 0.7755555555555556,
+          "mrr": 0.636919191919192,
+          "ndcg@10": 0.5844978145130655
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.4583333333333333,
+          "recall@3": 0.75,
+          "recall@5": 0.9583333333333334,
+          "recall@10": 1.0,
+          "mrr": 0.8888888888888888,
+          "ndcg@10": 0.8784941700527358
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.462962962962963,
+          "recall@3": 0.8333333333333334,
+          "recall@5": 0.8333333333333334,
+          "recall@10": 0.8888888888888888,
+          "mrr": 0.7109788359788359,
+          "ndcg@10": 0.7480146159391551
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 14.504793000014615,
+      "hardest": [
+        {
+          "id": "vendor-para-shop-selling-fine-paper-and-greeting-cards",
+          "type": "vendor_paraphrase",
+          "query": "shop selling fine paper and greeting cards",
+          "relevant": [
+            "003-clean-stationery-order"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "011-noisy-print-shop",
+            "015-handwriting-candle-co",
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order",
+            "025-adversarial-office-order-injection",
+            "012-noisy-florist-glare",
+            "007-skewed-garden-center",
+            "005-clean-bakery-receipt",
+            "013-noisy-tea-house"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.07142857142857142,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-throw-pillow-cover",
+          "type": "item_paraphrase",
+          "query": "cushion case for the sofa",
+          "relevant": [
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "023-missing-field-order-no-currency",
+            "010-skewed-general-store",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "011-noisy-print-shop",
+            "003-clean-stationery-order",
+            "001-clean-coffee-receipt",
+            "013-noisy-tea-house",
+            "016-handwriting-bakery-note"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.08333333333333333,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "vendor-para-flower-shop",
+          "type": "vendor_paraphrase",
+          "query": "flower shop",
+          "relevant": [
+            "012-noisy-florist-glare"
+          ],
+          "ranked": [
+            "011-noisy-print-shop",
+            "007-skewed-garden-center",
+            "005-clean-bakery-receipt",
+            "018-dense-office-outfitters",
+            "015-handwriting-candle-co",
+            "024-eur-bakery-berlin",
+            "008-skewed-pet-supply",
+            "010-skewed-general-store",
+            "023-missing-field-order-no-currency",
+            "019-dense-hardware-warehouse"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.08333333333333333,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-recycled-paper-ream",
+          "type": "item_paraphrase",
+          "query": "a pack of copy sheets for the printer",
+          "relevant": [
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor"
+          ],
+          "ranked": [
+            "010-skewed-general-store",
+            "006-clean-electronics-invoice",
+            "021-missing-field-grocery-no-tax",
+            "019-dense-hardware-warehouse",
+            "017-handwriting-farm-stand",
+            "023-missing-field-order-no-currency",
+            "024-eur-bakery-berlin",
+            "002-clean-hardware-invoice",
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.09090909090909091,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-stainless-water-bottle",
+          "type": "item_paraphrase",
+          "query": "reusable metal flask for drinks",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "014-noisy-home-goods",
+            "006-clean-electronics-invoice",
+            "008-skewed-pet-supply",
+            "021-missing-field-grocery-no-tax",
+            "018-dense-office-outfitters"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.5,
+            "mrr": 0.1,
+            "ndcg@10": 0.17723928678404774
+          }
+        },
+        {
+          "id": "amount-order-totaling-124-16",
+          "type": "amount",
+          "query": "order totaling $124.16",
+          "relevant": [
+            "006-clean-electronics-invoice"
+          ],
+          "ranked": [
+            "025-adversarial-office-order-injection",
+            "022-missing-field-receipt-no-vendor",
+            "010-skewed-general-store",
+            "008-skewed-pet-supply",
+            "001-clean-coffee-receipt",
+            "003-clean-stationery-order",
+            "006-clean-electronics-invoice",
+            "021-missing-field-grocery-no-tax",
+            "023-missing-field-order-no-currency",
+            "007-skewed-garden-center"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg@10": 0.3333333333333333
+          }
+        },
+        {
+          "id": "amount-receipt-with-a-total-of-425-58",
+          "type": "amount",
+          "query": "receipt with a total of $425.58",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "001-clean-coffee-receipt",
+            "015-handwriting-candle-co",
+            "003-clean-stationery-order",
+            "025-adversarial-office-order-injection",
+            "010-skewed-general-store",
+            "018-dense-office-outfitters",
+            "012-noisy-florist-glare",
+            "021-missing-field-grocery-no-tax",
+            "008-skewed-pet-supply"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg@10": 0.3333333333333333
+          }
+        },
+        {
+          "id": "vendor-para-camping-and-hiking-gear-store",
+          "type": "vendor_paraphrase",
+          "query": "camping and hiking gear store",
+          "relevant": [
+            "009-skewed-outdoor-supply"
+          ],
+          "ranked": [
+            "010-skewed-general-store",
+            "023-missing-field-order-no-currency",
+            "017-handwriting-farm-stand",
+            "004-clean-bike-shop-ticket",
+            "007-skewed-garden-center",
+            "018-dense-office-outfitters",
+            "009-skewed-outdoor-supply",
+            "020-dense-electronics-order",
+            "021-missing-field-grocery-no-tax",
+            "014-noisy-home-goods"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg@10": 0.3333333333333333
+          }
+        },
+        {
+          "id": "item-para-ballpoint-pen-12-pack",
+          "type": "item_paraphrase",
+          "query": "a box of writing instruments",
+          "relevant": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice",
+            "023-missing-field-order-no-currency",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "007-skewed-garden-center",
+            "008-skewed-pet-supply",
+            "010-skewed-general-store",
+            "005-clean-bakery-receipt"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.42177340954886444
+          }
+        },
+        {
+          "id": "item-para-bamboo-cutting-board",
+          "type": "item_paraphrase",
+          "query": "chopping block for the kitchen",
+          "relevant": [
+            "005-clean-bakery-receipt",
+            "009-skewed-outdoor-supply",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [
+            "006-clean-electronics-invoice",
+            "002-clean-hardware-invoice",
+            "023-missing-field-order-no-currency",
+            "024-eur-bakery-berlin",
+            "019-dense-hardware-warehouse",
+            "005-clean-bakery-receipt",
+            "012-noisy-florist-glare",
+            "020-dense-electronics-order",
+            "009-skewed-outdoor-supply",
+            "007-skewed-garden-center"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.2,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.5741603094598835
+          }
+        }
+      ]
+    },
+    {
+      "mode": "lexical",
+      "chunking": {
+        "max_chars": 0,
+        "overlap_chars": 0,
+        "context_headers": true
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 25,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.3824159021406727,
+        "recall@3": 0.596788990825688,
+        "recall@5": 0.637920489296636,
+        "recall@10": 0.6412844036697248,
+        "mrr": 0.619571865443425,
+        "ndcg@10": 0.6211908158877765
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.8,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 0.9,
+          "ndcg@10": 0.9261859507142916
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.37277777777777776,
+          "recall@3": 0.885,
+          "recall@5": 0.9944444444444444,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.016666666666666666,
+          "recall@3": 0.016666666666666666,
+          "recall@5": 0.02333333333333333,
+          "recall@10": 0.030000000000000002,
+          "mrr": 0.04555555555555556,
+          "ndcg@10": 0.028838785765909813
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.3333333333333333,
+          "recall@3": 0.6666666666666666,
+          "recall@5": 0.6666666666666666,
+          "recall@10": 0.6666666666666666,
+          "mrr": 0.6666666666666666,
+          "ndcg@10": 0.6246776683532517
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.3333333333333333,
+          "recall@3": 0.5,
+          "recall@5": 0.5555555555555556,
+          "recall@10": 0.5555555555555556,
+          "mrr": 0.42592592592592593,
+          "ndcg@10": 0.4703133108388538
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 6.376954999723239,
+      "hardest": [
+        {
+          "id": "item-para-aa-batteries-8-pack",
+          "type": "item_paraphrase",
+          "query": "double-A cells for the remote control",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-ballpoint-pen-12-pack",
+          "type": "item_paraphrase",
+          "query": "a box of writing instruments",
+          "relevant": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-canvas-tote-bag",
+          "type": "item_paraphrase",
+          "query": "cloth carryall for groceries",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-cedar-bird-feeder",
+          "type": "item_paraphrase",
+          "query": "something to attract songbirds to the yard",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-ceramic-mug-12oz",
+          "type": "item_paraphrase",
+          "query": "a cup for hot drinks",
+          "relevant": [
+            "007-skewed-garden-center",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-dog-chew-toy",
+          "type": "item_paraphrase",
+          "query": "something for my puppy to gnaw on",
+          "relevant": [
+            "003-clean-stationery-order",
+            "011-noisy-print-shop",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-extension-cord-25ft",
+          "type": "item_paraphrase",
+          "query": "long power cable for an outlet",
+          "relevant": [
+            "017-handwriting-farm-stand",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-furnace-filter-16x20",
+          "type": "item_paraphrase",
+          "query": "replacement part for the home heating system",
+          "relevant": [
+            "006-clean-electronics-invoice",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "025-adversarial-office-order-injection"
+          ],
+          "ranked": [
+            "014-noisy-home-goods"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-garden-trowel",
+          "type": "item_paraphrase",
+          "query": "hand tool for digging in flower beds",
+          "relevant": [
+            "002-clean-hardware-invoice",
+            "008-skewed-pet-supply",
+            "009-skewed-outdoor-supply",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-herbal-tea-sampler",
+          "type": "item_paraphrase",
+          "query": "assortment of caffeine-free infusions",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "005-clean-bakery-receipt",
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "mode": "dense",
+      "chunking": {
+        "max_chars": 0,
+        "overlap_chars": 0,
+        "context_headers": true
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 25,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.38149847094801226,
+        "recall@3": 0.6334862385321101,
+        "recall@5": 0.731651376146789,
+        "recall@10": 0.8438837920489297,
+        "mrr": 0.7597569097569097,
+        "ndcg@10": 0.732270503267432
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.0,
+          "recall@3": 0.2,
+          "recall@5": 0.4,
+          "recall@10": 0.4,
+          "mrr": 0.15303030303030302,
+          "ndcg@10": 0.1861353116146786
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.23944444444444446,
+          "recall@3": 0.5488888888888889,
+          "recall@5": 0.6438888888888888,
+          "recall@10": 0.7794444444444444,
+          "mrr": 0.8005006105006106,
+          "ndcg@10": 0.7176642281326956
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.13555555555555554,
+          "recall@3": 0.3277777777777778,
+          "recall@5": 0.5144444444444445,
+          "recall@10": 0.7616666666666667,
+          "mrr": 0.611111111111111,
+          "ndcg@10": 0.5665903955515141
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.5,
+          "recall@3": 0.7916666666666666,
+          "recall@5": 0.8333333333333334,
+          "recall@10": 0.9583333333333334,
+          "mrr": 0.9166666666666666,
+          "ndcg@10": 0.8684095455288238
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.5185185185185186,
+          "recall@3": 0.9444444444444444,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 0.7888888888888889,
+          "ndcg@10": 0.8415951285765254
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 8.501669999532169,
+      "hardest": [
+        {
+          "id": "amount-order-totaling-124-16",
+          "type": "amount",
+          "query": "order totaling $124.16",
+          "relevant": [
+            "006-clean-electronics-invoice"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "010-skewed-general-store",
+            "021-missing-field-grocery-no-tax",
+            "025-adversarial-office-order-injection",
+            "003-clean-stationery-order",
+            "023-missing-field-order-no-currency",
+            "015-handwriting-candle-co",
+            "012-noisy-florist-glare",
+            "011-noisy-print-shop",
+            "019-dense-hardware-warehouse"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.045454545454545456,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "amount-receipt-with-a-total-of-425-58",
+          "type": "amount",
+          "query": "receipt with a total of $425.58",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "012-noisy-florist-glare",
+            "015-handwriting-candle-co",
+            "001-clean-coffee-receipt",
+            "021-missing-field-grocery-no-tax",
+            "010-skewed-general-store",
+            "020-dense-electronics-order",
+            "003-clean-stationery-order",
+            "004-clean-bike-shop-ticket",
+            "011-noisy-print-shop"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.045454545454545456,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-throw-pillow-cover",
+          "type": "item_paraphrase",
+          "query": "cushion case for the sofa",
+          "relevant": [
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "012-noisy-florist-glare",
+            "024-eur-bakery-berlin",
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse",
+            "011-noisy-print-shop",
+            "001-clean-coffee-receipt",
+            "003-clean-stationery-order",
+            "018-dense-office-outfitters",
+            "016-handwriting-bakery-note"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.06666666666666667,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-kw-stainless-water-bottle",
+          "type": "item_keyword",
+          "query": "Stainless Water Bottle",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [
+            "019-dense-hardware-warehouse",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "006-clean-electronics-invoice",
+            "022-missing-field-receipt-no-vendor",
+            "008-skewed-pet-supply",
+            "002-clean-hardware-invoice",
+            "023-missing-field-order-no-currency",
+            "012-noisy-florist-glare",
+            "010-skewed-general-store"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.07142857142857142,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-kw-aa-batteries-8-pack",
+          "type": "item_keyword",
+          "query": "AA Batteries (8-pack)",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "006-clean-electronics-invoice",
+            "002-clean-hardware-invoice",
+            "010-skewed-general-store",
+            "020-dense-electronics-order",
+            "022-missing-field-receipt-no-vendor",
+            "023-missing-field-order-no-currency",
+            "021-missing-field-grocery-no-tax",
+            "015-handwriting-candle-co",
+            "014-noisy-home-goods",
+            "012-noisy-florist-glare"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.07692307692307693,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-stainless-water-bottle",
+          "type": "item_paraphrase",
+          "query": "reusable metal flask for drinks",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "013-noisy-tea-house",
+            "022-missing-field-receipt-no-vendor",
+            "015-handwriting-candle-co",
+            "014-noisy-home-goods",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "008-skewed-pet-supply",
+            "007-skewed-garden-center",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.08333333333333333,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "amount-the-12-09-purchase",
+          "type": "amount",
+          "query": "the $12.09 purchase",
+          "relevant": [
+            "001-clean-coffee-receipt"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "008-skewed-pet-supply",
+            "025-adversarial-office-order-injection",
+            "010-skewed-general-store",
+            "023-missing-field-order-no-currency",
+            "021-missing-field-grocery-no-tax",
+            "015-handwriting-candle-co",
+            "013-noisy-tea-house",
+            "014-noisy-home-goods",
+            "011-noisy-print-shop"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.09090909090909091,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-picture-frame-5x7",
+          "type": "item_paraphrase",
+          "query": "something to display a photo in",
+          "relevant": [
+            "006-clean-electronics-invoice",
+            "016-handwriting-bakery-note",
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "011-noisy-print-shop",
+            "022-missing-field-receipt-no-vendor",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "006-clean-electronics-invoice",
+            "003-clean-stationery-order",
+            "010-skewed-general-store",
+            "017-handwriting-farm-stand"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.6666666666666666,
+            "mrr": 0.16666666666666666,
+            "ndcg@10": 0.3235866969737877
+          }
+        },
+        {
+          "id": "item-kw-canvas-tote-bag",
+          "type": "item_keyword",
+          "query": "Canvas Tote Bag",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "012-noisy-florist-glare",
+            "005-clean-bakery-receipt",
+            "003-clean-stationery-order",
+            "010-skewed-general-store",
+            "018-dense-office-outfitters",
+            "016-handwriting-bakery-note",
+            "014-noisy-home-goods",
+            "009-skewed-outdoor-supply",
+            "023-missing-field-order-no-currency",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 0.5,
+            "mrr": 0.2,
+            "ndcg@10": 0.23719771276929622
+          }
+        },
+        {
+          "id": "item-para-herbal-tea-sampler",
+          "type": "item_paraphrase",
+          "query": "assortment of caffeine-free infusions",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "005-clean-bakery-receipt",
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax",
+            "001-clean-coffee-receipt",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "004-clean-bike-shop-ticket",
+            "023-missing-field-order-no-currency",
+            "002-clean-hardware-invoice",
+            "014-noisy-home-goods",
+            "018-dense-office-outfitters",
+            "010-skewed-general-store"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.3333333333333333,
+            "recall@10": 0.6666666666666666,
+            "mrr": 0.2,
+            "ndcg@10": 0.3228087653971817
+          }
+        }
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "chunking": {
+        "max_chars": 0,
+        "overlap_chars": 0,
+        "context_headers": true
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 25,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.4243119266055046,
+        "recall@3": 0.6925076452599388,
+        "recall@5": 0.8111620795107034,
+        "recall@10": 0.9307339449541284,
+        "mrr": 0.7948776758409786,
+        "ndcg@10": 0.8112570089521278
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.4,
+          "recall@3": 0.6,
+          "recall@5": 0.6,
+          "recall@10": 1.0,
+          "mrr": 0.545,
+          "ndcg@10": 0.6470918913350149
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.3227777777777778,
+          "recall@3": 0.8127777777777777,
+          "recall@5": 0.9527777777777777,
+          "recall@10": 1.0,
+          "mrr": 0.9555555555555556,
+          "ndcg@10": 0.9590999904393622
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.10777777777777778,
+          "recall@3": 0.2533333333333333,
+          "recall@5": 0.4527777777777778,
+          "recall@10": 0.7483333333333333,
+          "mrr": 0.5211111111111111,
+          "ndcg@10": 0.5216250446927154
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.3333333333333333,
+          "recall@3": 0.75,
+          "recall@5": 0.875,
+          "recall@10": 1.0,
+          "mrr": 0.7222222222222222,
+          "ndcg@10": 0.803557391044189
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.6296296296296297,
+          "recall@3": 0.8888888888888888,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 0.8490740740740741,
+          "ndcg@10": 0.8860255066044106
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 13.61855600043782,
+      "hardest": [
+        {
+          "id": "item-para-throw-pillow-cover",
+          "type": "item_paraphrase",
+          "query": "cushion case for the sofa",
+          "relevant": [
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "012-noisy-florist-glare",
+            "024-eur-bakery-berlin",
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse",
+            "011-noisy-print-shop",
+            "001-clean-coffee-receipt",
+            "003-clean-stationery-order",
+            "018-dense-office-outfitters",
+            "016-handwriting-bakery-note"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.06666666666666667,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-stainless-water-bottle",
+          "type": "item_paraphrase",
+          "query": "reusable metal flask for drinks",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "013-noisy-tea-house",
+            "022-missing-field-receipt-no-vendor",
+            "015-handwriting-candle-co",
+            "014-noisy-home-goods",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "008-skewed-pet-supply",
+            "007-skewed-garden-center",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.08333333333333333,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "amount-order-totaling-124-16",
+          "type": "amount",
+          "query": "order totaling $124.16",
+          "relevant": [
+            "006-clean-electronics-invoice"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "025-adversarial-office-order-injection",
+            "010-skewed-general-store",
+            "003-clean-stationery-order",
+            "015-handwriting-candle-co",
+            "012-noisy-florist-glare",
+            "001-clean-coffee-receipt",
+            "023-missing-field-order-no-currency",
+            "021-missing-field-grocery-no-tax",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.1,
+            "ndcg@10": 0.2890648263178879
+          }
+        },
+        {
+          "id": "item-para-recycled-paper-ream",
+          "type": "item_paraphrase",
+          "query": "a pack of copy sheets for the printer",
+          "relevant": [
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor"
+          ],
+          "ranked": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse",
+            "021-missing-field-grocery-no-tax",
+            "023-missing-field-order-no-currency",
+            "006-clean-electronics-invoice",
+            "002-clean-hardware-invoice",
+            "017-handwriting-farm-stand",
+            "024-eur-bakery-berlin",
+            "018-dense-office-outfitters",
+            "022-missing-field-receipt-no-vendor"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.5,
+            "mrr": 0.1,
+            "ndcg@10": 0.17723928678404774
+          }
+        },
+        {
+          "id": "amount-receipt-with-a-total-of-425-58",
+          "type": "amount",
+          "query": "receipt with a total of $425.58",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "001-clean-coffee-receipt",
+            "012-noisy-florist-glare",
+            "015-handwriting-candle-co",
+            "010-skewed-general-store",
+            "003-clean-stationery-order",
+            "025-adversarial-office-order-injection",
+            "018-dense-office-outfitters",
+            "021-missing-field-grocery-no-tax",
+            "005-clean-bakery-receipt"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.125,
+            "ndcg@10": 0.31546487678572877
+          }
+        },
+        {
+          "id": "item-kw-aa-batteries-8-pack",
+          "type": "item_keyword",
+          "query": "AA Batteries (8-pack)",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "010-skewed-general-store",
+            "006-clean-electronics-invoice",
+            "002-clean-hardware-invoice",
+            "023-missing-field-order-no-currency",
+            "021-missing-field-grocery-no-tax",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "017-handwriting-farm-stand",
+            "024-eur-bakery-berlin",
+            "020-dense-electronics-order"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg@10": 0.3562071871080222
+          }
+        },
+        {
+          "id": "item-para-picture-frame-5x7",
+          "type": "item_paraphrase",
+          "query": "something to display a photo in",
+          "relevant": [
+            "006-clean-electronics-invoice",
+            "016-handwriting-bakery-note",
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "011-noisy-print-shop",
+            "022-missing-field-receipt-no-vendor",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "006-clean-electronics-invoice",
+            "003-clean-stationery-order",
+            "010-skewed-general-store",
+            "017-handwriting-farm-stand"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.6666666666666666,
+            "mrr": 0.16666666666666666,
+            "ndcg@10": 0.3235866969737877
+          }
+        },
+        {
+          "id": "item-para-ballpoint-pen-12-pack",
+          "type": "item_paraphrase",
+          "query": "a box of writing instruments",
+          "relevant": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice",
+            "023-missing-field-order-no-currency",
+            "012-noisy-florist-glare",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "010-skewed-general-store",
+            "007-skewed-garden-center",
+            "003-clean-stationery-order",
+            "008-skewed-pet-supply"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.4415801103577823
+          }
+        },
+        {
+          "id": "item-para-herbal-tea-sampler",
+          "type": "item_paraphrase",
+          "query": "assortment of caffeine-free infusions",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "005-clean-bakery-receipt",
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax",
+            "001-clean-coffee-receipt",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "004-clean-bike-shop-ticket",
+            "023-missing-field-order-no-currency",
+            "002-clean-hardware-invoice",
+            "014-noisy-home-goods",
+            "018-dense-office-outfitters",
+            "010-skewed-general-store"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.3333333333333333,
+            "recall@10": 0.6666666666666666,
+            "mrr": 0.2,
+            "ndcg@10": 0.3228087653971817
+          }
+        },
+        {
+          "id": "item-para-notebook-ruled-80pg",
+          "type": "item_paraphrase",
+          "query": "lined journal for jotting things down",
+          "relevant": [
+            "007-skewed-garden-center",
+            "008-skewed-pet-supply",
+            "019-dense-hardware-warehouse",
+            "024-eur-bakery-berlin"
+          ],
+          "ranked": [
+            "012-noisy-florist-glare",
+            "010-skewed-general-store",
+            "003-clean-stationery-order",
+            "011-noisy-print-shop",
+            "007-skewed-garden-center",
+            "019-dense-hardware-warehouse",
+            "004-clean-bike-shop-ticket",
+            "018-dense-office-outfitters",
+            "005-clean-bakery-receipt",
+            "022-missing-field-receipt-no-vendor"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.25,
+            "recall@10": 0.5,
+            "mrr": 0.2,
+            "ndcg@10": 0.29007579773858083
+          }
+        }
+      ]
+    },
+    {
+      "mode": "lexical",
+      "chunking": {
+        "max_chars": 200,
+        "overlap_chars": 80,
+        "context_headers": false
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 80,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.3704892966360856,
+        "recall@3": 0.5894495412844036,
+        "recall@5": 0.6397553516819572,
+        "recall@10": 0.6412844036697248,
+        "mrr": 0.6207951070336392,
+        "ndcg@10": 0.6163326721204425
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 1.0,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.37277777777777776,
+          "recall@3": 0.885,
+          "recall@5": 0.9944444444444444,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.02333333333333333,
+          "recall@3": 0.02333333333333333,
+          "recall@5": 0.030000000000000002,
+          "recall@10": 0.030000000000000002,
+          "mrr": 0.075,
+          "ndcg@10": 0.036612524929392695
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.3333333333333333,
+          "recall@3": 0.6666666666666666,
+          "recall@5": 0.6666666666666666,
+          "recall@10": 0.6666666666666666,
+          "mrr": 0.6666666666666666,
+          "ndcg@10": 0.6246776683532517
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.19444444444444445,
+          "recall@3": 0.4444444444444444,
+          "recall@5": 0.5555555555555556,
+          "recall@10": 0.5555555555555556,
+          "mrr": 0.3564814814814815,
+          "ndcg@10": 0.407434416840386
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 7.017727999482304,
+      "hardest": [
+        {
+          "id": "item-para-aa-batteries-8-pack",
+          "type": "item_paraphrase",
+          "query": "double-A cells for the remote control",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-ballpoint-pen-12-pack",
+          "type": "item_paraphrase",
+          "query": "a box of writing instruments",
+          "relevant": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-canvas-tote-bag",
+          "type": "item_paraphrase",
+          "query": "cloth carryall for groceries",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-cedar-bird-feeder",
+          "type": "item_paraphrase",
+          "query": "something to attract songbirds to the yard",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-ceramic-mug-12oz",
+          "type": "item_paraphrase",
+          "query": "a cup for hot drinks",
+          "relevant": [
+            "007-skewed-garden-center",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-dog-chew-toy",
+          "type": "item_paraphrase",
+          "query": "something for my puppy to gnaw on",
+          "relevant": [
+            "003-clean-stationery-order",
+            "011-noisy-print-shop",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-extension-cord-25ft",
+          "type": "item_paraphrase",
+          "query": "long power cable for an outlet",
+          "relevant": [
+            "017-handwriting-farm-stand",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-furnace-filter-16x20",
+          "type": "item_paraphrase",
+          "query": "replacement part for the home heating system",
+          "relevant": [
+            "006-clean-electronics-invoice",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "025-adversarial-office-order-injection"
+          ],
+          "ranked": [
+            "014-noisy-home-goods"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-garden-trowel",
+          "type": "item_paraphrase",
+          "query": "hand tool for digging in flower beds",
+          "relevant": [
+            "002-clean-hardware-invoice",
+            "008-skewed-pet-supply",
+            "009-skewed-outdoor-supply",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-herbal-tea-sampler",
+          "type": "item_paraphrase",
+          "query": "assortment of caffeine-free infusions",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "005-clean-bakery-receipt",
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "mode": "dense",
+      "chunking": {
+        "max_chars": 200,
+        "overlap_chars": 80,
+        "context_headers": false
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 80,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.4610091743119266,
+        "recall@3": 0.7818042813455658,
+        "recall@5": 0.8709480122324159,
+        "recall@10": 0.9545871559633027,
+        "mrr": 0.8850262123197903,
+        "ndcg@10": 0.8829585197473985
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.2,
+          "recall@3": 0.2,
+          "recall@5": 0.4,
+          "recall@10": 0.6,
+          "mrr": 0.28007936507936504,
+          "ndcg@10": 0.3375765605797046
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.37277777777777776,
+          "recall@3": 0.885,
+          "recall@5": 0.986111111111111,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 0.9987333049019861
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.28277777777777774,
+          "recall@3": 0.6722222222222223,
+          "recall@5": 0.8116666666666668,
+          "recall@10": 0.9433333333333334,
+          "mrr": 0.8808730158730159,
+          "ndcg@10": 0.8529529478588104
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.5416666666666666,
+          "recall@3": 0.8333333333333334,
+          "recall@5": 0.8333333333333334,
+          "recall@10": 0.9583333333333334,
+          "mrr": 1.0,
+          "ndcg@10": 0.9203915240073258
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.462962962962963,
+          "recall@3": 0.6944444444444444,
+          "recall@5": 0.7777777777777778,
+          "recall@10": 0.9444444444444444,
+          "mrr": 0.7022927689594356,
+          "ndcg@10": 0.7489810623722256
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 12.504105000516574,
+      "hardest": [
+        {
+          "id": "amount-the-12-09-purchase",
+          "type": "amount",
+          "query": "the $12.09 purchase",
+          "relevant": [
+            "001-clean-coffee-receipt"
+          ],
+          "ranked": [
+            "025-adversarial-office-order-injection",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "011-noisy-print-shop",
+            "006-clean-electronics-invoice",
+            "021-missing-field-grocery-no-tax",
+            "017-handwriting-farm-stand",
+            "004-clean-bike-shop-ticket",
+            "022-missing-field-receipt-no-vendor",
+            "019-dense-hardware-warehouse"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.041666666666666664,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "amount-receipt-with-a-total-of-425-58",
+          "type": "amount",
+          "query": "receipt with a total of $425.58",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "025-adversarial-office-order-injection",
+            "021-missing-field-grocery-no-tax",
+            "017-handwriting-farm-stand",
+            "013-noisy-tea-house",
+            "009-skewed-outdoor-supply",
+            "011-noisy-print-shop",
+            "007-skewed-garden-center",
+            "004-clean-bike-shop-ticket",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.047619047619047616,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "vendor-para-home-decor-store",
+          "type": "vendor_paraphrase",
+          "query": "home decor store",
+          "relevant": [
+            "014-noisy-home-goods"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "012-noisy-florist-glare",
+            "015-handwriting-candle-co",
+            "011-noisy-print-shop",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "008-skewed-pet-supply",
+            "003-clean-stationery-order",
+            "023-missing-field-order-no-currency",
+            "025-adversarial-office-order-injection"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.05555555555555555,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-throw-pillow-cover",
+          "type": "item_paraphrase",
+          "query": "cushion case for the sofa",
+          "relevant": [
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "019-dense-hardware-warehouse",
+            "023-missing-field-order-no-currency",
+            "012-noisy-florist-glare",
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "010-skewed-general-store",
+            "013-noisy-tea-house",
+            "016-handwriting-bakery-note",
+            "001-clean-coffee-receipt"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.08333333333333333,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "vendor-para-copy-and-printing-service",
+          "type": "vendor_paraphrase",
+          "query": "copy and printing service",
+          "relevant": [
+            "011-noisy-print-shop"
+          ],
+          "ranked": [
+            "010-skewed-general-store",
+            "022-missing-field-receipt-no-vendor",
+            "003-clean-stationery-order",
+            "024-eur-bakery-berlin",
+            "025-adversarial-office-order-injection",
+            "019-dense-hardware-warehouse",
+            "013-noisy-tea-house",
+            "015-handwriting-candle-co",
+            "020-dense-electronics-order",
+            "011-noisy-print-shop"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.1,
+            "ndcg@10": 0.2890648263178879
+          }
+        },
+        {
+          "id": "amount-invoice-that-came-to-494-13",
+          "type": "amount",
+          "query": "invoice that came to 494.13",
+          "relevant": [
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "022-missing-field-receipt-no-vendor",
+            "025-adversarial-office-order-injection",
+            "013-noisy-tea-house",
+            "017-handwriting-farm-stand",
+            "006-clean-electronics-invoice",
+            "010-skewed-general-store",
+            "021-missing-field-grocery-no-tax",
+            "019-dense-hardware-warehouse",
+            "009-skewed-outdoor-supply"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg@10": 0.3010299956639812
+          }
+        },
+        {
+          "id": "item-para-recycled-paper-ream",
+          "type": "item_paraphrase",
+          "query": "a pack of copy sheets for the printer",
+          "relevant": [
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "010-skewed-general-store",
+            "021-missing-field-grocery-no-tax",
+            "017-handwriting-farm-stand",
+            "020-dense-electronics-order",
+            "006-clean-electronics-invoice",
+            "022-missing-field-receipt-no-vendor",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "019-dense-hardware-warehouse"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.5,
+            "mrr": 0.14285714285714285,
+            "ndcg@10": 0.20438239758848611
+          }
+        },
+        {
+          "id": "vendor-para-shop-selling-fine-paper-and-greeting-cards",
+          "type": "vendor_paraphrase",
+          "query": "shop selling fine paper and greeting cards",
+          "relevant": [
+            "003-clean-stationery-order"
+          ],
+          "ranked": [
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor",
+            "012-noisy-florist-glare",
+            "020-dense-electronics-order",
+            "019-dense-hardware-warehouse",
+            "018-dense-office-outfitters",
+            "003-clean-stationery-order",
+            "013-noisy-tea-house",
+            "005-clean-bakery-receipt",
+            "025-adversarial-office-order-injection"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg@10": 0.3333333333333333
+          }
+        },
+        {
+          "id": "vendor-para-supermarket",
+          "type": "vendor_paraphrase",
+          "query": "supermarket",
+          "relevant": [
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "020-dense-electronics-order",
+            "006-clean-electronics-invoice",
+            "018-dense-office-outfitters",
+            "007-skewed-garden-center",
+            "002-clean-hardware-invoice",
+            "021-missing-field-grocery-no-tax",
+            "019-dense-hardware-warehouse",
+            "005-clean-bakery-receipt",
+            "011-noisy-print-shop"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg@10": 0.3333333333333333
+          }
+        },
+        {
+          "id": "amount-order-totaling-124-16",
+          "type": "amount",
+          "query": "order totaling $124.16",
+          "relevant": [
+            "006-clean-electronics-invoice"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax",
+            "025-adversarial-office-order-injection",
+            "007-skewed-garden-center",
+            "022-missing-field-receipt-no-vendor",
+            "006-clean-electronics-invoice",
+            "013-noisy-tea-house",
+            "010-skewed-general-store",
+            "004-clean-bike-shop-ticket",
+            "009-skewed-outdoor-supply",
+            "017-handwriting-farm-stand"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.38685280723454163
+          }
+        }
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "chunking": {
+        "max_chars": 200,
+        "overlap_chars": 80,
+        "context_headers": false
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 80,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.43088685015290523,
+        "recall@3": 0.8045871559633028,
+        "recall@5": 0.8903669724770642,
+        "recall@10": 0.9688073394495412,
+        "mrr": 0.8526033599428094,
+        "ndcg@10": 0.8752711831211405
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.4,
+          "recall@3": 0.8,
+          "recall@5": 0.8,
+          "recall@10": 0.8,
+          "mrr": 0.575,
+          "ndcg@10": 0.6261859507142915
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.37277777777777776,
+          "recall@3": 0.885,
+          "recall@5": 0.9944444444444444,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.23166666666666666,
+          "recall@3": 0.5883333333333333,
+          "recall@5": 0.7655555555555555,
+          "recall@10": 0.92,
+          "mrr": 0.7652525252525252,
+          "ndcg@10": 0.7862047670187117
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.4166666666666667,
+          "recall@3": 0.75,
+          "recall@5": 0.875,
+          "recall@10": 1.0,
+          "mrr": 0.8055555555555555,
+          "ndcg@10": 0.8513518736398242
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.35185185185185186,
+          "recall@3": 0.8333333333333334,
+          "recall@5": 0.8333333333333334,
+          "recall@10": 1.0,
+          "mrr": 0.6815476190476191,
+          "ndcg@10": 0.7544097196795866
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 17.056054000022414,
+      "hardest": [
+        {
+          "id": "amount-receipt-with-a-total-of-425-58",
+          "type": "amount",
+          "query": "receipt with a total of $425.58",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "021-missing-field-grocery-no-tax",
+            "025-adversarial-office-order-injection",
+            "009-skewed-outdoor-supply",
+            "017-handwriting-farm-stand",
+            "013-noisy-tea-house",
+            "007-skewed-garden-center",
+            "004-clean-bike-shop-ticket",
+            "011-noisy-print-shop",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.041666666666666664,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-throw-pillow-cover",
+          "type": "item_paraphrase",
+          "query": "cushion case for the sofa",
+          "relevant": [
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "019-dense-hardware-warehouse",
+            "023-missing-field-order-no-currency",
+            "012-noisy-florist-glare",
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "010-skewed-general-store",
+            "013-noisy-tea-house",
+            "016-handwriting-bakery-note",
+            "001-clean-coffee-receipt"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.08333333333333333,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-recycled-paper-ream",
+          "type": "item_paraphrase",
+          "query": "a pack of copy sheets for the printer",
+          "relevant": [
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor"
+          ],
+          "ranked": [
+            "010-skewed-general-store",
+            "006-clean-electronics-invoice",
+            "019-dense-hardware-warehouse",
+            "021-missing-field-grocery-no-tax",
+            "024-eur-bakery-berlin",
+            "017-handwriting-farm-stand",
+            "018-dense-office-outfitters",
+            "002-clean-hardware-invoice",
+            "023-missing-field-order-no-currency",
+            "020-dense-electronics-order"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.09090909090909091,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "vendor-para-shop-selling-fine-paper-and-greeting-cards",
+          "type": "vendor_paraphrase",
+          "query": "shop selling fine paper and greeting cards",
+          "relevant": [
+            "003-clean-stationery-order"
+          ],
+          "ranked": [
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor",
+            "011-noisy-print-shop",
+            "012-noisy-florist-glare",
+            "020-dense-electronics-order",
+            "019-dense-hardware-warehouse",
+            "018-dense-office-outfitters",
+            "003-clean-stationery-order",
+            "013-noisy-tea-house",
+            "005-clean-bakery-receipt"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.125,
+            "ndcg@10": 0.31546487678572877
+          }
+        },
+        {
+          "id": "vendor-para-supermarket",
+          "type": "vendor_paraphrase",
+          "query": "supermarket",
+          "relevant": [
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "020-dense-electronics-order",
+            "006-clean-electronics-invoice",
+            "018-dense-office-outfitters",
+            "007-skewed-garden-center",
+            "002-clean-hardware-invoice",
+            "021-missing-field-grocery-no-tax",
+            "019-dense-hardware-warehouse",
+            "005-clean-bakery-receipt",
+            "011-noisy-print-shop"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg@10": 0.3333333333333333
+          }
+        },
+        {
+          "id": "vendor-para-flower-shop",
+          "type": "vendor_paraphrase",
+          "query": "flower shop",
+          "relevant": [
+            "012-noisy-florist-glare"
+          ],
+          "ranked": [
+            "011-noisy-print-shop",
+            "015-handwriting-candle-co",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "010-skewed-general-store",
+            "012-noisy-florist-glare",
+            "007-skewed-garden-center",
+            "024-eur-bakery-berlin",
+            "005-clean-bakery-receipt",
+            "023-missing-field-order-no-currency"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg@10": 0.3562071871080222
+          }
+        },
+        {
+          "id": "item-para-canvas-tote-bag",
+          "type": "item_paraphrase",
+          "query": "cloth carryall for groceries",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax",
+            "024-eur-bakery-berlin",
+            "007-skewed-garden-center",
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "017-handwriting-farm-stand",
+            "019-dense-hardware-warehouse",
+            "010-skewed-general-store",
+            "001-clean-coffee-receipt",
+            "013-noisy-tea-house"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.4415801103577823
+          }
+        },
+        {
+          "id": "item-para-ballpoint-pen-12-pack",
+          "type": "item_paraphrase",
+          "query": "a box of writing instruments",
+          "relevant": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice",
+            "023-missing-field-order-no-currency",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "024-eur-bakery-berlin",
+            "008-skewed-pet-supply",
+            "007-skewed-garden-center",
+            "010-skewed-general-store",
+            "018-dense-office-outfitters"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 1.0,
+            "mrr": 0.25,
+            "ndcg@10": 0.448643819352159
+          }
+        },
+        {
+          "id": "item-para-cat-litter-10lb",
+          "type": "item_paraphrase",
+          "query": "supplies for the kitty's box",
+          "relevant": [
+            "001-clean-coffee-receipt",
+            "003-clean-stationery-order",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "024-eur-bakery-berlin"
+          ],
+          "ranked": [
+            "008-skewed-pet-supply",
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice",
+            "019-dense-hardware-warehouse",
+            "023-missing-field-order-no-currency",
+            "024-eur-bakery-berlin",
+            "003-clean-stationery-order",
+            "009-skewed-outdoor-supply",
+            "020-dense-electronics-order",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.2,
+            "recall@10": 0.8,
+            "mrr": 0.25,
+            "ndcg@10": 0.4820304494229843
+          }
+        },
+        {
+          "id": "item-para-packing-tape-roll",
+          "type": "item_paraphrase",
+          "query": "adhesive for sealing shipping boxes",
+          "relevant": [
+            "010-skewed-general-store",
+            "017-handwriting-farm-stand",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "023-missing-field-order-no-currency",
+            "006-clean-electronics-invoice",
+            "010-skewed-general-store",
+            "021-missing-field-grocery-no-tax",
+            "017-handwriting-farm-stand",
+            "024-eur-bakery-berlin",
+            "020-dense-electronics-order",
+            "019-dense-hardware-warehouse",
+            "008-skewed-pet-supply"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.6666666666666666,
+            "recall@10": 1.0,
+            "mrr": 0.25,
+            "ndcg@10": 0.5508095940041026
+          }
+        }
+      ]
+    },
+    {
+      "mode": "lexical",
+      "chunking": {
+        "max_chars": 200,
+        "overlap_chars": 80,
+        "context_headers": true
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 80,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.3934250764525994,
+        "recall@3": 0.5986238532110092,
+        "recall@5": 0.637920489296636,
+        "recall@10": 0.6412844036697248,
+        "mrr": 0.6314984709480121,
+        "ndcg@10": 0.6264846266601601
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 1.0,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.37277777777777776,
+          "recall@3": 0.885,
+          "recall@5": 0.9944444444444444,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.02333333333333333,
+          "recall@3": 0.02333333333333333,
+          "recall@5": 0.02333333333333333,
+          "recall@10": 0.030000000000000002,
+          "mrr": 0.07222222222222222,
+          "ndcg@10": 0.035770623357952294
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.3333333333333333,
+          "recall@3": 0.6666666666666666,
+          "recall@5": 0.6666666666666666,
+          "recall@10": 0.6666666666666666,
+          "mrr": 0.6666666666666666,
+          "ndcg@10": 0.6246776683532517
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.3333333333333333,
+          "recall@3": 0.5,
+          "recall@5": 0.5555555555555556,
+          "recall@10": 0.5555555555555556,
+          "mrr": 0.42592592592592593,
+          "ndcg@10": 0.4703133108388538
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 7.674788000258559,
+      "hardest": [
+        {
+          "id": "item-para-aa-batteries-8-pack",
+          "type": "item_paraphrase",
+          "query": "double-A cells for the remote control",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-ballpoint-pen-12-pack",
+          "type": "item_paraphrase",
+          "query": "a box of writing instruments",
+          "relevant": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-canvas-tote-bag",
+          "type": "item_paraphrase",
+          "query": "cloth carryall for groceries",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-cedar-bird-feeder",
+          "type": "item_paraphrase",
+          "query": "something to attract songbirds to the yard",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-ceramic-mug-12oz",
+          "type": "item_paraphrase",
+          "query": "a cup for hot drinks",
+          "relevant": [
+            "007-skewed-garden-center",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-dog-chew-toy",
+          "type": "item_paraphrase",
+          "query": "something for my puppy to gnaw on",
+          "relevant": [
+            "003-clean-stationery-order",
+            "011-noisy-print-shop",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-extension-cord-25ft",
+          "type": "item_paraphrase",
+          "query": "long power cable for an outlet",
+          "relevant": [
+            "017-handwriting-farm-stand",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-furnace-filter-16x20",
+          "type": "item_paraphrase",
+          "query": "replacement part for the home heating system",
+          "relevant": [
+            "006-clean-electronics-invoice",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "025-adversarial-office-order-injection"
+          ],
+          "ranked": [
+            "014-noisy-home-goods"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-garden-trowel",
+          "type": "item_paraphrase",
+          "query": "hand tool for digging in flower beds",
+          "relevant": [
+            "002-clean-hardware-invoice",
+            "008-skewed-pet-supply",
+            "009-skewed-outdoor-supply",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-herbal-tea-sampler",
+          "type": "item_paraphrase",
+          "query": "assortment of caffeine-free infusions",
+          "relevant": [
+            "004-clean-bike-shop-ticket",
+            "005-clean-bakery-receipt",
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.0,
+            "ndcg@10": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "mode": "dense",
+      "chunking": {
+        "max_chars": 200,
+        "overlap_chars": 80,
+        "context_headers": true
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 80,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.4536697247706422,
+        "recall@3": 0.7943425076452599,
+        "recall@5": 0.8808868501529052,
+        "recall@10": 0.939296636085627,
+        "mrr": 0.8884963660193018,
+        "ndcg@10": 0.8719794905381185
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.0,
+          "recall@3": 0.4,
+          "recall@5": 0.4,
+          "recall@10": 0.6,
+          "mrr": 0.2515151515151515,
+          "ndcg@10": 0.32361333885018745
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.37277777777777776,
+          "recall@3": 0.8544444444444445,
+          "recall@5": 0.986111111111111,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 0.9899116647596703
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.28111111111111114,
+          "recall@3": 0.5733333333333334,
+          "recall@5": 0.7477777777777778,
+          "recall@10": 0.9127777777777778,
+          "mrr": 0.8832539682539682,
+          "ndcg@10": 0.8114957310657173
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.4166666666666667,
+          "recall@3": 0.7916666666666666,
+          "recall@5": 0.8333333333333334,
+          "recall@10": 0.8333333333333334,
+          "mrr": 0.8333333333333334,
+          "ndcg@10": 0.7839826005585441
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.5185185185185186,
+          "recall@3": 0.9444444444444444,
+          "recall@5": 0.9444444444444444,
+          "recall@10": 0.9444444444444444,
+          "mrr": 0.7828282828282829,
+          "ndcg@10": 0.8156433497939501
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 12.81053200000315,
+      "hardest": [
+        {
+          "id": "amount-receipt-with-a-total-of-425-58",
+          "type": "amount",
+          "query": "receipt with a total of $425.58",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "020-dense-electronics-order",
+            "021-missing-field-grocery-no-tax",
+            "006-clean-electronics-invoice",
+            "003-clean-stationery-order",
+            "011-noisy-print-shop",
+            "009-skewed-outdoor-supply",
+            "012-noisy-florist-glare",
+            "025-adversarial-office-order-injection",
+            "001-clean-coffee-receipt"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.045454545454545456,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "amount-the-12-09-purchase",
+          "type": "amount",
+          "query": "the $12.09 purchase",
+          "relevant": [
+            "001-clean-coffee-receipt"
+          ],
+          "ranked": [
+            "025-adversarial-office-order-injection",
+            "022-missing-field-receipt-no-vendor",
+            "021-missing-field-grocery-no-tax",
+            "006-clean-electronics-invoice",
+            "011-noisy-print-shop",
+            "007-skewed-garden-center",
+            "013-noisy-tea-house",
+            "020-dense-electronics-order",
+            "009-skewed-outdoor-supply",
+            "019-dense-hardware-warehouse"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.045454545454545456,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-throw-pillow-cover",
+          "type": "item_paraphrase",
+          "query": "cushion case for the sofa",
+          "relevant": [
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "019-dense-hardware-warehouse",
+            "012-noisy-florist-glare",
+            "023-missing-field-order-no-currency",
+            "018-dense-office-outfitters",
+            "016-handwriting-bakery-note",
+            "005-clean-bakery-receipt",
+            "002-clean-hardware-invoice",
+            "020-dense-electronics-order",
+            "010-skewed-general-store"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.047619047619047616,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "vendor-para-home-decor-store",
+          "type": "vendor_paraphrase",
+          "query": "home decor store",
+          "relevant": [
+            "014-noisy-home-goods"
+          ],
+          "ranked": [
+            "012-noisy-florist-glare",
+            "024-eur-bakery-berlin",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "011-noisy-print-shop",
+            "023-missing-field-order-no-currency",
+            "020-dense-electronics-order",
+            "008-skewed-pet-supply",
+            "003-clean-stationery-order",
+            "007-skewed-garden-center"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.09090909090909091,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "amount-order-totaling-124-16",
+          "type": "amount",
+          "query": "order totaling $124.16",
+          "relevant": [
+            "006-clean-electronics-invoice"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "021-missing-field-grocery-no-tax",
+            "010-skewed-general-store",
+            "003-clean-stationery-order",
+            "011-noisy-print-shop",
+            "006-clean-electronics-invoice",
+            "025-adversarial-office-order-injection",
+            "019-dense-hardware-warehouse",
+            "008-skewed-pet-supply",
+            "020-dense-electronics-order"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg@10": 0.3562071871080222
+          }
+        },
+        {
+          "id": "item-para-canvas-tote-bag",
+          "type": "item_paraphrase",
+          "query": "cloth carryall for groceries",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax",
+            "024-eur-bakery-berlin",
+            "020-dense-electronics-order",
+            "017-handwriting-farm-stand",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "007-skewed-garden-center",
+            "002-clean-hardware-invoice",
+            "001-clean-coffee-receipt",
+            "012-noisy-florist-glare"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.45560514958746035
+          }
+        },
+        {
+          "id": "item-para-recycled-paper-ream",
+          "type": "item_paraphrase",
+          "query": "a pack of copy sheets for the printer",
+          "relevant": [
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor"
+          ],
+          "ranked": [
+            "010-skewed-general-store",
+            "024-eur-bakery-berlin",
+            "020-dense-electronics-order",
+            "022-missing-field-receipt-no-vendor",
+            "011-noisy-print-shop",
+            "021-missing-field-grocery-no-tax",
+            "019-dense-hardware-warehouse",
+            "003-clean-stationery-order",
+            "006-clean-electronics-invoice",
+            "002-clean-hardware-invoice"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 0.5,
+            "mrr": 0.25,
+            "ndcg@10": 0.2640681225725909
+          }
+        },
+        {
+          "id": "vendor-para-camping-and-hiking-gear-store",
+          "type": "vendor_paraphrase",
+          "query": "camping and hiking gear store",
+          "relevant": [
+            "009-skewed-outdoor-supply"
+          ],
+          "ranked": [
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "009-skewed-outdoor-supply",
+            "023-missing-field-order-no-currency",
+            "017-handwriting-farm-stand",
+            "019-dense-hardware-warehouse",
+            "004-clean-bike-shop-ticket",
+            "010-skewed-general-store",
+            "007-skewed-garden-center",
+            "014-noisy-home-goods"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 1.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg@10": 0.5
+          }
+        },
+        {
+          "id": "vendor-para-copy-and-printing-service",
+          "type": "vendor_paraphrase",
+          "query": "copy and printing service",
+          "relevant": [
+            "011-noisy-print-shop"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "003-clean-stationery-order",
+            "011-noisy-print-shop",
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse",
+            "013-noisy-tea-house",
+            "020-dense-electronics-order",
+            "025-adversarial-office-order-injection",
+            "006-clean-electronics-invoice",
+            "024-eur-bakery-berlin"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 1.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg@10": 0.5
+          }
+        },
+        {
+          "id": "vendor-para-shop-for-animal-supplies",
+          "type": "vendor_paraphrase",
+          "query": "shop for animal supplies",
+          "relevant": [
+            "008-skewed-pet-supply"
+          ],
+          "ranked": [
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "008-skewed-pet-supply",
+            "003-clean-stationery-order",
+            "018-dense-office-outfitters",
+            "017-handwriting-farm-stand",
+            "004-clean-bike-shop-ticket",
+            "012-noisy-florist-glare",
+            "006-clean-electronics-invoice",
+            "024-eur-bakery-berlin"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 1.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg@10": 0.5
+          }
+        }
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "chunking": {
+        "max_chars": 200,
+        "overlap_chars": 80,
+        "context_headers": true
+      },
+      "lexical_scoring": "idf",
+      "n_chunks": 80,
+      "overall": {
+        "n": 109,
+        "recall@1": 0.4758409785932722,
+        "recall@3": 0.7906727828746177,
+        "recall@5": 0.8941896024464832,
+        "recall@10": 0.9535168195718655,
+        "mrr": 0.8878916954605028,
+        "ndcg@10": 0.8849234025265185
+      },
+      "by_type": {
+        "amount": {
+          "n": 5,
+          "recall@1": 0.4,
+          "recall@3": 0.8,
+          "recall@5": 0.8,
+          "recall@10": 0.8,
+          "mrr": 0.6083333333333333,
+          "ndcg@10": 0.652371901428583
+        },
+        "item_keyword": {
+          "n": 30,
+          "recall@1": 0.37277777777777776,
+          "recall@3": 0.8738888888888888,
+          "recall@5": 0.9944444444444444,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 0.9989155994496389
+        },
+        "item_paraphrase": {
+          "n": 30,
+          "recall@1": 0.245,
+          "recall@3": 0.5155555555555555,
+          "recall@5": 0.6794444444444444,
+          "recall@10": 0.8894444444444445,
+          "mrr": 0.8057287157287157,
+          "ndcg@10": 0.7611950917123979
+        },
+        "location": {
+          "n": 6,
+          "recall@1": 0.3333333333333333,
+          "recall@3": 0.75,
+          "recall@5": 0.875,
+          "recall@10": 0.875,
+          "mrr": 0.7222222222222222,
+          "ndcg@10": 0.747805877557658
+        },
+        "vendor_keyword": {
+          "n": 20,
+          "recall@1": 0.9,
+          "recall@3": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0,
+          "ndcg@10": 1.0
+        },
+        "vendor_paraphrase": {
+          "n": 18,
+          "recall@1": 0.6296296296296297,
+          "recall@3": 0.8888888888888888,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 0.8462962962962962,
+          "ndcg@10": 0.8835908537800301
+        }
+      },
+      "citation_integrity": 1.0,
+      "query_latency_p50_ms": 19.74142600010964,
+      "hardest": [
+        {
+          "id": "amount-receipt-with-a-total-of-425-58",
+          "type": "amount",
+          "query": "receipt with a total of $425.58",
+          "relevant": [
+            "018-dense-office-outfitters"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "021-missing-field-grocery-no-tax",
+            "009-skewed-outdoor-supply",
+            "011-noisy-print-shop",
+            "025-adversarial-office-order-injection",
+            "003-clean-stationery-order",
+            "001-clean-coffee-receipt",
+            "006-clean-electronics-invoice",
+            "004-clean-bike-shop-ticket",
+            "017-handwriting-farm-stand"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.041666666666666664,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-throw-pillow-cover",
+          "type": "item_paraphrase",
+          "query": "cushion case for the sofa",
+          "relevant": [
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "024-eur-bakery-berlin",
+            "019-dense-hardware-warehouse",
+            "012-noisy-florist-glare",
+            "023-missing-field-order-no-currency",
+            "018-dense-office-outfitters",
+            "016-handwriting-bakery-note",
+            "005-clean-bakery-receipt",
+            "002-clean-hardware-invoice",
+            "020-dense-electronics-order",
+            "010-skewed-general-store"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.047619047619047616,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-recycled-paper-ream",
+          "type": "item_paraphrase",
+          "query": "a pack of copy sheets for the printer",
+          "relevant": [
+            "015-handwriting-candle-co",
+            "022-missing-field-receipt-no-vendor"
+          ],
+          "ranked": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse",
+            "006-clean-electronics-invoice",
+            "024-eur-bakery-berlin",
+            "021-missing-field-grocery-no-tax",
+            "002-clean-hardware-invoice",
+            "018-dense-office-outfitters",
+            "023-missing-field-order-no-currency",
+            "017-handwriting-farm-stand",
+            "020-dense-electronics-order"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "mrr": 0.09090909090909091,
+            "ndcg@10": 0.0
+          }
+        },
+        {
+          "id": "item-para-canvas-tote-bag",
+          "type": "item_paraphrase",
+          "query": "cloth carryall for groceries",
+          "relevant": [
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "021-missing-field-grocery-no-tax",
+            "024-eur-bakery-berlin",
+            "020-dense-electronics-order",
+            "017-handwriting-farm-stand",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "007-skewed-garden-center",
+            "002-clean-hardware-invoice",
+            "001-clean-coffee-receipt",
+            "012-noisy-florist-glare"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.45560514958746035
+          }
+        },
+        {
+          "id": "vendor-para-camping-and-hiking-gear-store",
+          "type": "vendor_paraphrase",
+          "query": "camping and hiking gear store",
+          "relevant": [
+            "009-skewed-outdoor-supply"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "010-skewed-general-store",
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "009-skewed-outdoor-supply",
+            "017-handwriting-farm-stand",
+            "019-dense-hardware-warehouse",
+            "004-clean-bike-shop-ticket",
+            "007-skewed-garden-center",
+            "014-noisy-home-goods"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.38685280723454163
+          }
+        },
+        {
+          "id": "vendor-para-shop-selling-fine-paper-and-greeting-cards",
+          "type": "vendor_paraphrase",
+          "query": "shop selling fine paper and greeting cards",
+          "relevant": [
+            "003-clean-stationery-order"
+          ],
+          "ranked": [
+            "022-missing-field-receipt-no-vendor",
+            "011-noisy-print-shop",
+            "015-handwriting-candle-co",
+            "012-noisy-florist-glare",
+            "003-clean-stationery-order",
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "019-dense-hardware-warehouse",
+            "005-clean-bakery-receipt",
+            "007-skewed-garden-center"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "mrr": 0.2,
+            "ndcg@10": 0.38685280723454163
+          }
+        },
+        {
+          "id": "item-para-ballpoint-pen-12-pack",
+          "type": "item_paraphrase",
+          "query": "a box of writing instruments",
+          "relevant": [
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse"
+          ],
+          "ranked": [
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice",
+            "023-missing-field-order-no-currency",
+            "019-dense-hardware-warehouse",
+            "020-dense-electronics-order",
+            "007-skewed-garden-center",
+            "008-skewed-pet-supply",
+            "010-skewed-general-store",
+            "024-eur-bakery-berlin",
+            "012-noisy-florist-glare"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.5,
+            "recall@10": 1.0,
+            "mrr": 0.25,
+            "ndcg@10": 0.45749452618986164
+          }
+        },
+        {
+          "id": "item-para-packing-tape-roll",
+          "type": "item_paraphrase",
+          "query": "adhesive for sealing shipping boxes",
+          "relevant": [
+            "010-skewed-general-store",
+            "017-handwriting-farm-stand",
+            "021-missing-field-grocery-no-tax"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "002-clean-hardware-invoice",
+            "006-clean-electronics-invoice",
+            "010-skewed-general-store",
+            "019-dense-hardware-warehouse",
+            "012-noisy-florist-glare",
+            "003-clean-stationery-order",
+            "009-skewed-outdoor-supply",
+            "017-handwriting-farm-stand",
+            "024-eur-bakery-berlin"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.0,
+            "recall@5": 0.3333333333333333,
+            "recall@10": 0.6666666666666666,
+            "mrr": 0.25,
+            "ndcg@10": 0.34337431936037655
+          }
+        },
+        {
+          "id": "item-para-whiteboard-marker-set",
+          "type": "item_paraphrase",
+          "query": "dry-erase pens",
+          "relevant": [
+            "012-noisy-florist-glare",
+            "013-noisy-tea-house",
+            "018-dense-office-outfitters",
+            "020-dense-electronics-order"
+          ],
+          "ranked": [
+            "019-dense-hardware-warehouse",
+            "010-skewed-general-store",
+            "012-noisy-florist-glare",
+            "020-dense-electronics-order",
+            "013-noisy-tea-house",
+            "018-dense-office-outfitters",
+            "008-skewed-pet-supply",
+            "024-eur-bakery-berlin",
+            "022-missing-field-receipt-no-vendor",
+            "007-skewed-garden-center"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.25,
+            "recall@5": 0.75,
+            "recall@10": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg@10": 0.6533933590057491
+          }
+        },
+        {
+          "id": "location-stores-in-michigan",
+          "type": "location",
+          "query": "stores in Michigan",
+          "relevant": [
+            "002-clean-hardware-invoice",
+            "014-noisy-home-goods"
+          ],
+          "ranked": [
+            "023-missing-field-order-no-currency",
+            "010-skewed-general-store",
+            "002-clean-hardware-invoice",
+            "014-noisy-home-goods",
+            "021-missing-field-grocery-no-tax",
+            "003-clean-stationery-order",
+            "020-dense-electronics-order",
+            "018-dense-office-outfitters",
+            "007-skewed-garden-center",
+            "017-handwriting-farm-stand"
+          ],
+          "scores": {
+            "recall@1": 0.0,
+            "recall@3": 0.5,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg@10": 0.5706417189553201
+          }
+        }
+      ]
+    }
+  ]
+}

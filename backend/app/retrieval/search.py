@@ -71,9 +71,18 @@ def _or_tsquery(query: str):
     terms, closer together -- ranked retrieval rather than boolean
     filtering. Parsing still goes through plainto_tsquery, so user input
     is never interpreted as tsquery syntax.
+
+    The rewritten text is cast straight to tsquery, not re-parsed with
+    to_tsquery('english', ...): its lexemes are already stemmed, and
+    stemming a stem again isn't a no-op -- 'ashevill' becomes 'ashevil',
+    'basebal' becomes 'baseb', 'purchas' becomes 'purcha' -- so a query
+    for "Asheville" could never match a document that says Asheville.
+    The cast takes lexemes as they are, exactly as the stored tsvectors
+    hold them. (plainto_tsquery's text output quotes every lexeme, so
+    the cast can't see operators in user input either.)
     """
     and_query = cast(func.plainto_tsquery("english", query), Text)
-    return func.to_tsquery("english", func.replace(and_query, " & ", " | "))
+    return cast(func.replace(and_query, " & ", " | "), TSQUERY)
 
 
 async def _dense_ranking(

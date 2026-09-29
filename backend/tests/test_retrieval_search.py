@@ -288,6 +288,34 @@ async def test_idf_ranks_a_rare_term_above_a_common_one(db_session: AsyncSession
     assert ts_rank[0].filename != "z-target.png"  # the failure IDF fixes
 
 
+@pytest.mark.parametrize("scoring", ["idf", "ts_rank"])
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        # Words whose stem changes if it is stemmed again: 'ashevill' ->
+        # 'ashevil', 'basebal' -> 'baseb', 'purchas' -> 'purcha'. Found by
+        # the retrieval eval: "purchases made in Asheville" matched nothing.
+        ("purchases made in Asheville", "asheville.png"),
+        ("baseball", "cap.png"),
+    ],
+)
+async def test_query_terms_are_stemmed_exactly_once(
+    db_session: AsyncSession, query: str, expected: str, scoring: str
+) -> None:
+    ids = await _index_texts(
+        db_session,
+        {
+            "asheville.png": "Thistlewood Garden Center\n9 Meadow Rd, Asheville, NC\nPurchased: 2025-11-13",
+            "cap.png": "Ridgeline Sports\nBaseball Cap  1  $14.00",
+            "other.png": "Cobblestone Bakery\nHerbal Tea Sampler  1  $8.05",
+        },
+    )
+
+    hits = await _search(db_session, query, ids, mode="lexical", lexical_scoring=scoring)
+
+    assert hits and hits[0].filename == expected
+
+
 async def test_amount_aliases_match_typed_amounts(db_session: AsyncSession) -> None:
     ids = await _index_texts(
         db_session,
