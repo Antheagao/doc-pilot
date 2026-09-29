@@ -39,3 +39,21 @@ def test_non_amounts_produce_no_aliases(text) -> None:
 )
 def test_normalize_query_matches_index_time_forms(query, normalized) -> None:
     assert normalize_query(query) == normalized
+
+
+@pytest.mark.parametrize(
+    "text,aliases",
+    [
+        ("Ironclad Hardware Supply\n78 Foundry Ave, Detroit, MI\n", "michigan"),
+        ("Sunny Acres Farm Stand\n40 Rural Route 2, Ithaca, NY 14850", "new york"),
+        ("Ridgeline Bike Works\n88 Summit Ave, Bend, OR 97701-1234\nTotal: $35.60", "dollar oregon"),
+        ("Lindenplatz Bakery\n12 Marktplatz, Berlin, Germany", None),
+        # Not an address line: no comma, lowercase, mid-line, unknown code.
+        ("Cash OR card accepted", None),
+        ("Pay by cash, or card", None),
+        ("Code: MI 4471, then total", None),
+        ("Reno, ZZ", None),
+    ],
+)
+def test_us_address_lines_get_their_state_name(text, aliases) -> None:
+    assert search_aliases(text) == aliases

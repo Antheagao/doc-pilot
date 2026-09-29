@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-394 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+406 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -183,35 +183,34 @@ Same principle as the extraction eval: the answer is known up front, so the numb
 
 | Mode | Chunking | Chunks | Recall@1 | Recall@5 | MRR | nDCG@10 | Keyword R@5 | Paraphrase R@5 | Location R@5 | Amount R@5 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| lexical (idf) | page | 25 | 35.9% | 62.0% | 0.595 | 0.598 | 99.7% | 20.2% | 50.0% | 100.0% |
+| lexical (idf) | page | 25 | 38.0% | 65.6% | 0.627 | 0.634 | 99.7% | 22.3% | 100.0% | 100.0% |
 | dense | page | 25 | 38.5% | 72.3% | 0.783 | 0.740 | 83.3% | 63.8% | 91.7% | 20.0% |
-| hybrid (idf) | page | 25 | 44.0% | 81.2% | 0.830 | 0.821 | 99.3% | 62.7% | 95.8% | 60.0% |
-| lexical (idf) | page +hdr | 25 | 36.9% | 62.0% | 0.601 | 0.603 | 99.7% | 20.2% | 50.0% | 100.0% |
+| hybrid (idf) | page | 25 | 44.0% | 81.4% | 0.832 | 0.825 | 99.3% | 62.7% | 100.0% | 60.0% |
+| lexical (idf) | page +hdr | 25 | 38.9% | 65.6% | 0.632 | 0.638 | 99.7% | 22.3% | 100.0% | 100.0% |
 | dense | page +hdr | 25 | 38.1% | 73.2% | 0.760 | 0.732 | 78.6% | 69.7% | 83.3% | 40.0% |
-| hybrid (idf) | page +hdr | 25 | 42.9% | 81.1% | 0.799 | 0.814 | 97.2% | 65.8% | 87.5% | 60.0% |
-| lexical (idf) | 200/80 | 80 | 36.6% | 62.1% | 0.609 | 0.603 | 99.7% | 20.6% | 50.0% | 100.0% |
+| hybrid (idf) | page +hdr | 25 | 42.9% | 81.8% | 0.801 | 0.817 | 97.2% | 65.8% | 100.0% | 60.0% |
+| lexical (idf) | 200/80 | 80 | 37.7% | 65.8% | 0.633 | 0.633 | 99.7% | 22.7% | 100.0% | 100.0% |
 | dense | 200/80 | 80 | 46.1% | 87.1% | 0.885 | 0.883 | 99.2% | 79.9% | 83.3% | 40.0% |
-| hybrid (idf) | 200/80 | 80 | 43.1% | 89.0% | 0.853 | 0.875 | 99.7% | 79.1% | 87.5% | 80.0% |
-| lexical (idf) | 200/80 +hdr | 80 | 38.0% | 62.0% | 0.613 | 0.608 | 99.7% | 20.2% | 50.0% | 100.0% |
+| hybrid (idf) | 200/80 | 80 | 43.8% | 89.7% | 0.863 | 0.882 | 99.7% | 79.1% | 100.0% | 80.0% |
+| lexical (idf) | 200/80 +hdr | 80 | 40.5% | 65.8% | 0.647 | 0.645 | 99.7% | 22.7% | 100.0% | 100.0% |
 | dense | 200/80 +hdr | 80 | 45.4% | 88.1% | 0.888 | 0.872 | 99.2% | 82.2% | 83.3% | 40.0% |
-| hybrid (idf) | 200/80 +hdr | 80 | 47.6% | 89.4% | 0.888 | 0.885 | 99.7% | 80.0% | 87.5% | 80.0% |
+| hybrid (idf) | 200/80 +hdr | 80 | 47.6% | 90.1% | 0.894 | 0.892 | 99.7% | 80.0% | 100.0% | 80.0% |
 
-*109 queries over 25 documents, embedder `fastembed:BAAI/bge-small-en-v1.5`, query set v1, run 20260929T053603Z. Recall@k is the share of a query's relevant documents found in the top k (chunk hits collapsed to distinct documents), averaged over queries; chunking is max/overlap characters per chunk ("page" = one chunk per page), +hdr = contextual chunk headers.*
+*109 queries over 25 documents, embedder `fastembed:BAAI/bge-small-en-v1.5`, query set v1, run 20260929T061630Z. Recall@k is the share of a query's relevant documents found in the top k (chunk hits collapsed to distinct documents), averaged over queries; chunking is max/overlap characters per chunk ("page" = one chunk per page), +hdr = contextual chunk headers.*
 
 <!-- RETRIEVAL_TABLE:END -->
 
 What it shows:
 
-- **Neither retriever is enough on its own.** Full-text search finds exact keywords (99.7% recall@5) but only ~20% of paraphrases. Dense embeddings find paraphrases but lose exact tokens -- amounts above all (20-40%). Hybrid fusion has the best recall@1 and recall@5 and is the only mode that's strong on every query type; at 200/80 dense ties it on MRR (0.888) and edges it on paraphrase recall, but hybrid doubles its amount recall (80% vs 40%).
-- **Chunking was the biggest single lever.** A whole-page chunk blurs a 16-item receipt into one vector that matches none of its items well: dense *keyword* recall falls to 79-83% at page granularity and recovers to 99% at 200 characters. Hybrid recall@5 goes from 81% (page) to 89% (200/80). Sweeping `--chunk-sizes 120,200,300` puts the plateau at 120-200 and a drop by 300, which is why the default is 200/80.
-- **Contextual headers pay off on meaning-based queries:** at 200/80 they lift hybrid MRR from 0.853 to 0.888 and dense paraphrase recall from 79.9% to 82.2%. At page granularity they cost location queries ~8 points -- likely because the header repeats the vendor name and dilutes the address line's weight in the embedding.
+- **Neither retriever is enough on its own.** Full-text search finds exact keywords (99.7% recall@5) but only ~20% of paraphrases. Dense embeddings find paraphrases but lose exact tokens -- amounts above all (20-40%). Hybrid fusion has the best recall@1, recall@5 and MRR, and is the only mode that's strong on every query type; at 200/80 dense edges it on paraphrase recall, but hybrid doubles its amount recall (80% vs 40%) and finds every location query.
+- **Chunking was the biggest single lever.** A whole-page chunk blurs a 16-item receipt into one vector that matches none of its items well: dense *keyword* recall falls to 79-83% at page granularity and recovers to 99% at 200 characters. Hybrid recall@5 goes from 81-82% (page) to 90% (200/80). Sweeping `--chunk-sizes 120,200,300` puts the plateau at 120-200 and a drop by 300, which is why the default is 200/80.
+- **Contextual headers pay off on meaning-based queries:** at 200/80 they lift hybrid MRR from 0.863 to 0.894 and dense paraphrase recall from 79.9% to 82.2%. At page granularity they cost dense location queries ~8 points -- likely because the header repeats the vendor name and dilutes the address line's weight in the embedding.
 
-- **Two full-text fixes came straight out of the failure list** (the previous run's artifact is still in `evals/results/retrieval/`, so before/after is reproducible; `--lexical ts_rank,idf` re-runs the comparison). *IDF:* Postgres's `ts_rank_cd` has no notion of how rare a term is, so "receipt" counted as much as "425.58"; full-text search now scores chunks by the summed BM25 IDF of the query terms they contain (document frequencies are GIN-indexed counts; `ts_rank_cd` only breaks ties). Lexical recall@1 goes 35.2% -> 38.0%, hybrid recall@1 46.7% -> 47.6%, hybrid MRR 0.883 -> 0.888, and the $425.58 receipt goes from 4th to 1st in full-text search. *Amount aliases:* Postgres tokenizes `27,82 EUR` as '27' and '82' and `$1,234.56` as '1' and '234.56', so neither could match a typed amount; chunks now carry search-only canonical forms (`27.82`, `1234.56`, plus `euro`/`dollar` for currency markers, `app/retrieval/normalize.py`) and queries are canonicalized the same way. Full-text amount recall@5: 80% -> 100%.
+- **Four full-text fixes came straight out of the failure list** (each step's artifact is still in `evals/results/retrieval/`, so before/after is reproducible; `--lexical ts_rank,idf` re-runs the comparison). *IDF:* Postgres's `ts_rank_cd` has no notion of how rare a term is, so "receipt" counted as much as "425.58"; full-text search now scores chunks by the summed BM25 IDF of the query terms they contain (document frequencies are GIN-indexed counts; `ts_rank_cd` only breaks ties). Lexical recall@1 goes 35.2% -> 38.0%, hybrid recall@1 46.7% -> 47.6%, hybrid MRR 0.883 -> 0.888, and the $425.58 receipt goes from 4th to 1st in full-text search. *Amount aliases:* Postgres tokenizes `27,82 EUR` as '27' and '82' and `$1,234.56` as '1' and '234.56', so neither could match a typed amount; chunks now carry search-only canonical forms (`27.82`, `1234.56`, plus `euro`/`dollar` for currency markers, `app/retrieval/normalize.py`) and queries are canonicalized the same way. Full-text amount recall@5: 80% -> 100%. *Stemming once:* "purchases made in Asheville" returned *nothing* in full-text mode although two receipts print `Asheville, NC`. The OR-rewrite of the query was re-parsed with `to_tsquery('english', ...)`, which stemmed the already-stemmed lexemes a second time -- and stemming isn't idempotent: 'ashevill' became 'ashevil', 'basebal' became 'baseb', 'purchas' became 'purcha', none of which any document contains. The rewritten query is now cast to `tsquery` as-is. Full-text recall@5 +2 points and location recall@5 50% -> 67% in every config; the default hybrid config didn't move at all, because the embeddings had been covering for it -- a bug no aggregate number would have shown. *State names:* receipts print `Detroit, MI` and people ask about "stores in Michigan", so a US `City, ST` address line now also carries its state's name as a search-only alias. Location recall@5 goes to 100% for full-text and hybrid search in every config, and the default hybrid config goes 89.4% -> 90.1% recall@5, MRR 0.888 -> 0.894. (Six location queries, all over addresses in exactly the format the alias targets: read this as "the gap is closed on this corpus", not as a general number.)
 
 Known gaps -- `run_retrieval.py` prints the hardest queries after every run, and these are the recurring ones:
 
-- **Fusion punishes a hit only one retriever can see.** The worst hybrid query is still "receipt with a total of $425.58". With IDF, full-text search now ranks the right chunk *first* -- but dense embeddings can't see a number at all and don't rank it in their top 50, and RRF rewards *agreement*: the chunk headed `RECEIPT`, 1st by dense and 2nd by full-text, scores 1/61 + 1/62 against the right chunk's lone 1/61, and the right chunk falls to 35th. This is exactly what the IDF fix predicted it couldn't solve, and why fusion wasn't tuned around five amount queries: the fix is routing. Amount questions belong to the *structured* extraction data (`total = 425.58`), which is how the [/ask agent](#ask-an-agent-over-search-and-the-extracted-data) answers them.
-- **Abbreviations.** "stores in Michigan" vs `Detroit, MI` -- location recall tops out at 88-96%.
+- **Fusion punishes a hit only one retriever can see.** The worst hybrid query is still "receipt with a total of $425.58". With IDF, full-text search now ranks the right chunk *first* -- but dense embeddings can't see a number at all and don't rank it in their top 50, and RRF rewards *agreement*: the chunk headed `RECEIPT`, 1st by dense and 2nd by full-text, scores 1/61 + 1/62 against the right chunk's lone 1/61, and the right chunk falls to 36th. This is exactly what the IDF fix predicted it couldn't solve, and why fusion wasn't tuned around five amount queries: the fix is routing. Amount questions belong to the *structured* extraction data (`total = 425.58`), which is how the [/ask agent](#ask-an-agent-over-search-and-the-extracted-data) answers them.
 - **Scale.** 25 documents is a regression baseline and an ablation bench, not a benchmark; absolute numbers will fall on a larger corpus, and the query set grows with it.
 
 ## Ask: an agent over search and the extracted data
