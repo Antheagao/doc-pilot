@@ -117,9 +117,10 @@ async def test_ask_is_refused_before_any_model_call(
         beta=SimpleNamespace(messages=SimpleNamespace(create=create))
     )
 
-    response = await client.post("/ask", json={"question": "How much did I spend?"})
+    for route in ("/ask", "/ask/stream"):
+        response = await client.post(route, json={"question": "How much did I spend?"})
 
-    assert response.status_code == 429 and "retry-after" in response.headers
+        assert response.status_code == 429 and "retry-after" in response.headers
     create.assert_not_awaited()
 
 

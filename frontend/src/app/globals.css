@@ -1054,3 +1054,7 @@ textarea:focus-visible,
   text-decoration: underline;
 }
 
+
+.live-progress .answer-meta {
+  margin: 0 0 0.4rem;
+}

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import loop as loop_module
@@ -564,6 +564,96 @@ async def test_run_history_is_newest_first(client: AsyncClient, db_session: Asyn
     row = listed[ids.index(str(older.id))]
     assert (row["question"], row["judge_sampled"], row["judge_grounded"]) == ("older?", False, None)
     assert (await client.get("/ask/runs", params={"limit": 0})).status_code == 422
+
+
+def _sse_events(body: str) -> list[dict]:
+    import json
+
+    events = []
+    for frame in body.strip().split("\n\n"):
+        lines = dict(line.split(": ", 1) for line in frame.splitlines())
+        event = json.loads(lines["data"])
+        assert event["type"] == lines["event"]
+        events.append(event)
+    return events
+
+
+async def _stream(client: AsyncClient, db_session: AsyncSession, settings: Settings, fake):
+    from app.config import get_settings
+
+    await _seed(db_session)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_embedder] = lambda: EMBEDDER
+    app.dependency_overrides[get_anthropic_client] = lambda: fake
+    return await client.post("/ask/stream", json={"question": "How much was my Northgate order?"})
+
+
+async def test_stream_shows_each_step_then_the_stored_answer(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    response = await _stream(client, db_session, SETTINGS, _northgate_client())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _sse_events(response.text)
+    assert [e["type"] for e in events] == ["model_call", "tool_start", "tool_call", "model_call", "answer"]
+    first_call, tool_start, tool_call, last_call, answer = events
+    assert (first_call["step"], first_call["stop_reason"]) == (1, "tool_use")
+    assert tool_start == {"type": "tool_start", "name": "query_extractions", "input": {"vendor": "Northgate"}}
+    assert tool_call["name"] == "query_extractions" and tool_call["is_error"] is False
+    assert (last_call["step"], last_call["stop_reason"]) == (2, "end_turn")
+    assert last_call["cost_usd"] > first_call["cost_usd"] > 0
+    # The final event is the stored run -- exactly what GET /ask/runs/{id} returns.
+    run = answer["run"]
+    assert run["status"] == "answered" and run["citations"][0]["fields"] == ["total"]
+    assert (await client.get(f"/ask/runs/{run['id']}")).json() == run
+
+
+async def test_stream_turns_api_errors_into_an_error_event(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    import anthropic
+    import httpx
+
+    from app.models import AskRun
+
+    overloaded = anthropic.InternalServerError(
+        "overloaded", response=httpx.Response(529, request=httpx.Request("POST", "https://x")), body=None
+    )
+    before = (await db_session.execute(select(func.count()).select_from(AskRun))).scalar_one()
+
+    response = await _stream(client, db_session, SETTINGS, _client([overloaded]))
+
+    (event,) = _sse_events(response.text)
+    assert event["type"] == "error" and event["status"] == 503
+    assert "model unavailable" in event["detail"]
+    assert (await db_session.execute(select(func.count()).select_from(AskRun))).scalar_one() == before
+
+
+async def test_stream_refusals_happen_before_streaming(client: AsyncClient) -> None:
+    from app.config import get_settings
+
+    app.dependency_overrides[get_settings] = lambda: Settings(anthropic_api_key=None)
+    assert (await client.post("/ask/stream", json={"question": "q"})).status_code == 503
+    assert (await client.post("/ask/stream", json={"question": ""})).status_code == 422
+
+
+async def test_a_reader_that_leaves_early_does_not_lose_the_run(db_session: AsyncSession) -> None:
+    """The steps already taken are billed, so the run finishes and is
+    stored (and counted against the daily budget) even with no reader."""
+    from app.models import AskRun
+    from app.routers.ask import stream_answer
+
+    await _seed(db_session)
+    question = f"Northgate total? {uuid.uuid4()}"
+    stream = stream_answer(db_session, EMBEDDER, SETTINGS, _northgate_client(), question)
+
+    first = await anext(stream)
+    await stream.aclose()
+
+    assert first.startswith("event: model_call")
+    stored = (await db_session.execute(select(AskRun).where(AskRun.question == question))).scalar_one()
+    assert stored.status == "answered" and stored.steps == 2
 
 
 async def test_ask_endpoint_validates_the_question(client: AsyncClient) -> None:

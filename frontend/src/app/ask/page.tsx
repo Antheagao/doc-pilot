@@ -3,11 +3,12 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  askQuestion,
+  askQuestionStream,
   getAskRun,
   listAskRuns,
   sendAskFeedback,
   ApiError,
+  type AskEvent,
   type AskResponse,
   type AskRunSummary,
   type Citation,
@@ -134,6 +135,36 @@ function Judgment({ response }: { response: AskResponse }) {
   );
 }
 
+interface LiveStep {
+  name: string;
+  input: Record<string, unknown>;
+  summary: string | null;
+  isError: boolean;
+}
+
+/** What the agent is doing right now, from the stream's events. */
+function LiveProgress({ steps, modelCalls, cost }: { steps: LiveStep[]; modelCalls: number; cost: number }) {
+  return (
+    <div className="review-row answer-card live-progress" aria-live="polite">
+      <p className="answer-meta">
+        Working: {modelCalls === 0 ? "reading the question" : `step ${modelCalls}`}
+        {cost > 0 && <> · ${cost.toFixed(4)} so far</>}
+      </p>
+      {steps.length > 0 && (
+        <ol className="tool-trail">
+          {steps.map((step, i) => (
+            <li key={i} className={step.isError ? "tool-error" : undefined}>
+              <code className="tool-name">{step.name}</code>
+              <code className="tool-input">{JSON.stringify(step.input)}</code>
+              <span className="tool-summary">{step.summary ?? "running…"}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function RunChips({ run }: { run: AskRunSummary }) {
   return (
     <span className="rank-chips">
@@ -152,6 +183,9 @@ export default function AskPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<AskRunSummary[]>([]);
+  const [liveSteps, setLiveSteps] = useState<LiveStep[]>([]);
+  const [modelCalls, setModelCalls] = useState(0);
+  const [liveCost, setLiveCost] = useState(0);
 
   const refreshHistory = useCallback(() => {
     listAskRuns(10)
@@ -175,14 +209,52 @@ export default function AskPage() {
     }
   }
 
+  function onEvent(event: AskEvent) {
+    switch (event.type) {
+      case "model_call":
+        setModelCalls(event.step);
+        setLiveCost(event.cost_usd);
+        break;
+      case "tool_start":
+        setLiveSteps((steps) => [
+          ...steps,
+          { name: event.name, input: event.input, summary: null, isError: false },
+        ]);
+        break;
+      case "tool_call":
+        // Tools run one at a time, so the finished one is the last started.
+        setLiveSteps((steps) =>
+          steps.map((step, i) =>
+            i === steps.length - 1
+              ? { ...step, summary: event.result_summary, isError: event.is_error }
+              : step
+          )
+        );
+        break;
+      case "answer":
+        setResponse(event.run);
+        refreshHistory();
+        break;
+      case "error":
+        setError(
+          event.status === 503
+            ? `The model is unavailable right now: ${event.detail}`
+            : `The agent failed: ${event.detail}`
+        );
+        break;
+    }
+  }
+
   async function run(q: string) {
     if (!q.trim()) return;
     setLoading(true);
     setError(null);
     setResponse(null);
+    setLiveSteps([]);
+    setModelCalls(0);
+    setLiveCost(0);
     try {
-      setResponse(await askQuestion(q.trim()));
-      refreshHistory();
+      await askQuestionStream(q.trim(), onEvent);
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -249,7 +321,7 @@ export default function AskPage() {
       </div>
 
       {error && <div className="error-banner">{error}</div>}
-      {loading && <div className="empty-state">Working: searching and reading your documents…</div>}
+      {loading && <LiveProgress steps={liveSteps} modelCalls={modelCalls} cost={liveCost} />}
 
       {response && (
         <section aria-live="polite">

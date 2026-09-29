@@ -388,6 +388,60 @@ export async function askQuestion(question: string): Promise<AskResponse> {
   return handle<AskResponse>(res);
 }
 
+// POST /ask/stream: the run's progress as server-sent events, then the
+// stored run (`answer`) or an `error`.
+export type AskEvent =
+  | { type: "model_call"; step: number; cost_usd: number; stop_reason: string | null }
+  | { type: "tool_start"; name: string; input: Record<string, unknown> }
+  | ({ type: "tool_call" } & ToolCall)
+  | { type: "answer"; run: AskResponse }
+  | { type: "error"; status: number; detail: string };
+
+/** Split the complete SSE frames off the front of `buffer`; `rest` is
+ * the incomplete tail to prepend to the next chunk. */
+export function parseSseFrames(buffer: string): { events: AskEvent[]; rest: string } {
+  const events: AskEvent[] = [];
+  let rest = buffer;
+  let boundary = rest.indexOf("\n\n");
+  while (boundary !== -1) {
+    const frame = rest.slice(0, boundary);
+    rest = rest.slice(boundary + 2);
+    const data = frame
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => line.slice("data: ".length))
+      .join("\n");
+    if (data) events.push(JSON.parse(data) as AskEvent);
+    boundary = rest.indexOf("\n\n");
+  }
+  return { events, rest };
+}
+
+/** Ask with live progress. Refusals that happen before the stream starts
+ * (no API key, the daily budget, validation) throw ApiError like any other
+ * call; failures after it starts arrive as an `error` event. */
+export async function askQuestionStream(
+  question: string,
+  onEvent: (event: AskEvent) => void
+): Promise<void> {
+  const res = await fetch(`${API_URL}/ask/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!res.ok) await handle<never>(res);
+  if (!res.body) throw new ApiError(res.status, "the response had no body to stream");
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const parsed = parseSseFrames(buffer + value);
+    buffer = parsed.rest;
+    parsed.events.forEach(onEvent);
+  }
+}
+
 export async function listAskRuns(limit = 10): Promise<AskRunSummary[]> {
   const params = new URLSearchParams({ limit: String(limit) });
   const res = await fetch(`${API_URL}/ask/runs?${params}`, { cache: "no-store" });

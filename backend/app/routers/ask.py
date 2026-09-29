@@ -12,11 +12,18 @@ and a sampled share gets a background groundedness grade
 (app/evals/online.py).
 """
 
+import asyncio
+import json
+import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 import anthropic
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +43,8 @@ from app.schemas import (
     AskResponse,
     AskRunSummary,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -122,6 +131,87 @@ async def ask(
         raise HTTPException(status_code=503, detail=f"model unavailable: {exc}", headers=headers) from exc
     run = await record_ask_run(session, request.question, result, settings)
     return ask_response(run)
+
+
+_DONE: dict[str, Any] = {"type": "done"}
+
+
+def _sse(event: dict[str, Any]) -> str:
+    return f"event: {event['type']}\ndata: {json.dumps(event, default=str)}\n\n"
+
+
+async def stream_answer(
+    session: AsyncSession,
+    embedder: Embedder,
+    settings: Settings,
+    client: anthropic.AsyncAnthropic,
+    question: str,
+) -> AsyncIterator[str]:
+    """The agent run as server-sent events: its progress as it happens
+    (answer_question's model_call / tool_start / tool_call events), then
+    one `answer` event carrying the stored run -- the same body POST /ask
+    returns -- or one `error` event.
+
+    A reader that leaves early doesn't stop the run. The steps already
+    taken are billed either way, so the run finishes (it is capped per
+    question) and is stored, which keeps it counted against the daily
+    budget. Cancelling it instead would let a client that disconnects
+    early spend without a trace."""
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def run() -> None:
+        try:
+            result = await answer_question(
+                ToolContext(session=session, embedder=embedder),
+                question,
+                settings,
+                client,
+                on_event=queue.put,
+            )
+            stored = await record_ask_run(session, question, result, settings)
+            await queue.put({"type": "answer", "run": ask_response(stored).model_dump(mode="json")})
+        except NonRetryableExtractionError as exc:
+            await queue.put({"type": "error", "status": 502, "detail": f"model request rejected: {exc}"})
+        except ExtractionError as exc:
+            await queue.put({"type": "error", "status": 503, "detail": f"model unavailable: {exc}"})
+        except Exception:
+            logger.exception("streamed /ask run failed")
+            await queue.put({"type": "error", "status": 500, "detail": "the run failed unexpectedly"})
+        finally:
+            await queue.put(_DONE)
+
+    task = asyncio.create_task(run())
+    try:
+        while (event := await queue.get()) is not _DONE:
+            yield _sse(event)
+    finally:
+        if not task.done():
+            # Shielded: a disconnect cancels this generator, not the run.
+            with anyio.CancelScope(shield=True):
+                await task
+
+
+@router.post("/stream")
+async def ask_stream(
+    request: AskRequest,
+    session: AsyncSession = Depends(get_session),
+    embedder: Embedder = Depends(get_embedder),
+    settings: Settings = Depends(get_settings),
+    client: anthropic.AsyncAnthropic | None = Depends(get_anthropic_client),
+) -> StreamingResponse:
+    """POST /ask, streamed. Everything that can refuse the question (a
+    missing key, the daily budget, validation) is checked first and
+    answers with its normal status code; once the stream starts, failures
+    arrive as an `error` event."""
+    if client is None:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
+    await enforce_daily_budget(session, settings)
+    return StreamingResponse(
+        stream_answer(session, embedder, settings, client, request.question),
+        media_type="text/event-stream",
+        # No proxy buffering, no caching: events must arrive as they happen.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/runs", response_model=list[AskRunSummary])

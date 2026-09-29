@@ -15,7 +15,8 @@ reads as the agent's plan: which tools, in what order, what each cost.
 
 import logging
 import time
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 import anthropic
@@ -268,16 +269,32 @@ async def _run_tool(ctx: ToolContext, block: Any) -> tuple[dict[str, Any], ToolC
         return result, ToolCall(block.name, dict(block.input or {}), is_error, _summarize_result(content))
 
 
+EventSink = Callable[[dict[str, Any]], Awaitable[None]]
+
+
 async def answer_question(
     ctx: ToolContext,
     question: str,
     settings: Settings,
     client: anthropic.AsyncAnthropic | None = None,
+    on_event: EventSink | None = None,
 ) -> AgentResult:
     """Run the agent on one question. Never raises for model behavior
     (refusal, truncation, budgets) -- those come back as the result's
     status. API errors raise ExtractionError subclasses, classified the
-    same way as the rest of the app's model calls."""
+    same way as the rest of the app's model calls.
+
+    on_event, when given, is awaited with the run's progress as it
+    happens -- {"type": "model_call", step, cost_usd, stop_reason} after
+    each model call, {"type": "tool_start", name, input} before each tool
+    runs and {"type": "tool_call", name, input, is_error, result_summary}
+    after -- so POST /ask/stream can show the agent working instead of
+    ten silent seconds."""
+
+    async def emit(event: dict[str, Any]) -> None:
+        if on_event is not None:
+            await on_event(event)
+
     client = client or _build_client(settings)
     model = settings.agent_model
     options = _request_options(settings)
@@ -337,6 +354,14 @@ async def answer_question(
             result.output_tokens += response.usage.output_tokens
             result.cache_read_input_tokens += getattr(response.usage, "cache_read_input_tokens", None) or 0
             result.cost_usd += cost
+            await emit(
+                {
+                    "type": "model_call",
+                    "step": result.steps,
+                    "cost_usd": result.cost_usd,
+                    "stop_reason": response.stop_reason,
+                }
+            )
 
             if response.stop_reason == "refusal":
                 details = getattr(response, "stop_details", None)
@@ -369,9 +394,11 @@ async def answer_question(
             # All results go back in ONE user message, as the API expects.
             tool_results = []
             for block in tool_uses:
+                await emit({"type": "tool_start", "name": block.name, "input": dict(block.input or {})})
                 tool_result, call = await _run_tool(ctx, block)
                 tool_results.append(tool_result)
                 result.tool_calls.append(call)
+                await emit({"type": "tool_call", **asdict(call)})
             messages.append({"role": "user", "content": tool_results})
 
         result.latency_ms = int((time.perf_counter() - start) * 1000)

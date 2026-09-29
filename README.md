@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-413 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+417 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -227,7 +227,9 @@ Known gaps -- `run_retrieval.py` prints the hardest queries after every run, and
 
 **The loop** (`app/agent/loop.py`) is hand-written rather than the SDK's beta tool runner, because every step needs a hand on it: a GenAI `chat` span with real timing, the step cap (8) and dollar cap ($0.25 per question) checked between calls, and tool failures returned as `is_error` results the model can recover from rather than ending the run. It runs Claude Opus 5.5 at an explicit `effort: medium` (the API default on this model, pinned so it can't drift), with automatic prompt caching -- each step re-sends the conversation, so everything but the newest turn is a cache read, and cache reads/writes are priced into the reported cost -- and server-side refusal fallback (`fallbacks: "default"`), so a safety-classifier false positive on a receipt question is retried on Anthropic's recommended fallback model instead of failing; a response served by the fallback is priced at that model's rates. Refusal, truncation, and both budgets come back as a `status`, never an exception. Forced tool choice isn't used (Opus 5.5 rejects it); the tools are `strict`, so arguments are always schema-valid.
 
-The frontend's **Ask** page (`/ask`) shows the answer with each `[n]` linked to its source passage or extracted fields, the tool calls the agent made to get there, a *was this right?* control, and recent questions -- reopened from the database, not re-asked (see [Online evaluation](#online-evaluation-grading-live-answers)). (No screenshot yet: like the agent eval, it needs a live API key.)
+`POST /ask/stream` is the same run as server-sent events, so a 10-20 second, multi-step answer isn't ten silent seconds: a `model_call` event per model call (step number, running cost), `tool_start` / `tool_call` around each tool, then one `answer` event carrying the stored run -- the same body `POST /ask` returns -- or an `error`. Everything that can refuse the question (no key, the daily budget, validation) is checked before the stream starts and answers with its normal status code. A client that disconnects doesn't cancel the run: the steps already taken are billed, so it finishes (capped per question) and is stored, which keeps it counted against the daily budget.
+
+The frontend's **Ask** page (`/ask`) streams the agent's progress live, then shows the answer with each `[n]` linked to its source passage or extracted fields, the tool calls the agent made to get there, a *was this right?* control, and recent questions -- reopened from the database, not re-asked (see [Online evaluation](#online-evaluation-grading-live-answers)). (No screenshot yet: like the agent eval, it needs a live API key.)
 
 In a trace, one question is an `invoke_agent doc-pilot-ask` span with a `chat claude-opus-5-5` span per model call and an `execute_tool <name>` span per tool call -- the agent's plan, with the cost of each step ([Tracing](#tracing)).
 
