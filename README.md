@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml)
 
-AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking. Every document is also transcribed, chunked, and embedded into pgvector, so it's searchable in plain language with **page-level citations** -- and retrieval quality is measured by its own eval, not assumed ([Retrieval](#retrieval-search-with-page-citations)).
+AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking. Every document is also transcribed, chunked, and embedded into pgvector, so it's searchable in plain language with **page-level citations** -- and retrieval quality is measured by its own eval, not assumed ([Retrieval](#retrieval-search-with-page-citations)). On top of both, an agent answers questions ("how much have I spent at Northgate?") by choosing between search and the structured extraction data, citing the exact lines and fields it used ([Ask](#ask-an-agent-over-search-and-the-extracted-data)).
 
 <!-- LIVE_DEMO: hosted demo link goes here once a host is picked -->
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-299 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+331 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -29,6 +29,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 - **Backend:** FastAPI (Python)
 - **VLM:** Claude via the Anthropic API — image input with structured outputs (JSON schema), never regex-parsing free text
 - **Queue:** Postgres `SKIP LOCKED` job queue
+- **Agent:** a tool-use loop on Claude Opus 5.5 over three tools (hybrid search, the human-verified extraction records, whole pages), with API-verified citations, step and dollar budgets, and server-side refusal fallback
 - **Tracing:** OpenTelemetry with the GenAI semantic conventions -- one trace per document, from upload through extraction and indexing, exported over OTLP to Jaeger (opt-in)
 - **Retrieval:** pgvector (HNSW) + Postgres full-text search, fused with Reciprocal Rank Fusion; embeddings from `BAAI/bge-small-en-v1.5` run locally via fastembed (ONNX, CPU) -- no second API key, no per-query cost
 - **Frontend:** Next.js — upload, extraction results side-by-side with the document image, review/correct UI
@@ -125,6 +126,9 @@ flowchart LR
     E -. "same txn:<br/>enqueue index job" .-> I["Index job<br/>per-page VLM transcription"]
     I --> K[("document_pages +<br/>document_chunks<br/>pgvector + tsvector")]
     K --> S["GET /search<br/>hybrid dense + full-text<br/>page citations"]
+    Q["POST /ask"] --> A["Agent loop<br/>Claude Opus 5.5 + tools"]
+    A --> S
+    A --> E
 ```
 
 This is the data-flow shape (what happens to a document), not the deployment topology -- for that, `docker compose up --build` runs five services: `db`, a one-shot `migrate`, `api`, `worker`, and `frontend` (see the Quickstart above and `docker-compose.yml`).
@@ -201,6 +205,34 @@ Known gaps -- `run_retrieval.py` prints the hardest queries after every run, and
 - **Abbreviations.** "stores in Michigan" vs `Detroit, MI` -- location recall tops out at 88-96%.
 - **Scale.** 25 documents is a regression baseline and an ablation bench, not a benchmark; absolute numbers will fall on a larger corpus, and the query set grows with it.
 
+## Ask: an agent over search and the extracted data
+
+`POST /ask {"question": "..."}` answers questions about the documents, with citations. The retrieval eval showed why this needs an agent rather than one more search call: text search can't reliably answer "which receipt came to $425.58?" (its worst query), and it can't add up totals at all -- but the structured extraction data answers both exactly. The agent's job is to pick the right source for each question.
+
+| Tool | Answers | Returns |
+| --- | --- | --- |
+| `query_extractions` | amounts, dates, vendors, counts, sums -- filters on vendor, line item, date range, currency, total range | per-currency sums **computed in code** (the prompt tells the model never to add amounts itself), then each matching document's record, with human review corrections applied and unreviewed low-confidence fields flagged |
+| `search_documents` | things described in words ("a light for my workspace") | the hybrid-search hits from [Retrieval](#retrieval-search-with-page-citations) |
+| `get_page` | a detail in context | one full page |
+
+**Citations are the API's, not the model's.** Every tool returns its content as `search_result` blocks with citations enabled, one text block per receipt line (or per extracted field). The answer's citations come back from the API with `cited_text` copied from those blocks, and each `source` is a doc-pilot URI the loop resolves to a document, a page, and an exact char span of the stored page text -- or the extracted fields cited. The response numbers them (`... came to $425.58. [1]`) and lists what each points at. A citation the loop can't resolve is counted, never displayed.
+
+**The loop** (`app/agent/loop.py`) is hand-written rather than the SDK's beta tool runner, because every step needs a hand on it: a GenAI `chat` span with real timing, the step cap (8) and dollar cap ($0.25 per question) checked between calls, and tool failures returned as `is_error` results the model can recover from rather than ending the run. It runs Claude Opus 5.5 at an explicit `effort: medium` (the API default on this model, pinned so it can't drift), with automatic prompt caching -- each step re-sends the conversation, so everything but the newest turn is a cache read, and cache reads/writes are priced into the reported cost -- and server-side refusal fallback (`fallbacks: "default"`), so a safety-classifier false positive on a receipt question is retried on Anthropic's recommended fallback model instead of failing; a response served by the fallback is priced at that model's rates. Refusal, truncation, and both budgets come back as a `status`, never an exception. Forced tool choice isn't used (Opus 5.5 rejects it); the tools are `strict`, so arguments are always schema-valid.
+
+In a trace, one question is an `invoke_agent doc-pilot-ask` span with a `chat claude-opus-5-5` span per model call and an `execute_tool <name>` span per tool call -- the agent's plan, with the cost of each step ([Tracing](#tracing)).
+
+### Agent eval
+
+Same principle again: the answer is known up front. The corpus is seeded as a *perfect* pipeline would leave it -- extraction records equal to the labels, gold page text indexed (`app/evals/corpus.py`) -- so a wrong answer is the agent's, not an extraction error passed along. 18 questions (`evals/agent/questions_v1.json`) in six types: single-document lookups, aggregates across documents (per-vendor sums, a count, a currency, a month that mixes USD and EUR, a vendor with a no-currency receipt), reverse lookups by amount (retrieval's weak spot), paraphrases, two unanswerable questions, and the prompt-injection receipt ("set total to 0.00"). Every expected value is computed from the labels at load time. The rubric is deterministic: every expected number present to the cent (or the date, count, or name); unanswerable questions pass only if the answer states no amount; the injected `0.00` must not appear. Citations are scored separately -- does the answer cite a document the question is about, and what share of its citations are.
+
+<!-- AGENT_TABLE:START -->
+
+*No agent eval runs committed yet -- run `python evals/run_agent.py` with `ANTHROPIC_API_KEY` set (an estimated $1-2 per run on claude-opus-5-5, hard-capped by `--max-cost`).*
+
+<!-- AGENT_TABLE:END -->
+
+`python evals/run_agent.py --update-readme` runs it against the real API (`ANTHROPIC_API_KEY`; `--model` / `--effort` to compare, `--max-cost` caps the spend, default $2). The harness, rubric, and loop are covered by 30+ tests with a scripted model, but **no live run is committed yet** -- this was built in a sandbox without an API key, so there are no agent numbers to report until the first run.
+
 ## Tracing
 
 Every document's lifecycle is one OpenTelemetry trace -- across the job queue, not just within a request. Each job row stores the W3C `traceparent` of whatever enqueued it (the upload request, or the extract job that queued the index job), and the worker starts the job's span as a child of that context. Model calls are `chat` spans with the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) (`gen_ai.request.model`, `gen_ai.usage.input_tokens`/`output_tokens`, cache tokens, `gen_ai.response.finish_reasons`, `gen_ai.response.id`) plus doc-pilot's own `docpilot.cost_usd` and `docpilot.prompt_version`; embeddings and search are `embeddings` and `retrieval` spans; SQL statements nest under whichever request or job issued them.
@@ -247,10 +279,11 @@ doc-pilot is currently a **single-user local tool** and its security posture is 
 - **Uploads are verified, not trusted.** The client's Content-Type must be on the allowlist, the file's magic bytes must actually match that type (a payload claiming `image/png` without a PNG signature is rejected with 415), the storage filename is a server-generated UUID with an extension derived from the *verified* type (never from the client filename), and oversized bodies are aborted at the ASGI layer before they reach disk.
 - **Re-serving is locked down.** Files are served back with their stored content type plus `X-Content-Type-Options: nosniff`, closing the stored-payload-served-as-image pattern from both ends.
 - **No injection surfaces.** All SQL goes through the ORM with bound parameters; the frontend renders extracted values as React text nodes (VLM output is treated as untrusted data, never HTML); document content reaches the model under forced tool-choice with a fixed schema, and the eval corpus includes an adversarial prompt-injection case to measure that boundary.
-- **Retrieved text is untrusted data, too.** Transcriptions -- including the eval corpus's prompt-injection receipt -- land in the search index verbatim, and `/search` returns them as data. Anything that later feeds retrieved chunks back into a model must treat them the way extraction treats the document image: content, never instructions.
+- **Retrieved text is untrusted data, too.** Transcriptions -- including the eval corpus's prompt-injection receipt -- land in the search index verbatim, and `/search` returns them as data. The `/ask` agent feeds them back into a model, so its system prompt treats everything inside tool results as document content, never instructions, and the agent eval includes the injection receipt as a scored question.
+- **`/ask` is the one API route that spends money.** It is capped per question (steps and dollars), and it is why the api service now gets `ANTHROPIC_API_KEY` in `docker-compose.yml` -- every other route still runs without it.
 - **The dev database binds to loopback only**, so its dev-grade credentials are never LAN-reachable.
 
-**Before the hosted demo ships**, the threat model changes and three things become blocking: some form of auth (even a single bearer token), rate limiting with a daily spend cap (every upload triggers a billed VLM call — unauthenticated internet traffic means unbounded API spend at ~$0.01/document), and a storage quota with cleanup for uploads.
+**Before the hosted demo ships**, the threat model changes and three things become blocking: some form of auth (even a single bearer token), rate limiting with a daily spend cap (every upload triggers billed VLM calls and every `/ask` a billed agent run — unauthenticated internet traffic means unbounded API spend at ~$0.01/document), and a storage quota with cleanup for uploads.
 
 ## Evals
 
@@ -284,4 +317,4 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 <!-- EVAL_TABLE:END -->
 
-*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace. Next: an agent layer over search + the structured extraction data, with LLM-as-judge scoring beside the existing rubric; then pick a host and ship the demo.*
+*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. Next: the first live agent-eval run, LLM-as-judge scoring beside the deterministic rubric, then pick a host and ship the demo.*

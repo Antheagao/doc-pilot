@@ -79,6 +79,13 @@ PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-sonnet-5": (2.00, 10.00),
     "claude-opus-5": (5.00, 25.00),
     "claude-haiku-4-5": (1.00, 5.00),
+    # Added with the /ask agent (app/agent/), from the claude-api skill's
+    # model table (cached 2026-09-25). claude-opus-4-8 is here because it
+    # is where server-side refusal fallbacks route some declines, and a
+    # response served by the fallback is priced at the fallback's rates.
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-opus-4-8": (5.00, 25.00),
 }
 
 # The tool's top-level fields, in the order ExtractedField rows are

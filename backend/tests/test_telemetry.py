@@ -425,3 +425,39 @@ async def test_worker_claim_poll_emits_no_spans(spans) -> None:
 
     assert claimed is False
     assert spans.get_finished_spans() == ()
+
+
+async def test_agent_run_is_an_invoke_agent_span_over_chat_and_tool_spans(
+    db_session: AsyncSession, spans
+) -> None:
+    from types import SimpleNamespace
+
+    from app.agent.loop import answer_question
+    from app.agent.tools import ToolContext
+
+    usage = SimpleNamespace(
+        input_tokens=900, output_tokens=120, cache_read_input_tokens=0, cache_creation_input_tokens=0
+    )
+    tool_use = SimpleNamespace(type="tool_use", id="toolu_9", name="query_extractions", input={})
+    responses = [
+        SimpleNamespace(id="m1", model="claude-opus-5-5", content=[tool_use], stop_reason="tool_use", stop_details=None, usage=usage),
+        SimpleNamespace(id="m2", model="claude-opus-5-5", content=[_Text("None found.")], stop_reason="end_turn", stop_details=None, usage=usage),
+    ]
+    client = SimpleNamespace(
+        beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(side_effect=responses)))
+    )
+    ctx = ToolContext(session=db_session, embedder=HashingEmbedder(), document_ids=[])
+
+    result = await answer_question(ctx, "q", Settings(agent_model="claude-opus-5-5"), client)
+
+    (agent,) = _named(spans, "invoke_agent doc-pilot-ask")
+    chats = _named(spans, "chat claude-opus-5-5")
+    (tool,) = _named(spans, "execute_tool query_extractions")
+    assert len(chats) == 2
+    assert all(chat.parent.span_id == agent.context.span_id for chat in chats)
+    assert tool.parent.span_id == agent.context.span_id
+    assert tool.attributes["gen_ai.tool.call.id"] == "toolu_9"
+    assert agent.attributes["gen_ai.operation.name"] == "invoke_agent"
+    assert agent.attributes["docpilot.agent.status"] == "answered"
+    assert agent.attributes["docpilot.agent.tool_calls"] == 1
+    assert result.trace_id == format(agent.context.trace_id, "032x")

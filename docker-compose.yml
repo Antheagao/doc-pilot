@@ -61,6 +61,10 @@ services:
       # Tracing is off unless this is set -- see the `jaeger` service.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: doc-pilot-api
+      # Only POST /ask (the question-answering agent, app/agent/) calls the
+      # model from the API process; every other route runs without it, and
+      # /ask returns 503 when this is empty.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - uploads:/data/uploads
       - models:/data/models
@@ -82,9 +86,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
       # Must match api's UPLOAD_DIR -- see the comment there.
       UPLOAD_DIR: /data/uploads
-      # Worker only: it's the one that calls the VLM (app/extraction.py).
-      # The API process never touches the model, so it doesn't get this
-      # key -- least privilege.
+      # The worker calls the model for extraction and transcription; the
+      # api service needs the key too, but only for POST /ask (see there).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # fastembed downloads BAAI/bge-small-en-v1.5 (~70 MB, ONNX) on first
       # use into this volume, shared with api, so it's fetched once rather

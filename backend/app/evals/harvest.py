@@ -35,7 +35,6 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.evals import dataset
 from app.extraction import TOP_LEVEL_FIELDS
 from app.models import Document, ExtractedField, Extraction
+from app.records import field_value
 
 HARVEST_SOURCE = "human-review"
 HARVEST_DIFFICULTY = "review"
@@ -100,39 +100,6 @@ def _existing_source_ids(labels_dir: Path) -> set[str]:
         if isinstance(source_id, str):
             seen.add(source_id)
     return seen
-
-
-def _semantic_leaf_value(stored: Any) -> Any:
-    """The plain value out of a stored {'value', 'confidence'} leaf."""
-    if isinstance(stored, dict) and "value" in stored:
-        return stored["value"]
-    return None
-
-
-def _semantic_line_items(stored: Any) -> list[dict[str, Any]] | None:
-    """Convert the stored line_items array (leaf-per-cell, see
-    app/extraction.py) into the plain rows the label format uses."""
-    if not isinstance(stored, list):
-        return None
-    rows: list[dict[str, Any]] = []
-    for item in stored:
-        cells = item if isinstance(item, dict) else {}
-        rows.append(
-            {
-                key: _semantic_leaf_value(cells.get(key))
-                for key in ("description", "quantity", "unit_price", "total")
-            }
-        )
-    return rows
-
-
-def _human_truth(field: ExtractedField) -> Any:
-    """The human-verified semantic value for one field."""
-    if field.review_action == "corrected":
-        return field.corrected_value
-    if field.field_name == "line_items":
-        return _semantic_line_items(field.value)
-    return _semantic_leaf_value(field.value)
 
 
 async def _reviewable_documents(
@@ -245,7 +212,7 @@ async def harvest_corrections(
 
         by_name = {f.field_name: f for f in fields}
         label_fields = {
-            name: _human_truth(by_name[name]) if name in by_name else None
+            name: field_value(by_name[name]) if name in by_name else None
             for name in TOP_LEVEL_FIELDS
         }
 

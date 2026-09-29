@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DocumentCreateResponse(BaseModel):
@@ -154,3 +154,54 @@ class SearchResponse(BaseModel):
     mode: Literal["dense", "lexical", "hybrid"]
     embedding_model: str
     results: list[SearchHitOut]
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+
+
+class CitationOut(BaseModel):
+    """One numbered source for the answer. `cited_text` is copied by the
+    API from the tool result, never written by the model. For a page
+    passage, char_start/char_end locate it in the page's stored text; for
+    an extraction record, `fields` names the fields cited."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    number: int
+    document_id: uuid.UUID
+    filename: str
+    page_number: int | None
+    kind: Literal["chunk", "page", "record"]
+    cited_text: str
+    char_start: int | None
+    char_end: int | None
+    fields: list[str]
+
+
+class ToolCallOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    input: dict[str, Any]
+    is_error: bool
+    result_summary: str
+
+
+class AskResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: Literal["answered", "refused", "truncated", "step_limit", "budget_exceeded"]
+    answer: str
+    citations: list[CitationOut]
+    tool_calls: list[ToolCallOut]
+    steps: int
+    model: str
+    prompt_version: str
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int
+    cost_usd: float
+    latency_ms: int
+    refusal_category: str | None
+    trace_id: str | None

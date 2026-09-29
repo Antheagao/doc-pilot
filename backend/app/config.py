@@ -89,6 +89,25 @@ class Settings(BaseSettings):
     # still carries the context of which document it came from.
     chunk_context_headers: bool = True
 
+    # --- /ask agent (app/agent/) -------------------------------------------
+    # Answers questions over the documents with tools: hybrid search, the
+    # structured (human-verified) extraction records, and whole pages.
+    agent_model: str = "claude-opus-5-5"
+    # Opus 5.5 thinks adaptively and can't turn it off; effort is the dial,
+    # and its API default is "medium" -- set explicitly so a default change
+    # upstream can't silently change cost or quality.
+    agent_effort: str = "medium"
+    agent_max_tokens: int = 16000
+    # Hard stops per question: model calls, and dollars across all of them.
+    # Hitting either returns what the agent has so far, marked as such.
+    agent_max_steps: int = 8
+    agent_max_cost_usd: float = 0.25
+    # Server-side refusal fallback (beta server-side-fallback-2026-07-01,
+    # fallbacks="default"): a classifier false positive on a receipt
+    # question is retried on Anthropic's recommended fallback model instead
+    # of failing the request. Claude API only -- turn off elsewhere.
+    agent_refusal_fallback: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:
