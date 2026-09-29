@@ -14,6 +14,7 @@ Run with the backend venv's interpreter, from the repo root:
 """
 
 import argparse
+import json
 import asyncio
 import sys
 from pathlib import Path
@@ -61,6 +62,25 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--out", default=None, help="output directory for the result JSON")
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="regression gate: compare this run to the newest committed artifact from the same "
+        "embedder and exit 1 if any shared metric fell by more than --tolerance (the new artifact "
+        "goes to a temp dir unless --out is given)",
+    )
+    parser.add_argument("--tolerance", type=float, default=0.005, help="for --check (default 0.005)")
+    parser.add_argument(
+        "--slack-queries", type=int, default=0, dest="slack_queries",
+        help="for --check: also allow this many queries' worth of change per query group "
+        "(cross-machine float noise; CI uses 1)",
+    )
+    parser.add_argument(
+        "--write-snapshot",
+        action="store_true",
+        help="write this run's metrics to evals/retrieval/snapshot_hashing_v1.json, the offline "
+        "baseline the test suite checks exactly (use with --embedder hashing)",
+    )
+    parser.add_argument(
         "--report-only",
         action="store_true",
         help="render the table from the latest artifact; run nothing",
@@ -99,17 +119,25 @@ def main() -> int:
     from app.evals.retrieval import (
         RETRIEVAL_END_MARKER,
         RETRIEVAL_START_MARKER,
+        SNAPSHOT_PATH,
+        compare_retrieval_results,
         load_gold_corpus,
         load_latest_retrieval_result,
+        load_latest_retrieval_result_for,
         load_queries,
         render_retrieval_table,
         run_retrieval_eval,
+        snapshot_of,
         write_retrieval_result,
     )
     from app.retrieval.embeddings import build_embedder
     from app.retrieval.indexing import ChunkingConfig
 
     out_dir = Path(args.out) if args.out else None
+    if args.check and out_dir is None:
+        import tempfile
+
+        out_dir = Path(tempfile.mkdtemp(prefix="retrieval-check-"))
 
     if not args.report_only:
         cases = load_cases()
@@ -153,6 +181,32 @@ def main() -> int:
         result = asyncio.run(run())
         path = write_retrieval_result(result, out_dir)
         print(f"wrote {path}\n")
+        fresh = result.to_dict()
+        if args.write_snapshot:
+            SNAPSHOT_PATH.write_text(json.dumps(snapshot_of(fresh), indent=2) + "\n", encoding="utf-8")
+            print(f"wrote {SNAPSHOT_PATH}\n")
+        if args.check:
+            baseline = load_latest_retrieval_result_for(fresh["embedder"])
+            if baseline is None:
+                print(f"error: no committed artifact for {fresh['embedder']} to check against", file=sys.stderr)
+                return 1
+            regressions, improvements = compare_retrieval_results(
+                fresh, baseline, tolerance=args.tolerance, slack_queries=args.slack_queries
+            )
+            any_change = sum(map(len, compare_retrieval_results(fresh, baseline, tolerance=0)))
+            print(
+                f"checked against run {baseline['started_at_utc']} (tolerance {args.tolerance}, "
+                f"slack {args.slack_queries} quer{'y' if args.slack_queries == 1 else 'ies'}); "
+                f"{any_change} metric(s) differ at all"
+            )
+            for line in improvements:
+                print(f"  improved:  {line}")
+            for line in regressions:
+                print(f"  REGRESSED: {line}")
+            if regressions:
+                print(f"\n{len(regressions)} metric(s) regressed beyond tolerance", file=sys.stderr)
+                return 1
+            print("  no regressions\n")
 
     latest = load_latest_retrieval_result(out_dir)
     if latest is None:

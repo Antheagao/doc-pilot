@@ -68,9 +68,11 @@ class Settings(BaseSettings):
     # Both produce EMBEDDING_DIM-dimensional vectors (app/models.py).
     embedding_backend: str = "fastembed"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
-    # Where fastembed caches downloaded model files. None uses fastembed's
-    # own default (a temp directory); docker-compose.yml points it at a
-    # shared volume so the model downloads once, not per container start.
+    # Where downloaded model files are kept. None means a temp directory;
+    # docker-compose.yml points it at a shared volume so the model
+    # downloads once, not per container start. The default model is pinned
+    # to one checksummed archive -- the one the retrieval eval measured --
+    # see app/retrieval/model_fetch.py.
     embedding_cache_dir: str | None = None
     # A local directory holding an already-downloaded ONNX export of
     # embedding_model, bypassing the download entirely (air-gapped hosts).

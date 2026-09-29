@@ -125,3 +125,30 @@ def test_warm_up_embedder_never_raises(monkeypatch: pytest.MonkeyPatch, caplog) 
     embeddings_module.warm_up_embedder()  # must not raise
 
     assert "warm-up failed" in caplog.text
+
+
+def test_the_pinned_model_is_loaded_unless_a_path_is_given(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    import types
+
+    from app.retrieval import model_fetch
+
+    loaded: list[dict] = []
+
+    class FakeTextEmbedding:
+        embedding_size = EMBEDDING_DIM
+
+        def __init__(self, name, **kwargs):
+            loaded.append(kwargs)
+
+    monkeypatch.setitem(sys.modules, "fastembed", types.SimpleNamespace(TextEmbedding=FakeTextEmbedding))
+    fetched: list[tuple] = []
+    monkeypatch.setattr(
+        model_fetch, "ensure_pinned_model",
+        lambda name, dest: fetched.append((name, dest)) or tmp_path / "pinned",
+    )
+
+    FastEmbedEmbedder("BAAI/bge-small-en-v1.5", cache_dir="/models")._load()
+    FastEmbedEmbedder("BAAI/bge-small-en-v1.5", model_path="/air-gapped/copy")._load()
+
+    assert fetched == [("BAAI/bge-small-en-v1.5", "/models")]
+    assert [kwargs["specific_model_path"] for kwargs in loaded] == [str(tmp_path / "pinned"), "/air-gapped/copy"]

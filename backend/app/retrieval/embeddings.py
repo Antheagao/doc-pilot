@@ -133,9 +133,13 @@ class FastEmbedEmbedder:
             # should have to import.
             from fastembed import TextEmbedding
 
-            kwargs = {}
-            if self._model_path:
-                kwargs["specific_model_path"] = self._model_path
+            from app.retrieval.model_fetch import ensure_pinned_model
+
+            # An explicit local copy wins; otherwise a pinned model is
+            # fetched and checksummed (the exact archive the retrieval eval
+            # measured), and anything else is left to fastembed's download.
+            model_path = self._model_path or ensure_pinned_model(self._model_name, self._cache_dir)
+            kwargs = {"specific_model_path": str(model_path)} if model_path else {}
             model = TextEmbedding(self._model_name, cache_dir=self._cache_dir, **kwargs)
             if model.embedding_size != self.dim:
                 raise ValueError(

@@ -85,6 +85,11 @@ def _or_tsquery(query: str):
     return cast(func.replace(and_query, " & ", " | "), TSQUERY)
 
 
+# Extra rows the dense index scan fetches so that ties at the cutoff are
+# broken deterministically rather than by scan order.
+_TIE_MARGIN = 10
+
+
 async def _dense_ranking(
     session: AsyncSession,
     query_vector: list[float],
@@ -95,9 +100,35 @@ async def _dense_ranking(
         select(func.set_config("hnsw.ef_search", str(max(limit, 40)), True))
     )
     distance = DocumentChunk.embedding.cosine_distance(query_vector)
-    stmt = select(DocumentChunk.id, distance.label("distance")).order_by(distance).limit(limit)
+    # The inner query is the shape the HNSW index serves (ORDER BY distance
+    # LIMIT n, filters applied to what it yields). A chunk with cosine
+    # similarity <= 0 shares nothing with the query and isn't a match.
+    candidates = (
+        select(
+            DocumentChunk.id,
+            DocumentChunk.document_id,
+            DocumentChunk.page_number,
+            DocumentChunk.chunk_index,
+            distance.label("distance"),
+        )
+        .where(distance < 1.0)
+        .order_by(distance)
+        .limit(limit + _TIE_MARGIN)
+    )
     if document_ids is not None:
-        stmt = stmt.where(DocumentChunk.document_id.in_(document_ids))
+        candidates = candidates.where(DocumentChunk.document_id.in_(document_ids))
+    ranked = candidates.subquery()
+    # Equal distances are real (identical chunk text embeds identically),
+    # and Postgres returns ties in whatever order the scan produced them,
+    # so the same query could rank differently from one call to the next.
+    # Ties are broken here, outside the index scan -- a second sort key on
+    # the scan itself would stop Postgres using the HNSW index at all.
+    stmt = (
+        select(ranked.c.id, ranked.c.distance)
+        .join(Document, Document.id == ranked.c.document_id)
+        .order_by(ranked.c.distance, Document.filename, ranked.c.page_number, ranked.c.chunk_index)
+        .limit(limit)
+    )
     rows = (await session.execute(stmt)).all()
     return [(row.id, 1.0 - float(row.distance)) for row in rows]
 

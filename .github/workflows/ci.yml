@@ -43,6 +43,55 @@ jobs:
       - name: Test
         run: pytest -q
 
+  retrieval-eval:
+    # The real-model regression gate: re-run the retrieval eval with the
+    # pinned bge-small model (app/retrieval/model_fetch.py) and fail if any
+    # metric the newest committed artifact measured fell by more than
+    # 0.005 plus one query's worth per query group -- the slack absorbs
+    # ONNX float differences between CPUs, which can swap near-tied chunks.
+    # (The test suite checks the offline eval against its snapshot exactly.)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: docpilot
+          POSTGRES_PASSWORD: docpilot
+          POSTGRES_DB: docpilot
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U docpilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      EMBEDDING_CACHE_DIR: ${{ github.workspace }}/.models
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e .[dev]
+      - name: Migrate
+        run: alembic upgrade head
+      - name: Cache the pinned embedding model
+        uses: actions/cache@v4
+        with:
+          path: .models
+          key: embedding-model-${{ hashFiles('backend/app/retrieval/model_fetch.py') }}
+      - name: Fetch the pinned embedding model
+        run: python scripts/fetch_embedding_model.py
+      - name: Retrieval eval against the committed artifact
+        run: >-
+          python ../evals/run_retrieval.py --embedder fastembed
+          --chunk-sizes 0,200 --headers both --check --slack-queries 1
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

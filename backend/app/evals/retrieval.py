@@ -53,6 +53,9 @@ from app.retrieval.search import SEARCH_MODES, LexicalScoring, SearchMode, searc
 TEXT_DIR = EVALS_DIR / "text"
 QUERIES_PATH = EVALS_DIR / "retrieval" / "queries_v1.json"
 RESULTS_DIR = EVALS_DIR / "results" / "retrieval"
+# The offline (hashing-embedder) eval's committed metrics, checked exactly
+# by the test suite -- see snapshot_of / compare_retrieval_results.
+SNAPSHOT_PATH = EVALS_DIR / "retrieval" / "snapshot_hashing_v1.json"
 
 RECALL_KS = (1, 3, 5, 10)
 NDCG_K = 10
@@ -443,3 +446,99 @@ def load_latest_retrieval_result(results_dir: Path | None = None) -> dict[str, A
     if not paths:
         return None
     return json.loads(paths[-1].read_text(encoding="utf-8"))
+
+
+def load_latest_retrieval_result_for(
+    embedder: str, results_dir: Path | None = None
+) -> dict[str, Any] | None:
+    """The newest committed artifact measured with `embedder`."""
+    for path in sorted((results_dir or RESULTS_DIR).glob("*.json"), reverse=True):
+        result = json.loads(path.read_text(encoding="utf-8"))
+        if result["embedder"] == embedder:
+            return result
+    return None
+
+
+# --- regression gates -----------------------------------------------------------
+
+
+def snapshot_of(result: dict[str, Any]) -> dict[str, Any]:
+    """A result without its per-query detail: what a regression check
+    compares, small enough to commit and diff."""
+    return {
+        "embedder": result["embedder"],
+        "query_set_version": result["query_set_version"],
+        "dataset_version": result["dataset_version"],
+        "n_docs": result["n_docs"],
+        "n_queries": result["n_queries"],
+        "configs": [
+            {key: config[key] for key in ("mode", "chunking", "lexical_scoring", "overall", "by_type", "citation_integrity")}
+            for config in result["configs"]
+        ],
+    }
+
+
+def _config_key(config: dict[str, Any]) -> tuple:
+    chunking = config["chunking"]
+    return (
+        config["mode"],
+        config.get("lexical_scoring"),
+        chunking["max_chars"],
+        chunking["overlap_chars"],
+        chunking["context_headers"],
+    )
+
+
+def compare_retrieval_results(
+    fresh: dict[str, Any], baseline: dict[str, Any], *, tolerance: float, slack_queries: int = 0
+) -> tuple[list[str], list[str]]:
+    """(regressions, improvements): every metric -- overall and per query
+    type -- of every config both runs measured, that moved by more than
+    `tolerance` plus `slack_queries` queries' worth of it (slack / n for a
+    group of n queries). Runs that can't be compared (another embedder,
+    query set or dataset, or no config in common) are a regression, not a
+    pass.
+
+    Slack is for comparing across machines: ONNX floats can differ in the
+    last bits between CPUs, enough to swap two near-tied chunks, and one
+    swapped query in a 5-query group moves its recall by 0.2. One query of
+    slack absorbs that; a real regression moves more than one query."""
+    regressions: list[str] = []
+    improvements: list[str] = []
+    for key in ("embedder", "query_set_version", "dataset_version"):
+        if fresh[key] != baseline[key]:
+            regressions.append(f"not comparable: {key} {fresh[key]!r} vs baseline {baseline[key]!r}")
+    if regressions:
+        return regressions, improvements
+
+    base = {_config_key(config): config for config in baseline["configs"]}
+    shared = 0
+    for config in fresh["configs"]:
+        other = base.get(_config_key(config))
+        if other is None:
+            continue
+        shared += 1
+        label = f"{config['mode']} ({config.get('lexical_scoring')}) {_chunking_label(config['chunking'])}"
+        if config["citation_integrity"] < other["citation_integrity"]:
+            regressions.append(
+                f"{label}: citation integrity {config['citation_integrity']:.3f} < {other['citation_integrity']:.3f}"
+            )
+        scopes = [("overall", config["overall"], other["overall"])] + [
+            (query_type, scores, other["by_type"].get(query_type))
+            for query_type, scores in sorted(config["by_type"].items())
+        ]
+        for scope, scores, base_scores in scopes:
+            if base_scores is None:
+                continue
+            threshold = tolerance + slack_queries / max(scores["n"], 1)
+            for metric in _metric_keys():
+                delta = scores[metric] - base_scores[metric]
+                line = f"{label} {scope} {metric}: {base_scores[metric]:.4f} -> {scores[metric]:.4f} ({delta:+.4f})"
+                if delta < -threshold:
+                    regressions.append(line)
+                elif delta > threshold:
+                    improvements.append(line)
+    if shared == 0:
+        regressions.append("not comparable: no search config in common with the baseline")
+    return regressions, improvements
+

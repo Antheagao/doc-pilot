@@ -358,3 +358,32 @@ async def test_chunks_reindexed_mid_search_are_skipped_not_a_500(
     hits = await _search(db_session, "ceramic mug", ids, mode="lexical")
 
     assert hits and hits[0].filename == "bakery.png"
+
+
+async def test_dense_ties_rank_the_same_way_every_time(db_session: AsyncSession) -> None:
+    """Identical text embeds identically; equal distances are ordered by
+    document name, page and chunk, not by whatever the scan produced."""
+    ids = await _index_texts(
+        db_session,
+        {name: "Ceramic Mug 12oz  2  $6.00" for name in ("c.png", "a.png", "b.png")},
+    )
+
+    rankings = {
+        tuple(hit.filename for hit in await _search(db_session, "ceramic mug", ids, mode="dense"))
+        for _ in range(3)
+    }
+
+    assert rankings == {("a.png", "b.png", "c.png")}
+
+
+async def test_dense_search_skips_chunks_that_share_nothing_with_the_query(
+    db_session: AsyncSession,
+) -> None:
+    ids = await _index_texts(
+        db_session,
+        {"mug.png": "Ceramic Mug 12oz  2  $6.00", "unrelated.png": "Zzyzx Qwv"},
+    )
+
+    hits = await _search(db_session, "ceramic mug", ids, mode="dense")
+
+    assert [hit.filename for hit in hits] == ["mug.png"]
