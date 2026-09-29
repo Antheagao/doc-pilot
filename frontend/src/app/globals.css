@@ -751,3 +751,235 @@ textarea:focus-visible,
   color: var(--muted);
   text-decoration: line-through;
 }
+
+/* ---- Header navigation ---- */
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.nav-link {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.nav-link:hover {
+  color: var(--accent);
+}
+
+/* ---- Search and Ask ---- */
+
+.page-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.query-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.query-input {
+  flex: 1 1 18rem;
+  min-width: 0;
+  font-size: 0.95rem;
+  padding: 0.6rem 0.8rem;
+}
+
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+
+.mode-option {
+  padding: 0.45rem 0.75rem;
+  border: 0;
+  background: var(--background);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mode-option + .mode-option {
+  border-left: 1px solid var(--border);
+}
+
+.mode-option.active {
+  background: var(--confidence-ok-bg);
+  color: var(--confidence-ok-fg);
+}
+
+.example-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.example-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.example-chip {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.example-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.muted-inline {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+
+.hit-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.hit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.hit-doc {
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.hit-doc:hover {
+  color: var(--accent);
+}
+
+.hit-page {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.rank-chips {
+  display: inline-flex;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+
+.rank-chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--confidence-ok-border);
+  background: var(--confidence-ok-bg);
+  color: var(--confidence-ok-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Receipt text is column-aligned; keep it that way, but never let it
+   push the page wider than the viewport. */
+.passage {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-control);
+  background: var(--background);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.answer-card {
+  margin-top: 1.25rem;
+}
+
+.answer-text {
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.cite-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  margin-left: 0.2rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.7rem;
+  font-weight: 700;
+  vertical-align: text-top;
+}
+
+.cite-marker.static {
+  margin-left: 0;
+}
+
+.tool-trail {
+  list-style: decimal;
+  padding-left: 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.tool-trail li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+  align-items: baseline;
+}
+
+.tool-name {
+  font-weight: 700;
+}
+
+.tool-input {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tool-summary {
+  color: var(--muted);
+}
+
+.tool-error .tool-name {
+  color: var(--status-failed);
+}
+
+.answer-meta {
+  margin-top: 1.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}

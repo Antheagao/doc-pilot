@@ -24,6 +24,14 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 *Upload via drag-and-drop, with a live stats strip — documents processed, average cost per document, p50/p95 latency, pending review count — and documents polled live through `uploaded` → `processing` → `extracted`.*
 
+<img src="screenshots/search-hybrid.png" width="900" alt="The Search page: the query 'a light for my workspace' in hybrid mode returns the LED Desk Lamp lines from two receipts first, each result showing its document, page, and the rank each retriever gave it">
+
+*Search in plain language: "a light for my workspace" shares no words with "LED Desk Lamp", so full-text search misses it and the embeddings find it -- the chips on each hit show which retriever ranked it where. Each result is the exact passage that matched, with its page.*
+
+<img src="screenshots/search-amount.png" width="900" alt="The Search page in keywords mode: '27.82 euros' finds the Berlin bakery receipt printed as '27,82 EUR'">
+
+*Keywords mode: "27.82 euros" finds a receipt printed as `27,82 EUR`, because chunks and queries carry the same canonical amount and currency forms ([why](#retrieval-eval)).*
+
 ## Stack
 
 - **Backend:** FastAPI (Python)
@@ -32,7 +40,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 - **Agent:** a tool-use loop on Claude Opus 5.5 over three tools (hybrid search, the human-verified extraction records, whole pages), with API-verified citations, step and dollar budgets, and server-side refusal fallback
 - **Tracing:** OpenTelemetry with the GenAI semantic conventions -- one trace per document, from upload through extraction and indexing, exported over OTLP to Jaeger (opt-in)
 - **Retrieval:** pgvector (HNSW) + Postgres full-text search, fused with Reciprocal Rank Fusion; embeddings from `BAAI/bge-small-en-v1.5` run locally via fastembed (ONNX, CPU) -- no second API key, no per-query cost
-- **Frontend:** Next.js — upload, extraction results side-by-side with the document image, review/correct UI
+- **Frontend:** Next.js — upload, extraction results side-by-side with the document image, review/correct UI, search with per-retriever ranks, and an Ask page with linked citations
 
 ## Quickstart
 
@@ -219,6 +227,8 @@ Known gaps -- `run_retrieval.py` prints the hardest queries after every run, and
 **Citations are the API's, not the model's.** Every tool returns its content as `search_result` blocks with citations enabled, one text block per receipt line (or per extracted field). The answer's citations come back from the API with `cited_text` copied from those blocks, and each `source` is a doc-pilot URI the loop resolves to a document, a page, and an exact char span of the stored page text -- or the extracted fields cited. The response numbers them (`... came to $425.58. [1]`) and lists what each points at. A citation the loop can't resolve is counted, never displayed.
 
 **The loop** (`app/agent/loop.py`) is hand-written rather than the SDK's beta tool runner, because every step needs a hand on it: a GenAI `chat` span with real timing, the step cap (8) and dollar cap ($0.25 per question) checked between calls, and tool failures returned as `is_error` results the model can recover from rather than ending the run. It runs Claude Opus 5.5 at an explicit `effort: medium` (the API default on this model, pinned so it can't drift), with automatic prompt caching -- each step re-sends the conversation, so everything but the newest turn is a cache read, and cache reads/writes are priced into the reported cost -- and server-side refusal fallback (`fallbacks: "default"`), so a safety-classifier false positive on a receipt question is retried on Anthropic's recommended fallback model instead of failing; a response served by the fallback is priced at that model's rates. Refusal, truncation, and both budgets come back as a `status`, never an exception. Forced tool choice isn't used (Opus 5.5 rejects it); the tools are `strict`, so arguments are always schema-valid.
+
+The frontend's **Ask** page (`/ask`) shows the answer with each `[n]` linked to its source passage or extracted fields, and the tool calls the agent made to get there. (No screenshot yet: like the agent eval, it needs a live API key.)
 
 In a trace, one question is an `invoke_agent doc-pilot-ask` span with a `chat claude-opus-5-5` span per model call and an `execute_tool <name>` span per tool call -- the agent's plan, with the cost of each step ([Tracing](#tracing)).
 

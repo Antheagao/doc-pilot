@@ -5,7 +5,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "doc-pilot",
-  description: "Upload a document, watch a VLM extract structured data from it.",
+  description:
+    "Upload a document, watch a VLM extract structured data from it, then search and ask questions with citations.",
 };
 
 export default function RootLayout({
@@ -20,7 +21,15 @@ export default function RootLayout({
           <Link href="/" className="site-title">
             doc-pilot
           </Link>
-          <ReviewQueueLink />
+          <nav className="site-nav" aria-label="Main">
+            <Link href="/search" className="nav-link">
+              Search
+            </Link>
+            <Link href="/ask" className="nav-link">
+              Ask
+            </Link>
+            <ReviewQueueLink />
+          </nav>
         </header>
         <main className="site-main">{children}</main>
       </body>

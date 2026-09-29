@@ -226,3 +226,92 @@ export async function uploadDocument(file: File): Promise<DocumentCreateResponse
   });
   return handle<DocumentCreateResponse>(res);
 }
+
+// ---- Retrieval: GET /search ------------------------------------------------
+
+export type SearchMode = "hybrid" | "dense" | "lexical";
+
+// One retrieved chunk and its citation: `text` is exactly the page's
+// stored text at [char_start, char_end).
+export interface SearchHit {
+  chunk_id: string;
+  document_id: string;
+  filename: string;
+  page_number: number;
+  chunk_index: number;
+  char_start: number;
+  char_end: number;
+  text: string;
+  score: number;
+  dense_rank: number | null;
+  lexical_rank: number | null;
+}
+
+export interface SearchResponse {
+  query: string;
+  mode: SearchMode;
+  embedding_model: string;
+  results: SearchHit[];
+}
+
+export async function searchDocuments(
+  q: string,
+  mode: SearchMode = "hybrid",
+  k = 8
+): Promise<SearchResponse> {
+  const params = new URLSearchParams({ q, mode, k: String(k) });
+  const res = await fetch(`${API_URL}/search?${params}`, { cache: "no-store" });
+  return handle<SearchResponse>(res);
+}
+
+// ---- Agent: POST /ask -------------------------------------------------------
+
+export type AskStatus = "answered" | "refused" | "truncated" | "step_limit" | "budget_exceeded";
+
+// `cited_text` is copied by the API from the tool result, never written by
+// the model. Page passages carry a char span; extraction records name the
+// fields cited.
+export interface Citation {
+  number: number;
+  document_id: string;
+  filename: string;
+  page_number: number | null;
+  kind: "chunk" | "page" | "record";
+  cited_text: string;
+  char_start: number | null;
+  char_end: number | null;
+  fields: string[];
+}
+
+export interface ToolCall {
+  name: string;
+  input: Record<string, unknown>;
+  is_error: boolean;
+  result_summary: string;
+}
+
+export interface AskResponse {
+  status: AskStatus;
+  answer: string;
+  citations: Citation[];
+  tool_calls: ToolCall[];
+  steps: number;
+  model: string;
+  prompt_version: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cost_usd: number;
+  latency_ms: number;
+  refusal_category: string | null;
+  trace_id: string | null;
+}
+
+export async function askQuestion(question: string): Promise<AskResponse> {
+  const res = await fetch(`${API_URL}/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  return handle<AskResponse>(res);
+}
