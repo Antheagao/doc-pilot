@@ -48,7 +48,7 @@ from app.evals.dataset import EVALS_DIR, EvalCase
 from app.models import Document, DocumentPage
 from app.retrieval.embeddings import Embedder
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
-from app.retrieval.search import SEARCH_MODES, SearchMode, search
+from app.retrieval.search import SEARCH_MODES, LexicalScoring, SearchMode, search
 
 TEXT_DIR = EVALS_DIR / "text"
 QUERIES_PATH = EVALS_DIR / "retrieval" / "queries_v1.json"
@@ -188,6 +188,7 @@ def _mean_scores(per_query: list[dict[str, Any]]) -> dict[str, float]:
 class ConfigResult:
     mode: SearchMode
     chunking: dict[str, Any]
+    lexical_scoring: str
     n_chunks: int
     overall: dict[str, float]
     by_type: dict[str, dict[str, float]]
@@ -263,6 +264,7 @@ async def run_retrieval_eval(
     embedder: Embedder,
     chunking_configs: list[ChunkingConfig],
     modes: tuple[SearchMode, ...] = SEARCH_MODES,
+    lexical_scorings: tuple[LexicalScoring, ...] = ("idf",),
     query_set_version: str = "v1",
     dataset_version: str | None = None,
 ) -> RetrievalRunResult:
@@ -296,7 +298,9 @@ async def run_retrieval_eval(
 
             for chunking in chunking_configs:
                 n_chunks = await _index_corpus(session, doc_ids, corpus, embedder, chunking)
-                for mode in modes:
+                for mode, lexical_scoring in (
+                    (m, ls) for m in modes for ls in (lexical_scorings if m != "dense" else lexical_scorings[:1])
+                ):
                     per_query = []
                     latencies = []
                     all_hits = []
@@ -310,6 +314,7 @@ async def run_retrieval_eval(
                             mode=mode,
                             candidates=CHUNKS_PER_QUERY,
                             document_ids=scope,
+                            lexical_scoring=lexical_scoring,
                         )
                         latencies.append((time.perf_counter() - start) * 1000)
                         all_hits.extend(hits)
@@ -330,6 +335,7 @@ async def run_retrieval_eval(
                         ConfigResult(
                             mode=mode,
                             chunking=asdict(chunking),
+                            lexical_scoring=lexical_scoring,
                             n_chunks=n_chunks,
                             overall=_mean_scores(per_query),
                             by_type={
@@ -409,8 +415,9 @@ def render_retrieval_table(result: dict[str, Any]) -> str:
     rows = []
     for config in result["configs"]:
         overall = config["overall"]
+        scoring = config.get("lexical_scoring", "ts_rank")
         cells = [
-            config["mode"],
+            config["mode"] if config["mode"] == "dense" else f"{config['mode']} ({scoring})",
             _chunking_label(config["chunking"]),
             str(config["n_chunks"]),
             f"{100 * overall['recall@1']:.1f}%",

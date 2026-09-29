@@ -14,19 +14,23 @@ Every hit carries its citation: document, page number, and the chunk's
 char offsets into that page's stored text.
 """
 
+import math
 import uuid
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import Text, cast, func, select
+from sqlalchemy import Text, case, cast, func, literal, select, true
+from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.models import Document, DocumentChunk
 from app.retrieval.embeddings import Embedder
+from app.retrieval.normalize import normalize_query
 from app.telemetry import GEN_AI_DATA_SOURCE_ID, GEN_AI_OPERATION_NAME, tracer
 
 SearchMode = Literal["dense", "lexical", "hybrid"]
+LexicalScoring = Literal["idf", "ts_rank"]
 SEARCH_MODES: tuple[SearchMode, ...] = ("dense", "lexical", "hybrid")
 
 # The standard RRF constant (Cormack et al., 2009): damps the advantage of
@@ -94,29 +98,96 @@ async def _lexical_ranking(
     query: str,
     limit: int,
     document_ids: list[uuid.UUID] | None,
+    scoring: LexicalScoring = "idf",
 ) -> list[tuple[uuid.UUID, float]]:
+    """Full-text ranking over chunks matching any query term.
+
+    scoring="ts_rank" is Postgres's own ts_rank_cd, which has no notion
+    of how rare a term is: a query term that appears in every receipt
+    ("total", "receipt") counts exactly as much as one that appears in a
+    single chunk ("425.58"). scoring="idf" (the default, chosen by the
+    retrieval eval -- README "Retrieval eval") scores each chunk by the
+    summed IDF of the query terms it contains, BM25-style, with ts_rank_cd
+    only breaking ties. Chunks are short enough that term frequency and
+    length normalization barely vary, which is why IDF alone recovers most
+    of what BM25 would.
+    """
+    # Amounts rewritten canonically to meet the chunks' search_aliases
+    # (app/retrieval/normalize.py); the dense side embeds the raw query.
+    query = normalize_query(query)
     tsquery = _or_tsquery(query)
+    scope = DocumentChunk.document_id.in_(document_ids) if document_ids is not None else true()
     # Normalization 1 divides by 1 + log(chunk length), so a long chunk
     # doesn't outrank a short one just by containing more words.
-    rank = func.ts_rank_cd(DocumentChunk.tsv, tsquery, 1)
+    ts_rank = func.ts_rank_cd(DocumentChunk.tsv, tsquery, 1)
+
+    if scoring == "idf":
+        weights = await _term_idf(session, query, scope)
+        if not weights:
+            return []
+        score = sum(
+            (
+                case((DocumentChunk.tsv.op("@@")(cast(func.quote_literal(lexeme), TSQUERY)), idf), else_=0.0)
+                for lexeme, idf in weights.items()
+            ),
+            start=literal(0.0),
+        )
+    else:
+        score = ts_rank
+
     stmt = (
-        select(DocumentChunk.id, rank.label("rank"))
+        select(DocumentChunk.id, score.label("score"))
         .join(Document, Document.id == DocumentChunk.document_id)
-        .where(DocumentChunk.tsv.op("@@")(tsquery))
-        # Equal ranks are common in full-text scoring; break ties on a
-        # stable key so the same query always returns the same order.
+        .where(DocumentChunk.tsv.op("@@")(tsquery), scope)
+        # Equal scores are common in full-text scoring; break ties on
+        # ts_rank_cd, then a stable key, so the same query always returns
+        # the same order.
         .order_by(
-            rank.desc(),
+            score.desc(),
+            ts_rank.desc(),
             Document.filename,
             DocumentChunk.page_number,
             DocumentChunk.chunk_index,
         )
         .limit(limit)
     )
-    if document_ids is not None:
-        stmt = stmt.where(DocumentChunk.document_id.in_(document_ids))
     rows = (await session.execute(stmt)).all()
-    return [(row.id, float(row.rank)) for row in rows]
+    return [(row.id, float(row.score)) for row in rows]
+
+
+async def _term_idf(session: AsyncSession, query: str, scope) -> dict[str, float]:
+    """BM25's IDF for each distinct query lexeme, over the chunks in scope:
+    ln((N - df + 0.5) / (df + 0.5) + 1). Lexemes come from Postgres's own
+    parser, so they match the stored tsvectors exactly (same stemming, same
+    stopwords); each document frequency is a GIN-indexed count."""
+    lexemes = (
+        await session.execute(
+            select(func.unnest(func.tsvector_to_array(func.to_tsvector("english", query))))
+        )
+    ).scalars().all()
+    if not lexemes:
+        return {}
+    total = (
+        await session.execute(select(func.count()).select_from(DocumentChunk).where(scope))
+    ).scalar_one()
+    counts = (
+        await session.execute(
+            select(
+                *(
+                    func.count()
+                    .filter(DocumentChunk.tsv.op("@@")(cast(func.quote_literal(lexeme), TSQUERY)))
+                    .label(f"df{i}")
+                    for i, lexeme in enumerate(lexemes)
+                )
+            )
+            .select_from(DocumentChunk)
+            .where(DocumentChunk.tsv.op("@@")(_or_tsquery(query)), scope)
+        )
+    ).one()
+    return {
+        lexeme: math.log((total - df + 0.5) / (df + 0.5) + 1)
+        for lexeme, df in zip(lexemes, counts, strict=True)
+    }
 
 
 def reciprocal_rank_fusion(
@@ -141,6 +212,7 @@ async def _search(
     mode: SearchMode = "hybrid",
     candidates: int = DEFAULT_CANDIDATES,
     document_ids: list[uuid.UUID] | None = None,
+    lexical_scoring: LexicalScoring = "idf",
 ) -> list[SearchHit]:
     if mode not in SEARCH_MODES:
         raise ValueError(f"unknown search mode {mode!r}")
@@ -151,7 +223,9 @@ async def _search(
         query_vector = await run_in_threadpool(embedder.embed_query, query)
         dense = await _dense_ranking(session, query_vector, candidates, document_ids)
     if mode in ("lexical", "hybrid"):
-        lexical = await _lexical_ranking(session, query, candidates, document_ids)
+        lexical = await _lexical_ranking(
+            session, query, candidates, document_ids, lexical_scoring
+        )
 
     if mode == "dense":
         ranked = dense[:k]
@@ -208,6 +282,7 @@ async def search(
     mode: SearchMode = "hybrid",
     candidates: int = DEFAULT_CANDIDATES,
     document_ids: list[uuid.UUID] | None = None,
+    lexical_scoring: LexicalScoring = "idf",
 ) -> list[SearchHit]:
     """Top-k chunks for `query`. document_ids restricts the search to
     those documents (the retrieval eval scopes itself to its own corpus
@@ -224,6 +299,7 @@ async def search(
             GEN_AI_DATA_SOURCE_ID: "document_chunks",
             "docpilot.search.mode": mode,
             "docpilot.search.k": k,
+            "docpilot.search.lexical_scoring": lexical_scoring,
         },
     ) as span:
         hits = await _search(
@@ -234,6 +310,7 @@ async def search(
             mode=mode,
             candidates=candidates,
             document_ids=document_ids,
+            lexical_scoring=lexical_scoring,
         )
         span.set_attribute("docpilot.search.results", len(hits))
         span.set_attribute(

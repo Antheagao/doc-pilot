@@ -20,6 +20,7 @@ from app.config import Settings
 from app.models import DocumentChunk, DocumentPage
 from app.retrieval.chunking import chunk_page, context_header, document_title
 from app.retrieval.embeddings import Embedder
+from app.retrieval.normalize import search_aliases
 from app.telemetry import (
     DOCPILOT_DOCUMENT_ID,
     GEN_AI_OPERATION_NAME,
@@ -140,6 +141,7 @@ async def index_document_pages(
             chunk_index=chunk.chunk_index,
             text=chunk.text,
             context=header,
+            search_aliases=search_aliases(chunk.text),
             char_start=chunk.char_start,
             char_end=chunk.char_end,
             embedding=vector,

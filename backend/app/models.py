@@ -213,6 +213,11 @@ class DocumentChunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Search-only canonical forms the text parser would miss -- amounts in
+    # comma-decimal or thousands-separated formats, currency words (see
+    # app/retrieval/normalize.py). Full-text indexed, never embedded or
+    # cited.
+    search_aliases: Mapped[str | None] = mapped_column(Text, nullable=True)
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
@@ -222,7 +227,11 @@ class DocumentChunk(Base):
     embedding_model: Mapped[str] = mapped_column(String, nullable=False)
     tsv: Mapped[str] = mapped_column(
         TSVECTOR,
-        Computed("to_tsvector('english', coalesce(context, '') || ' ' || text)", persisted=True),
+        Computed(
+            "to_tsvector('english', coalesce(context, '') || ' ' || text || ' ' "
+            "|| coalesce(search_aliases, ''))",
+            persisted=True,
+        ),
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

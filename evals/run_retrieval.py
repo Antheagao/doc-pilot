@@ -54,6 +54,11 @@ def _parse_args() -> argparse.Namespace:
         default="on",
         help="contextual chunk headers (document title + page) on, off, or both",
     )
+    parser.add_argument(
+        "--lexical",
+        default="idf",
+        help="comma-separated full-text scorings to evaluate: idf, ts_rank",
+    )
     parser.add_argument("--out", default=None, help="output directory for the result JSON")
     parser.add_argument(
         "--report-only",
@@ -138,6 +143,7 @@ def main() -> int:
                     embedder=build_embedder(get_settings()),
                     chunking_configs=chunking_configs,
                     modes=modes,
+                    lexical_scorings=tuple(s.strip() for s in args.lexical.split(",")),
                     query_set_version=query_set_version,
                     dataset_version=corpus_cases[0].dataset_version,
                 )

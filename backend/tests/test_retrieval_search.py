@@ -252,3 +252,63 @@ async def test_search_endpoint_validates_parameters(client: AsyncClient) -> None
     assert (await client.get("/search", params={"q": ""})).status_code == 422
     assert (await client.get("/search", params={"q": "x", "k": 0})).status_code == 422
     assert (await client.get("/search", params={"q": "x", "mode": "fuzzy"})).status_code == 422
+
+
+async def _index_texts(db_session: AsyncSession, texts: dict[str, str]) -> dict[str, uuid.UUID]:
+    ids = {}
+    for filename, text in texts.items():
+        document = Document(filename=filename, mime_type="image/png", storage_path="/tmp/x", status="extracted")
+        db_session.add(document)
+        await db_session.flush()
+        ids[filename] = document.id
+        await index_document_pages(
+            db_session, document.id, [PageText(1, text, "gold")], EMBEDDER, WHOLE_PAGE
+        )
+    return ids
+
+
+async def test_idf_ranks_a_rare_term_above_a_common_one(db_session: AsyncSession) -> None:
+    """ts_rank_cd scores both documents alike -- each matches one query
+    term once. IDF knows "receipt" is on every document and 425.58 on
+    one."""
+    ids = await _index_texts(
+        db_session,
+        {
+            "a-generic.png": "RECEIPT\nItem  1  $5.85\nTotal: $91.00",
+            "b-generic.png": "RECEIPT\nItem  2  $9.10\nTotal: $12.00",
+            "c-generic.png": "RECEIPT\nItem  3  $4.20\nTotal: $8.00",
+            "z-target.png": "Northgate Office Outfitters\nYoga Mat  2  $22.70\nTotal: $425.58",
+        },
+    )
+
+    idf = await _search(db_session, "receipt 425.58", ids, mode="lexical", lexical_scoring="idf")
+    ts_rank = await _search(db_session, "receipt 425.58", ids, mode="lexical", lexical_scoring="ts_rank")
+
+    assert idf[0].filename == "z-target.png"
+    assert ts_rank[0].filename != "z-target.png"  # the failure IDF fixes
+
+
+async def test_amount_aliases_match_typed_amounts(db_session: AsyncSession) -> None:
+    ids = await _index_texts(
+        db_session,
+        {
+            "berlin.png": "Lindenplatz Bakery\nTotal: 27,82 EUR",
+            "big.png": "Northgate Office Outfitters\nTotal: $1,234.56",
+        },
+    )
+
+    for query, expected in (
+        ("27.82 euros", "berlin.png"),
+        ("27,82", "berlin.png"),
+        ("1234.56", "big.png"),
+        ("$1,234.56", "big.png"),
+    ):
+        hits = await _search(db_session, query, ids, mode="lexical")
+        assert hits and hits[0].filename == expected, query
+    chunk = (
+        await db_session.execute(
+            select(DocumentChunk).where(DocumentChunk.document_id == ids["berlin.png"])
+        )
+    ).scalar_one()
+    assert chunk.search_aliases == "27.82 euro"
+    assert "27.82" not in chunk.text  # aliases are search-only, never cited
