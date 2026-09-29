@@ -23,7 +23,8 @@ lock.
 Job kinds: every job row has a `kind` (app.models.JOB_KIND_*), and
 dispatch_job routes it to that kind's handler -- 'extract' runs the VLM
 extraction (process_document_job), 'index' transcribes, chunks and embeds
-a document for retrieval (app/retrieval/index_job.py). Only an extract
+a document for retrieval (app/retrieval/index_job.py), and 'judge' grades
+a stored /ask answer (app/evals/online.py). Only an extract
 job drives the document's user-visible status (processing / extracted /
 failed / refused): a document whose extraction succeeded stays
 'extracted' even if its index job later fails, since the extracted data
@@ -67,15 +68,17 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.db import async_session_maker, engine
+from app.evals.online import process_judge_job
 from app.extraction import (
     ModelRefusalError,
     NonRetryableExtractionError,
     process_document_job,
 )
-from app.models import JOB_KIND_EXTRACT, JOB_KIND_INDEX, Document, Job
+from app.models import JOB_KIND_EXTRACT, JOB_KIND_INDEX, JOB_KIND_JUDGE, Document, Job
 from app.retrieval.embeddings import warm_up_embedder
 from app.retrieval.index_job import process_index_job
 from app.telemetry import (
+    DOCPILOT_ASK_RUN_ID,
     DOCPILOT_DOCUMENT_ID,
     DOCPILOT_JOB_ATTEMPT,
     DOCPILOT_JOB_ID,
@@ -109,6 +112,7 @@ Handler = Callable[[AsyncSession, Job], Awaitable[None]]
 HANDLERS: dict[str, Handler] = {
     JOB_KIND_EXTRACT: process_document_job,
     JOB_KIND_INDEX: process_index_job,
+    JOB_KIND_JUDGE: process_judge_job,
 }
 
 
@@ -336,16 +340,21 @@ def _job_span(job: Job) -> Iterator[Span]:
     """The job's span, a child of the context that enqueued it (see
     Job.traceparent) or a new root. The handler's own spans -- model
     calls, embeddings, SQL -- nest under it."""
+    attributes = {
+        DOCPILOT_JOB_ID: str(job.id),
+        DOCPILOT_JOB_KIND: job.kind,
+        DOCPILOT_JOB_ATTEMPT: job.attempts,
+    }
+    # A job targets a document (extract, index) or a stored answer (judge).
+    if job.document_id is not None:
+        attributes[DOCPILOT_DOCUMENT_ID] = str(job.document_id)
+    if job.ask_run_id is not None:
+        attributes[DOCPILOT_ASK_RUN_ID] = str(job.ask_run_id)
     with tracer().start_as_current_span(
         f"job {job.kind}",
         context=context_from_traceparent(job.traceparent),
         kind=SpanKind.CONSUMER,
-        attributes={
-            DOCPILOT_JOB_ID: str(job.id),
-            DOCPILOT_JOB_KIND: job.kind,
-            DOCPILOT_JOB_ATTEMPT: job.attempts,
-            DOCPILOT_DOCUMENT_ID: str(job.document_id),
-        },
+        attributes=attributes,
     ) as span:
         yield span
 

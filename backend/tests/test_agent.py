@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import loop as loop_module
@@ -440,6 +441,127 @@ async def test_ask_endpoint_returns_answer_citations_and_cost(
     assert body["citations"][0]["fields"] == ["total"]
     assert body["tool_calls"][0]["name"] == "query_extractions"
     assert body["cost_usd"] > 0
+
+
+def _northgate_client() -> SimpleNamespace:
+    scripted = [
+        _message([_tool_use("query_extractions", {"vendor": "Northgate"})], "tool_use"),
+        _cite_first_record(None, "total: 425.58"),
+    ]
+
+    async def create(**kwargs):
+        step = scripted.pop(0)
+        return step(**kwargs) if callable(step) else step
+
+    return SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
+
+
+async def _ask(client: AsyncClient, db_session: AsyncSession, settings: Settings, fake) -> dict:
+    from app.config import get_settings
+
+    await _seed(db_session)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_embedder] = lambda: EMBEDDER
+    app.dependency_overrides[get_anthropic_client] = lambda: fake
+    response = await client.post("/ask", json={"question": "How much was my Northgate order?"})
+    assert response.status_code == 200
+    return response.json()
+
+
+async def test_every_answer_is_stored_with_its_evidence(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from app.models import AskRun, Job
+
+    body = await _ask(client, db_session, SETTINGS, _northgate_client())
+
+    stored = (await client.get(f"/ask/runs/{body['id']}")).json()
+    assert stored == body
+    assert stored["question"] == "How much was my Northgate order?"
+    assert stored["citations"][0]["fields"] == ["total"]
+    assert stored["feedback"] is None and stored["judgment"] is None
+    run = await db_session.get(AskRun, uuid.UUID(body["id"]))
+    # What the grader will read: the tool results as the agent saw them.
+    assert "total: 425.58" in run.evidence
+    # Sampling is off by default: no judge job, no model call nobody asked for.
+    assert run.judge_sampled is False
+    jobs = (await db_session.execute(select(Job).where(Job.ask_run_id == run.id))).scalars().all()
+    assert jobs == []
+
+
+async def test_a_sampled_answer_gets_a_judge_job_on_its_own_trace(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from app.models import JOB_KIND_JUDGE, AskRun, Job
+
+    settings = SETTINGS.model_copy(update={"ask_judge_sample_rate": 1.0})
+    body = await _ask(client, db_session, settings, _northgate_client())
+
+    run = await db_session.get(AskRun, uuid.UUID(body["id"]))
+    (job,) = (await db_session.execute(select(Job).where(Job.ask_run_id == run.id))).scalars().all()
+    assert body["judge_sampled"] is True
+    assert (job.kind, job.state, job.document_id) == (JOB_KIND_JUDGE, "pending", None)
+    assert job.traceparent == run.traceparent
+
+
+async def test_a_refusal_is_stored_but_never_graded(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    settings = SETTINGS.model_copy(update={"ask_judge_sample_rate": 1.0})
+    refusal = _client([_message([], "refusal", stop_details=SimpleNamespace(category="cyber"))])
+
+    body = await _ask(client, db_session, settings, refusal)
+
+    assert body["status"] == "refused" and body["judge_sampled"] is False
+    assert (await client.get(f"/ask/runs/{body['id']}")).json()["status"] == "refused"
+
+
+async def test_feedback_is_recorded_changed_and_validated(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    body = await _ask(client, db_session, SETTINGS, _northgate_client())
+    url = f"/ask/runs/{body['id']}/feedback"
+
+    up = await client.post(url, json={"rating": "up", "note": "exactly right"})
+    assert up.status_code == 200
+    assert (up.json()["feedback"], up.json()["feedback_note"]) == ("up", "exactly right")
+
+    # The latest rating wins, and replaces the note.
+    down = (await client.post(url, json={"rating": "down"})).json()
+    assert (down["feedback"], down["feedback_note"]) == ("down", None)
+    assert (await client.get(f"/ask/runs/{body['id']}")).json()["feedback"] == "down"
+
+    assert (await client.post(url, json={"rating": "meh"})).status_code == 422
+    assert (await client.post(url, json={"rating": "up", "note": "x" * 1001})).status_code == 422
+    missing = f"/ask/runs/{uuid.uuid4()}/feedback"
+    assert (await client.post(missing, json={"rating": "up"})).status_code == 404
+    assert (await client.get(f"/ask/runs/{uuid.uuid4()}")).status_code == 404
+
+
+async def test_run_history_is_newest_first(client: AsyncClient, db_session: AsyncSession) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import AskRun
+
+    now = datetime.now(UTC)
+    older, newer = (
+        AskRun(
+            question=question, status="answered", answer="a", citations=[], tool_calls=[],
+            evidence="e", steps=1, model="claude-opus-5-5", prompt_version="agent_v1",
+            created_at=now + timedelta(seconds=offset),
+        )
+        for question, offset in (("older?", 0), ("newer?", 1))
+    )
+    db_session.add_all([older, newer])
+    await db_session.commit()
+
+    listed = (await client.get("/ask/runs", params={"limit": 100})).json()
+
+    ids = [row["id"] for row in listed]
+    assert ids.index(str(newer.id)) < ids.index(str(older.id))
+    row = listed[ids.index(str(older.id))]
+    assert (row["question"], row["judge_sampled"], row["judge_grounded"]) == ("older?", False, None)
+    assert (await client.get("/ask/runs", params={"limit": 0})).status_code == 422
 
 
 async def test_ask_endpoint_validates_the_question(client: AsyncClient) -> None:

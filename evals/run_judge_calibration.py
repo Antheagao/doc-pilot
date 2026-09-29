@@ -7,6 +7,7 @@ real API (needs ANTHROPIC_API_KEY; a few cents, capped by --max-cost).
 
     python evals/run_judge_calibration.py                      # rubric only, free
     python evals/run_judge_calibration.py --judge --update-readme
+    python evals/run_judge_calibration.py --judge --grader groundedness --update-readme
 """
 
 import argparse
@@ -26,7 +27,12 @@ if hasattr(sys.stdout, "reconfigure"):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Calibrate the agent-eval graders.")
-    parser.add_argument("--judge", action="store_true", help="also run the LLM judge (live API)")
+    parser.add_argument("--judge", action="store_true", help="also run an LLM grader (live API)")
+    parser.add_argument(
+        "--grader", choices=("reference", "groundedness"), default="reference",
+        help="which LLM grader --judge runs: the eval judge (reference facts; correct + grounded) "
+        "or the reference-free grader used on live /ask answers (grounded only)",
+    )
     parser.add_argument("--model", default=None, help="override JUDGE_MODEL")
     parser.add_argument("--effort", default=None, help="override JUDGE_EFFORT")
     parser.add_argument("--max-cost", type=float, default=0.50, dest="max_cost")
@@ -67,7 +73,9 @@ def main() -> int:
         _, questions = load_questions(cases)
         _, items = load_calibration(cases, questions)
         result = asyncio.run(
-            run_calibration(items, settings, with_judge=args.judge, max_cost_usd=args.max_cost)
+            run_calibration(
+                items, settings, with_judge=args.judge, max_cost_usd=args.max_cost, grader=args.grader
+            )
         )
         path = write_calibration_result(result, out_dir)
         print(f"wrote {path}\n")

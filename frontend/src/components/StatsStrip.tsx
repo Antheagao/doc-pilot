@@ -11,8 +11,9 @@ function formatLatency(value: number | null): string {
   return typeof value === "number" ? `${Math.round(value)}ms` : "—";
 }
 
-/** Home-page stats strip: documents processed, spend, latency, review
- * queue depth, and the most recent eval accuracy.
+/** Home-page stats strip: documents processed, cost per document
+ * (extraction + transcription), total spend across every model-calling
+ * stage, latency, review queue depth, and the most recent eval accuracy.
  *
  * These numbers don't move second-to-second the way the document list
  * does, so this fetches once on mount (the ReviewQueueLink pattern)
@@ -47,7 +48,16 @@ export default function StatsStrip() {
       <div className="stats-strip__cell">
         <div className="stats-strip__label">avg $/doc</div>
         <div className="stats-strip__value">
-          {formatCost(stats.mean_cost_per_doc)}
+          {formatCost(stats.mean_pipeline_cost_per_doc)}
+        </div>
+        <div className="stats-strip__sub">extract + transcribe</div>
+      </div>
+      <div className="stats-strip__cell">
+        <div className="stats-strip__label">total spend</div>
+        <div className="stats-strip__value">{formatCost(stats.spend.total_usd)}</div>
+        <div className="stats-strip__sub">
+          {stats.ask.runs} question{stats.ask.runs === 1 ? "" : "s"} ·{" "}
+          {formatCost(stats.spend.agent_usd + stats.spend.judge_usd)}
         </div>
       </div>
       <div className="stats-strip__cell">

@@ -98,6 +98,35 @@ class StatsLastEval(BaseModel):
     n_scored: int
 
 
+class StatsSpend(BaseModel):
+    """Every model call the system has paid for, by stage. Transcription
+    counts the pages currently indexed (a re-index replaces them)."""
+
+    extraction_usd: float
+    transcription_usd: float
+    agent_usd: float
+    judge_usd: float
+    total_usd: float
+
+
+class StatsAsk(BaseModel):
+    """/ask in production: volume, cost, latency, and the two online
+    quality signals -- people's feedback and the sampled groundedness
+    grader (rates are over readable verdicts; null before any)."""
+
+    runs: int
+    answered: int
+    mean_cost_usd: float | None
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+    feedback_up: int
+    feedback_down: int
+    judge_sampled: int
+    judged: int
+    judge_grounded_rate: float | None
+    judge_answers_rate: float | None
+
+
 class StatsOut(BaseModel):
     documents_total: int
     documents_by_status: dict[str, int]
@@ -111,6 +140,12 @@ class StatsOut(BaseModel):
     latency_p95_ms: float | None
     review: StatsReview
     last_eval: StatsLastEval | None
+    # Extraction + transcription per processed document: what making one
+    # document reviewable and searchable costs (mean_cost_per_doc above is
+    # extraction alone).
+    mean_pipeline_cost_per_doc: float | None
+    spend: StatsSpend
+    ask: StatsAsk
 
 
 class ReviewResolveRequest(BaseModel):
@@ -188,10 +223,33 @@ class ToolCallOut(BaseModel):
     result_summary: str
 
 
-class AskResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+AskStatus = Literal["answered", "refused", "truncated", "step_limit", "budget_exceeded"]
 
-    status: Literal["answered", "refused", "truncated", "step_limit", "budget_exceeded"]
+
+class AskJudgmentOut(BaseModel):
+    """The background groundedness grader's verdict on a stored answer
+    (app/evals/online.py). grounded/answers_question are None when no
+    verdict could be read -- `error` says why."""
+
+    grounded: bool | None
+    answers_question: bool | None
+    unsupported_claims: list[str]
+    explanation: str | None
+    model: str | None
+    prompt_version: str | None
+    cost_usd: float
+    error: str | None
+    judged_at: datetime
+
+
+class AskResponse(BaseModel):
+    """One /ask run, as answered and as stored: POST /ask returns it, and
+    GET /ask/runs/{id} returns it later with any feedback and judgment."""
+
+    id: uuid.UUID
+    question: str
+    created_at: datetime
+    status: AskStatus
     answer: str
     citations: list[CitationOut]
     tool_calls: list[ToolCallOut]
@@ -205,3 +263,29 @@ class AskResponse(BaseModel):
     latency_ms: int
     refusal_category: str | None
     trace_id: str | None
+    feedback: Literal["up", "down"] | None
+    feedback_note: str | None
+    # A judge job was enqueued; `judgment` stays null until it finishes.
+    judge_sampled: bool
+    judgment: AskJudgmentOut | None
+
+
+class AskRunSummary(BaseModel):
+    """One row of GET /ask/runs."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    question: str
+    status: AskStatus
+    created_at: datetime
+    cost_usd: float
+    latency_ms: int
+    feedback: Literal["up", "down"] | None
+    judge_sampled: bool
+    judge_grounded: bool | None
+
+
+class AskFeedbackRequest(BaseModel):
+    rating: Literal["up", "down"]
+    note: str | None = Field(default=None, max_length=1000)

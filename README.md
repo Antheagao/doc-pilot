@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-371 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+394 mocked tests across three CI jobs (backend, frontend, compose config validation) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -228,7 +228,7 @@ Known gaps -- `run_retrieval.py` prints the hardest queries after every run, and
 
 **The loop** (`app/agent/loop.py`) is hand-written rather than the SDK's beta tool runner, because every step needs a hand on it: a GenAI `chat` span with real timing, the step cap (8) and dollar cap ($0.25 per question) checked between calls, and tool failures returned as `is_error` results the model can recover from rather than ending the run. It runs Claude Opus 5.5 at an explicit `effort: medium` (the API default on this model, pinned so it can't drift), with automatic prompt caching -- each step re-sends the conversation, so everything but the newest turn is a cache read, and cache reads/writes are priced into the reported cost -- and server-side refusal fallback (`fallbacks: "default"`), so a safety-classifier false positive on a receipt question is retried on Anthropic's recommended fallback model instead of failing; a response served by the fallback is priced at that model's rates. Refusal, truncation, and both budgets come back as a `status`, never an exception. Forced tool choice isn't used (Opus 5.5 rejects it); the tools are `strict`, so arguments are always schema-valid.
 
-The frontend's **Ask** page (`/ask`) shows the answer with each `[n]` linked to its source passage or extracted fields, and the tool calls the agent made to get there. (No screenshot yet: like the agent eval, it needs a live API key.)
+The frontend's **Ask** page (`/ask`) shows the answer with each `[n]` linked to its source passage or extracted fields, the tool calls the agent made to get there, a *was this right?* control, and recent questions -- reopened from the database, not re-asked (see [Online evaluation](#online-evaluation-grading-live-answers)). (No screenshot yet: like the agent eval, it needs a live API key.)
 
 In a trace, one question is an `invoke_agent doc-pilot-ask` span with a `chat claude-opus-5-5` span per model call and an `execute_tool <name>` span per tool call -- the agent's plan, with the cost of each step ([Tracing](#tracing)).
 
@@ -261,6 +261,16 @@ A judge is only worth its agreement with people, so it ships with a calibration 
 <!-- JUDGE_TABLE:END -->
 
 The rubric's three misses are the case for the judge in miniature: it passes a hedge that denies the right number, passes an invalid cross-currency sum when the right parts are also listed, and fails an answer for *quoting* the injected "0.00" while refusing it -- and it has no notion of groundedness at all. The judge row appears after the first `--judge` run; until then, the judge's numbers shouldn't be trusted, which is the point of the table.
+
+### Online evaluation: grading live answers
+
+The evals above grade the agent on questions whose answers are known. A real user's question has no answer key, so production quality is measured differently -- with two independent signals on every stored answer:
+
+- **Every `/ask` answer is stored** (`ask_runs`): the question, the answer, its resolved citations and tool trail, cost, latency, trace id, and the *evidence* -- the tool results as the agent saw them. An answer can be audited, graded, or turned into an eval case later without re-running (and re-billing) the agent. `GET /ask/runs` lists them; `GET /ask/runs/{id}` reads one back.
+- **People:** `POST /ask/runs/{id}/feedback {"rating": "up" | "down"}` -- the *was this right?* buttons on the Ask page.
+- **A reference-free grader, sampled:** with `ASK_JUDGE_SAMPLE_RATE` set (0-1; off by default, since each grade is another model call), that share of answered questions gets a `judge` job on the same Postgres queue as extraction and indexing. The worker grades the stored answer with its own prompt (`prompts/groundedness_v1.md`): with no reference it can't say whether an answer is *correct*, so it judges only what the evidence can settle -- is every claim *grounded* in what the agent retrieved, and does the answer actually *address the question*. It runs off the request path, retries on API errors like any job, records a refusal or unreadable verdict instead of retrying it, and never grades the same answer twice. Its span joins the question's own trace (via the traceparent stored on the job, like an index job's), so one trace runs `invoke_agent` -> `job judge` -> `evaluate agent_answer` -> `chat`.
+
+The grader is held to the same standard as the eval judge: `python evals/run_judge_calibration.py --judge --grader groundedness` scores it against the calibration set's human *groundedness* labels, and it gets its own row in the table above. `GET /stats` reports both signals side by side (thumbs up/down, share of sampled answers judged grounded) along with spend by stage -- extraction, transcription, the agent, and the grader -- so the cost of making a document searchable and of answering questions about it is visible, not just the cost of extraction.
 
 ## Tracing
 
@@ -346,4 +356,4 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 <!-- EVAL_TABLE:END -->
 
-*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. An LLM judge grades answers for correctness and groundedness beside the deterministic rubric, and both are scored against hand-labeled answers. Next: the first live agent-eval and judge-calibration runs, then pick a host and ship the demo.*
+*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. An LLM judge grades answers for correctness and groundedness beside the deterministic rubric, and both are scored against hand-labeled answers; in production, every answer is stored with its evidence, rated by people, and (sampled) graded for groundedness in the background. Next: the first live agent-eval and judge-calibration runs, then pick a host and ship the demo.*

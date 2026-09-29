@@ -57,6 +57,13 @@ JUDGE_PROMPT_VERSION = JUDGE_PROMPT_PATH.stem
 JUDGE_PROMPT_TEXT = JUDGE_PROMPT_PATH.read_text(encoding="utf-8")
 CALIBRATION_PATH = EVALS_DIR / "agent" / "judge_calibration_v1.json"
 
+# The reference-free grader for live answers (app/evals/online.py): with no
+# known-correct answer it can only judge what the evidence settles --
+# groundedness, and whether the answer responds to the question at all.
+GROUNDEDNESS_PROMPT_PATH = PROMPTS_DIR / "groundedness_v1.md"
+GROUNDEDNESS_PROMPT_VERSION = GROUNDEDNESS_PROMPT_PATH.stem
+GROUNDEDNESS_PROMPT_TEXT = GROUNDEDNESS_PROMPT_PATH.read_text(encoding="utf-8")
+
 # Property order is generation order: the claims list comes first, so the
 # verdict is written after the judge has enumerated what's wrong.
 JUDGE_SCHEMA: dict[str, Any] = {
@@ -72,6 +79,20 @@ JUDGE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+GROUNDEDNESS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "unsupported_claims": {"type": "array", "items": {"type": "string"}},
+        "grounded": {"type": "boolean"},
+        "answers_question": {"type": "boolean"},
+        "explanation": {"type": "string"},
+    },
+    "required": ["unsupported_claims", "grounded", "answers_question", "explanation"],
+    "additionalProperties": False,
+}
+
+GRADERS = ("reference", "groundedness")
+
 
 @dataclass
 class JudgeVerdict:
@@ -86,6 +107,9 @@ class JudgeVerdict:
     # Set when no verdict could be read (refusal, truncation, bad JSON);
     # such items are excluded from agreement statistics, and counted.
     error: str | None = None
+    # The groundedness grader only: does the answer respond to the
+    # question? (It has no reference, so `correct` and `score` stay None.)
+    answers_question: bool | None = None
 
 
 # --- rendering the judge's inputs ---------------------------------------------
@@ -180,6 +204,14 @@ def _judge_input(question: str, reference: str, evidence: str, answer: str) -> s
     )
 
 
+def _groundedness_input(question: str, evidence: str, answer: str) -> str:
+    return (
+        f"<question>\n{_escape(question)}\n</question>\n\n"
+        f"<evidence>\n{_escape(evidence)}\n</evidence>\n\n"
+        f"<answer>\n{_escape(answer) or '(empty answer)'}\n</answer>"
+    )
+
+
 # --- the judge call ---------------------------------------------------------
 
 
@@ -193,14 +225,81 @@ async def judge_answer(
     client: anthropic.AsyncAnthropic | None = None,
     traceparent: str | None = None,
 ) -> JudgeVerdict:
-    """Grade one answer. Never raises for model behavior -- a refusal,
-    truncation or unparseable output comes back as a verdict with `error`
-    set. API errors raise, classified like every other model call.
+    """Grade one answer against reference facts: correct and grounded.
+    Never raises for model behavior -- a refusal, truncation or
+    unparseable output comes back as a verdict with `error` set. API
+    errors raise, classified like every other model call.
 
     Traced as an `evaluate` span under the agent run's own trace (when
     `traceparent` is given), carrying GenAI `gen_ai.evaluation.result`
     events, so a question's trace shows the answer and its grade together.
     """
+
+    def parse(data: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "correct": bool(data["correct"]),
+            "grounded": bool(data["grounded"]),
+            "score": int(data["score"]),
+            "claims": [str(c) for c in data["unsupported_or_wrong_claims"]],
+            "explanation": str(data["explanation"]),
+        }
+
+    return await _grade(
+        settings,
+        system=JUDGE_PROMPT_TEXT,
+        prompt_version=JUDGE_PROMPT_VERSION,
+        schema=JUDGE_SCHEMA,
+        user_text=_judge_input(question, reference, evidence, answer),
+        parse=parse,
+        client=client,
+        traceparent=traceparent,
+    )
+
+
+async def grade_groundedness(
+    question: str,
+    evidence: str,
+    answer: str,
+    settings: Settings,
+    *,
+    client: anthropic.AsyncAnthropic | None = None,
+    traceparent: str | None = None,
+) -> JudgeVerdict:
+    """Grade a live answer with no reference: is every claim supported by
+    the evidence, and does it answer the question? Same model, request
+    shape, error handling and tracing as judge_answer."""
+
+    def parse(data: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "grounded": bool(data["grounded"]),
+            "answers_question": bool(data["answers_question"]),
+            "claims": [str(c) for c in data["unsupported_claims"]],
+            "explanation": str(data["explanation"]),
+        }
+
+    return await _grade(
+        settings,
+        system=GROUNDEDNESS_PROMPT_TEXT,
+        prompt_version=GROUNDEDNESS_PROMPT_VERSION,
+        schema=GROUNDEDNESS_SCHEMA,
+        user_text=_groundedness_input(question, evidence, answer),
+        parse=parse,
+        client=client,
+        traceparent=traceparent,
+    )
+
+
+async def _grade(
+    settings: Settings,
+    *,
+    system: str,
+    prompt_version: str,
+    schema: dict[str, Any],
+    user_text: str,
+    parse: Any,
+    client: anthropic.AsyncAnthropic | None,
+    traceparent: str | None,
+) -> JudgeVerdict:
     model = settings.judge_model
     # Before any request is sent: an unpriced model would otherwise be
     # billed and only then fail to price.
@@ -210,7 +309,7 @@ async def judge_answer(
     # model would silently change the grader being calibrated. A refusal
     # comes back as an error verdict -- excluded from the stats, counted.
     options = model_request_options(model, settings.judge_effort, refusal_fallback=False)
-    options.setdefault("output_config", {})["format"] = {"type": "json_schema", "schema": JUDGE_SCHEMA}
+    options.setdefault("output_config", {})["format"] = {"type": "json_schema", "schema": schema}
 
     with tracer().start_as_current_span(
         "evaluate agent_answer",
@@ -218,16 +317,14 @@ async def judge_answer(
         kind=SpanKind.INTERNAL,
     ) as eval_span:
         with model_call_span(
-            model, max_tokens=settings.judge_max_tokens, prompt_version=JUDGE_PROMPT_VERSION
+            model, max_tokens=settings.judge_max_tokens, prompt_version=prompt_version
         ) as span:
             try:
                 response = await client.beta.messages.create(
                     model=model,
                     max_tokens=settings.judge_max_tokens,
-                    system=JUDGE_PROMPT_TEXT,
-                    messages=[
-                        {"role": "user", "content": _judge_input(question, reference, evidence, answer)}
-                    ],
+                    system=system,
+                    messages=[{"role": "user", "content": user_text}],
                     **options,
                 )
             except anthropic.AnthropicError as exc:
@@ -235,7 +332,10 @@ async def judge_answer(
             cost = call_cost_usd(model, response)
             record_model_response(span, response, cost)
 
-        verdict = JudgeVerdict(None, None, None, [], "", response.model or model, cost_usd=cost)
+        verdict = JudgeVerdict(
+            None, None, None, [], "", response.model or model,
+            prompt_version=prompt_version, cost_usd=cost,
+        )
         if response.stop_reason in ("refusal", "max_tokens"):
             verdict.error = response.stop_reason
             return verdict
@@ -250,22 +350,22 @@ async def judge_answer(
         # Parse everything before assigning anything: a half-read verdict
         # must never be counted as a verdict.
         try:
-            data = json.loads(text)
-            parsed = (
-                bool(data["correct"]),
-                bool(data["grounded"]),
-                int(data["score"]),
-                [str(c) for c in data["unsupported_or_wrong_claims"]],
-                str(data["explanation"]),
-            )
+            parsed = parse(json.loads(text))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             verdict.error = f"unparseable verdict: {exc}"
             return verdict
-        verdict.correct, verdict.grounded, verdict.score, verdict.claims, verdict.explanation = parsed
+        for name, value in parsed.items():
+            setattr(verdict, name, value)
 
         # GenAI evaluation events (semantic-conventions-genai): names and
         # scores only -- the explanation can quote document content.
-        for name, passed in (("correctness", verdict.correct), ("groundedness", verdict.grounded)):
+        for name, passed in (
+            ("correctness", verdict.correct),
+            ("groundedness", verdict.grounded),
+            ("answers_question", verdict.answers_question),
+        ):
+            if passed is None:
+                continue
             eval_span.add_event(
                 "gen_ai.evaluation.result",
                 {
@@ -274,7 +374,9 @@ async def judge_answer(
                     "gen_ai.evaluation.score.label": "pass" if passed else "fail",
                 },
             )
-        eval_span.set_attribute("docpilot.judge.score", verdict.score)
+        eval_span.set_attribute("docpilot.judge.prompt_version", prompt_version)
+        if verdict.score is not None:
+            eval_span.set_attribute("docpilot.judge.score", verdict.score)
         return verdict
 
 
@@ -384,8 +486,14 @@ def summarize_calibration(
     if judge is not None:
         usable = [(v, i) for v, i in zip(judge, items, strict=True) if v.error is None]
         summary["judge_errors"] = len(items) - len(usable)
-        summary["judge_correctness"] = agreement([(v.correct, i.human_correct) for v, i in usable])
-        summary["judge_groundedness"] = agreement([(v.grounded, i.human_grounded) for v, i in usable])
+        # The groundedness grader has no reference, so it gives no
+        # correctness verdict: its correctness agreement is empty (n/a).
+        summary["judge_correctness"] = agreement(
+            [(v.correct, i.human_correct) for v, i in usable if v.correct is not None]
+        )
+        summary["judge_groundedness"] = agreement(
+            [(v.grounded, i.human_grounded) for v, i in usable if v.grounded is not None]
+        )
         summary["judge_cost_usd"] = sum(v.cost_usd for v in judge)
     return summary
 
@@ -403,7 +511,12 @@ def disagreements(
             row["judge_correct"] = verdict.correct
             row["judge_grounded"] = verdict.grounded
             row["judge_error"] = verdict.error
-            mismatch = mismatch or verdict.correct != item.human_correct or verdict.grounded != item.human_grounded
+            mismatch = (
+                mismatch
+                or verdict.error is not None
+                or (verdict.correct is not None and verdict.correct != item.human_correct)
+                or (verdict.grounded is not None and verdict.grounded != item.human_grounded)
+            )
         if mismatch:
             row["answer"] = item.answer
             row["note"] = item.note
@@ -425,11 +538,17 @@ async def run_calibration(
     with_judge: bool,
     max_cost_usd: float,
     client=None,
+    grader: str = "reference",
 ) -> dict[str, Any]:
-    """Score the rubric (always, offline) and optionally the judge (live,
-    cost-capped) against the human labels."""
+    """Score the rubric (always, offline) and optionally an LLM grader
+    (live, cost-capped) against the human labels: the reference judge
+    (correct + grounded), or the reference-free groundedness grader that
+    grades live /ask answers (grounded only)."""
     from datetime import UTC, datetime
 
+    if grader not in GRADERS:
+        raise ValueError(f"unknown grader {grader!r}; expected one of {GRADERS}")
+    prompt_version = JUDGE_PROMPT_VERSION if grader == "reference" else GROUNDEDNESS_PROMPT_VERSION
     rubric = rubric_verdicts(items)
     verdicts: list[JudgeVerdict] | None = None
     if with_judge:
@@ -441,16 +560,22 @@ async def run_calibration(
             if spent >= max_cost_usd:
                 verdicts.append(JudgeVerdict(None, None, None, [], "", settings.judge_model, error="cost_cap"))
                 continue
-            verdict = await judge_answer(
-                item.question.question, item.reference, item.evidence, item.answer, settings, client=client
-            )
+            if grader == "reference":
+                verdict = await judge_answer(
+                    item.question.question, item.reference, item.evidence, item.answer, settings, client=client
+                )
+            else:
+                verdict = await grade_groundedness(
+                    item.question.question, item.evidence, item.answer, settings, client=client
+                )
             spent += verdict.cost_usd
             verdicts.append(verdict)
     return {
         "started_at_utc": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
         "judge_model": settings.judge_model if with_judge else None,
         "judge_effort": settings.judge_effort if with_judge else None,
-        "judge_prompt_version": JUDGE_PROMPT_VERSION if with_judge else None,
+        "judge_prompt_version": prompt_version if with_judge else None,
+        "grader": grader if with_judge else None,
         "summary": summarize_calibration(items, rubric, verdicts),
         "disagreements": disagreements(items, rubric, verdicts),
     }
@@ -503,11 +628,19 @@ def render_calibration_table(results: list[dict[str, Any]]) -> str:
             d["id"]
             for d in result["disagreements"]
             if d.get("judge_error") is None
-            and (d.get("judge_correct") != d["human_correct"] or d.get("judge_grounded") != d["human_grounded"])
+            and (
+                (d.get("judge_correct") is not None and d["judge_correct"] != d["human_correct"])
+                or (d.get("judge_grounded") is not None and d["judge_grounded"] != d["human_grounded"])
+            )
         ]
         errors = f" ({summary['judge_errors']} unreadable)" if summary.get("judge_errors") else ""
+        # Artifacts from before the groundedness grader carry no "grader".
+        if result.get("grader", "reference") == "groundedness":
+            label, correctness = "LLM groundedness grader (live answers)", "no reference"
+        else:
+            label, correctness = "LLM judge", _cell(summary.get("judge_correctness"))
         rows.append(
-            f"| LLM judge `{model}` ({effort}, {prompt}){errors} | {_cell(summary.get('judge_correctness'))} "
+            f"| {label} `{model}` ({effort}, {prompt}){errors} | {correctness} "
             f"| {_cell(summary.get('judge_groundedness'))} | {', '.join(misses) or '-'} |"
         )
     n = latest["summary"]["n_items"]

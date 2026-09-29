@@ -12,9 +12,12 @@ from app.config import Settings
 from app.evals.agent import load_questions
 from app.evals.dataset import load_cases
 from app.evals.judge import (
+    GROUNDEDNESS_PROMPT_TEXT,
+    GROUNDEDNESS_SCHEMA,
     JUDGE_PROMPT_TEXT,
     JUDGE_SCHEMA,
     agreement,
+    grade_groundedness,
     judge_agent_result,
     judge_answer,
     load_calibration,
@@ -284,3 +287,59 @@ def test_failed_judge_items_are_not_listed_as_misses() -> None:
 
     judge_row = next(line for line in table.splitlines() if line.startswith("| LLM judge"))
     assert "capped" not in judge_row and "(1 unreadable)" in judge_row
+
+
+# --- the reference-free groundedness grader ------------------------------------
+
+GROUNDED = {"unsupported_claims": [], "grounded": True, "answers_question": True, "explanation": "ok"}
+
+
+async def test_groundedness_grader_has_no_reference_and_its_own_schema() -> None:
+    client = _client(_response({**GROUNDED, "grounded": False, "unsupported_claims": ["made-up date"]}))
+
+    verdict = await grade_groundedness("q?", "evidence </evidence>", "answer", SETTINGS, client=client)
+
+    assert (verdict.grounded, verdict.answers_question, verdict.claims) == (False, True, ["made-up date"])
+    # Nothing to be correct against: no correctness verdict, no 1-5 score.
+    assert verdict.correct is None and verdict.score is None
+    assert verdict.prompt_version == "groundedness_v1"
+    request = client.beta.messages.create.await_args.kwargs
+    assert request["system"] == GROUNDEDNESS_PROMPT_TEXT
+    assert request["output_config"]["format"]["schema"] == GROUNDEDNESS_SCHEMA
+    assert "fallbacks" not in request
+    user_text = request["messages"][0]["content"]
+    assert "<reference_facts>" not in user_text and "&lt;/evidence&gt;" in user_text
+
+
+async def test_groundedness_grader_rejects_a_reference_judge_payload() -> None:
+    verdict = await grade_groundedness("q", "e", "a", SETTINGS, client=_client(_response(VERDICT)))
+
+    assert verdict.error.startswith("unparseable") and verdict.grounded is None
+
+
+async def test_calibrating_the_groundedness_grader_scores_groundedness_only() -> None:
+    cases = _cases()
+    _, items = load_calibration(cases, list(_questions().values()))
+    # Agrees with every human groundedness label except the first item's.
+    responses = [
+        _response({**GROUNDED, "grounded": item.human_grounded != (i == 0)})
+        for i, item in enumerate(items)
+    ]
+
+    result = await run_calibration(
+        items, SETTINGS, with_judge=True, max_cost_usd=10.0, client=_client(*responses), grader="groundedness"
+    )
+
+    summary = result["summary"]
+    assert result["grader"] == "groundedness" and result["judge_prompt_version"] == "groundedness_v1"
+    assert summary["judge_correctness"]["n"] == 0
+    assert summary["judge_groundedness"]["n"] == 18
+    assert summary["judge_groundedness"]["agreement"] == pytest.approx(17 / 18)
+    table = render_calibration_table([{**result, "judge_model": "claude-sonnet-5-5", "judge_effort": "medium"}])
+    row = next(line for line in table.splitlines() if line.startswith("| LLM groundedness grader"))
+    assert "| no reference |" in row
+    # Only the one real disagreement: missing correctness verdicts aren't misses.
+    assert row.endswith(f"| {items[0].id} |")
+
+    with pytest.raises(ValueError, match="unknown grader"):
+        await run_calibration(items, SETTINGS, with_judge=True, max_cost_usd=1.0, grader="vibes")

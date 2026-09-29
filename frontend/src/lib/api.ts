@@ -210,6 +210,33 @@ export interface Stats {
   latency_p95_ms: number | null;
   review: StatsReview;
   last_eval: LastEval | null;
+  // Extraction + transcription per processed document.
+  mean_pipeline_cost_per_doc: number | null;
+  spend: StatsSpend;
+  ask: StatsAsk;
+}
+
+// Every model call the system has paid for, by stage.
+export interface StatsSpend {
+  extraction_usd: number;
+  transcription_usd: number;
+  agent_usd: number;
+  judge_usd: number;
+  total_usd: number;
+}
+
+export interface StatsAsk {
+  runs: number;
+  answered: number;
+  mean_cost_usd: number | null;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  feedback_up: number;
+  feedback_down: number;
+  judge_sampled: number;
+  judged: number;
+  judge_grounded_rate: number | null;
+  judge_answers_rate: number | null;
 }
 
 export async function getStats(): Promise<Stats> {
@@ -290,7 +317,27 @@ export interface ToolCall {
   result_summary: string;
 }
 
+export type Feedback = "up" | "down";
+
+// The background groundedness grader's verdict on a stored answer.
+// grounded/answers_question are null when no verdict could be read.
+export interface AskJudgment {
+  grounded: boolean | null;
+  answers_question: boolean | null;
+  unsupported_claims: string[];
+  explanation: string | null;
+  model: string | null;
+  prompt_version: string | null;
+  cost_usd: number;
+  error: string | null;
+  judged_at: string;
+}
+
+// One /ask run, as answered and as stored.
 export interface AskResponse {
+  id: string;
+  question: string;
+  created_at: string;
   status: AskStatus;
   answer: string;
   citations: Citation[];
@@ -305,6 +352,23 @@ export interface AskResponse {
   latency_ms: number;
   refusal_category: string | null;
   trace_id: string | null;
+  feedback: Feedback | null;
+  feedback_note: string | null;
+  // A grading job was queued; `judgment` stays null until it finishes.
+  judge_sampled: boolean;
+  judgment: AskJudgment | null;
+}
+
+export interface AskRunSummary {
+  id: string;
+  question: string;
+  status: AskStatus;
+  created_at: string;
+  cost_usd: number;
+  latency_ms: number;
+  feedback: Feedback | null;
+  judge_sampled: boolean;
+  judge_grounded: boolean | null;
 }
 
 export async function askQuestion(question: string): Promise<AskResponse> {
@@ -312,6 +376,26 @@ export async function askQuestion(question: string): Promise<AskResponse> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
+  });
+  return handle<AskResponse>(res);
+}
+
+export async function listAskRuns(limit = 10): Promise<AskRunSummary[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`${API_URL}/ask/runs?${params}`, { cache: "no-store" });
+  return handle<AskRunSummary[]>(res);
+}
+
+export async function getAskRun(id: string): Promise<AskResponse> {
+  const res = await fetch(`${API_URL}/ask/runs/${encodeURIComponent(id)}`, { cache: "no-store" });
+  return handle<AskResponse>(res);
+}
+
+export async function sendAskFeedback(id: string, rating: Feedback): Promise<AskResponse> {
+  const res = await fetch(`${API_URL}/ask/runs/${encodeURIComponent(id)}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rating }),
   });
   return handle<AskResponse>(res);
 }

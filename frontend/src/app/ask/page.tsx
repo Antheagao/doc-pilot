@@ -1,8 +1,18 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { askQuestion, ApiError, type AskResponse, type Citation } from "@/lib/api";
+import {
+  askQuestion,
+  getAskRun,
+  listAskRuns,
+  sendAskFeedback,
+  ApiError,
+  type AskResponse,
+  type AskRunSummary,
+  type Citation,
+  type Feedback,
+} from "@/lib/api";
 
 const EXAMPLES = [
   "How much have I spent at Northgate Office Outfitters?",
@@ -46,11 +56,124 @@ function sourceLabel(c: Citation): string {
   return `page ${c.page_number}${c.kind === "page" ? " (full page)" : ""}`;
 }
 
+/** A person's verdict on the answer: stored with the run, and counted
+ * beside the automatic grader's in /stats. */
+function FeedbackButtons({
+  response,
+  onChange,
+}: {
+  response: AskResponse;
+  onChange: (updated: AskResponse) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function rate(rating: Feedback) {
+    setSaving(true);
+    setFailed(false);
+    try {
+      onChange(await sendAskFeedback(response.id, rating));
+    } catch {
+      setFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="feedback-row" role="group" aria-label="Was this answer right?">
+      <span className="example-label">Was this right?</span>
+      {(["up", "down"] as const).map((rating) => (
+        <button
+          key={rating}
+          type="button"
+          className={`mode-option feedback-option${response.feedback === rating ? " active" : ""}`}
+          aria-pressed={response.feedback === rating}
+          disabled={saving}
+          onClick={() => rate(rating)}
+        >
+          {rating === "up" ? "Yes" : "No"}
+        </button>
+      ))}
+      {failed && <span className="feedback-note">Couldn&apos;t save that. Try again?</span>}
+    </div>
+  );
+}
+
+/** The background groundedness grader's verdict, when this answer was
+ * sampled for one. */
+function Judgment({ response }: { response: AskResponse }) {
+  const judgment = response.judgment;
+  if (!judgment) {
+    return response.judge_sampled ? (
+      <p className="answer-meta">Queued for an automatic groundedness check.</p>
+    ) : null;
+  }
+  if (judgment.error || judgment.grounded === null) {
+    return <p className="answer-meta">The automatic check couldn&apos;t grade this answer.</p>;
+  }
+  return (
+    <div className="judgment">
+      <span className={`review-badge ${judgment.grounded ? "" : "judgment-fail"}`}>
+        {judgment.grounded ? "grounded" : "not grounded"}
+      </span>
+      {judgment.answers_question === false && (
+        <span className="review-badge judgment-fail">doesn&apos;t answer the question</span>
+      )}
+      <span className="muted-inline">
+        automatic check ({judgment.model}, {judgment.prompt_version})
+      </span>
+      {judgment.unsupported_claims.length > 0 && (
+        <ul className="judgment-claims">
+          {judgment.unsupported_claims.map((claim, i) => (
+            <li key={i}>{claim}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function RunChips({ run }: { run: AskRunSummary }) {
+  return (
+    <span className="rank-chips">
+      {run.status !== "answered" && <span className="rank-chip">{run.status.replace("_", " ")}</span>}
+      {run.feedback && <span className="rank-chip">{run.feedback === "up" ? "marked right" : "marked wrong"}</span>}
+      {run.judge_grounded !== null && (
+        <span className="rank-chip">{run.judge_grounded ? "grounded" : "not grounded"}</span>
+      )}
+    </span>
+  );
+}
+
 export default function AskPage() {
   const [question, setQuestion] = useState("");
   const [response, setResponse] = useState<AskResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<AskRunSummary[]>([]);
+
+  const refreshHistory = useCallback(() => {
+    listAskRuns(10)
+      .then(setHistory)
+      .catch(() => setHistory([]));
+  }, []);
+
+  useEffect(() => {
+    refreshHistory();
+  }, [refreshHistory]);
+
+  /** Reopen a stored answer: read back from the database, not asked again. */
+  async function showRun(id: string) {
+    setError(null);
+    try {
+      const run = await getAskRun(id);
+      setResponse(run);
+      setQuestion(run.question);
+    } catch (err) {
+      setError(err instanceof ApiError ? `API error: ${err.message}` : "Could not reach the API.");
+    }
+  }
 
   async function run(q: string) {
     if (!q.trim()) return;
@@ -59,6 +182,7 @@ export default function AskPage() {
     setResponse(null);
     try {
       setResponse(await askQuestion(q.trim()));
+      refreshHistory();
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -136,6 +260,14 @@ export default function AskPage() {
           {response.answer && (
             <div className="review-row answer-card">
               <AnswerText answer={response.answer} citations={response.citations} />
+              <FeedbackButtons
+                response={response}
+                onChange={(updated) => {
+                  setResponse(updated);
+                  refreshHistory();
+                }}
+              />
+              <Judgment response={response} />
             </div>
           )}
 
@@ -181,6 +313,25 @@ export default function AskPage() {
             {response.output_tokens} out tokens
             {response.trace_id && <> · trace {response.trace_id.slice(0, 12)}</>}
           </p>
+        </section>
+      )}
+
+      {history.length > 0 && (
+        <section>
+          <h2 className="section-heading">Recent questions</h2>
+          <ol className="hit-list">
+            {history.map((item) => (
+              <li key={item.id} className="review-row hit-row history-row">
+                <button type="button" className="history-question" onClick={() => showRun(item.id)}>
+                  {item.question}
+                </button>
+                <RunChips run={item} />
+                <span className="hit-page">
+                  {new Date(item.created_at).toLocaleString()} · ${item.cost_usd.toFixed(4)}
+                </span>
+              </li>
+            ))}
+          </ol>
         </section>
       )}
     </div>

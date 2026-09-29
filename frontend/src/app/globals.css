@@ -983,3 +983,74 @@ textarea:focus-visible,
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- Ask: feedback, automatic check, history ---- */
+
+.feedback-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.feedback-option {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.feedback-note {
+  font-size: 0.8rem;
+  color: var(--status-failed);
+}
+
+.judgment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+}
+
+.judgment .review-badge {
+  text-transform: none;
+}
+
+.review-badge.judgment-fail {
+  border-color: var(--status-failed);
+  background: color-mix(in srgb, var(--status-failed) 12%, transparent);
+  color: var(--status-failed);
+}
+
+.judgment-claims {
+  flex-basis: 100%;
+  margin: 0.25rem 0 0 1.1rem;
+  color: var(--muted);
+}
+
+.history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.history-question {
+  flex: 1 1 16rem;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.history-question:hover {
+  text-decoration: underline;
+}
+

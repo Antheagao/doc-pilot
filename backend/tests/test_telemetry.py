@@ -486,3 +486,51 @@ async def test_judge_verdict_lands_on_the_agent_runs_trace(spans) -> None:
     assert events["correctness"].attributes["gen_ai.evaluation.score.label"] == "fail"
     assert events["groundedness"].attributes["gen_ai.evaluation.score.value"] == 1.0
     assert _named(spans, "chat claude-sonnet-5-5")[0].parent.span_id == evaluate.context.span_id
+
+
+async def test_a_judge_job_grades_inside_the_questions_trace(
+    db_session: AsyncSession, spans, monkeypatch
+) -> None:
+    """The online grade of an answer lands on the same trace as the
+    answer itself: invoke_agent -> job judge -> evaluate -> chat."""
+    import json as _json
+    from types import SimpleNamespace
+
+    from app.evals import online
+    from app.models import JOB_KIND_JUDGE, AskRun
+    from app.worker import _job_span
+
+    with telemetry.tracer().start_as_current_span("invoke_agent doc-pilot-ask") as agent_span:
+        traceparent = telemetry.current_traceparent()
+    run = AskRun(
+        question="q", status="answered", answer="$1.00", citations=[], tool_calls=[],
+        evidence="total: 1.00", steps=1, model="claude-opus-5-5", prompt_version="agent_v1",
+        traceparent=traceparent,
+    )
+    db_session.add(run)
+    await db_session.flush()
+    job = Job(kind=JOB_KIND_JUDGE, ask_run_id=run.id, traceparent=traceparent)
+    db_session.add(job)
+    await db_session.commit()
+    usage = SimpleNamespace(input_tokens=10, output_tokens=5, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+    payload = {"unsupported_claims": [], "grounded": True, "answers_question": False, "explanation": "e"}
+    client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(
+        id="j", model="claude-sonnet-5-5", stop_reason="end_turn", usage=usage,
+        content=[SimpleNamespace(type="text", text=_json.dumps(payload))],
+    )))))
+    monkeypatch.setattr(online, "_build_client", lambda settings: client)
+
+    with _job_span(job):
+        await online.process_judge_job(db_session, job)
+
+    (job_span,) = _named(spans, "job judge")
+    (evaluate,) = _named(spans, "evaluate agent_answer")
+    assert job_span.parent.span_id == agent_span.get_span_context().span_id
+    assert evaluate.parent.span_id == job_span.context.span_id
+    assert job_span.attributes["docpilot.ask_run.id"] == str(run.id)
+    assert "docpilot.document.id" not in job_span.attributes
+    events = {e.attributes["gen_ai.evaluation.name"]: e for e in evaluate.events if e.name == "gen_ai.evaluation.result"}
+    # No reference, so no correctness verdict -- only what the evidence settles.
+    assert set(events) == {"groundedness", "answers_question"}
+    assert events["answers_question"].attributes["gen_ai.evaluation.score.label"] == "fail"
+    assert evaluate.attributes["docpilot.judge.prompt_version"] == "groundedness_v1"

@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The backend project root (parent of the app/ package). Used to anchor a
@@ -117,6 +118,12 @@ class Settings(BaseSettings):
     judge_model: str = "claude-sonnet-5-5"
     judge_effort: str = "medium"
     judge_max_tokens: int = 8000
+
+    # Online evaluation (app/evals/online.py): the share of answered /ask
+    # questions (0.0-1.0) that get a background 'judge' job running the
+    # reference-free groundedness grader on JUDGE_MODEL. Off by default:
+    # each graded answer is one more billed model call.
+    ask_judge_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 @lru_cache

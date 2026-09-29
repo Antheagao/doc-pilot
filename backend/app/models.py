@@ -4,6 +4,7 @@ from datetime import datetime
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Computed,
     DateTime,
     ForeignKey,
@@ -34,6 +35,10 @@ EMBEDDING_DIM = 384
 # re-running (and re-billing) an extraction that already succeeded.
 JOB_KIND_EXTRACT = "extract"
 JOB_KIND_INDEX = "index"
+# 'judge' grades a stored /ask answer (an AskRun, not a document) with the
+# reference-free groundedness grader -- online evaluation, off the request
+# path. See app/evals/online.py.
+JOB_KIND_JUDGE = "judge"
 
 
 class Document(Base):
@@ -53,13 +58,23 @@ class Document(Base):
 
 class Job(Base):
     __tablename__ = "jobs"
-    __table_args__ = (Index("ix_jobs_state_created_at", "state", "created_at"),)
+    __table_args__ = (
+        Index("ix_jobs_state_created_at", "state", "created_at"),
+        # Every job is about something: a document (extract, index) or a
+        # stored /ask answer (judge).
+        CheckConstraint(
+            "document_id IS NOT NULL OR ask_run_id IS NOT NULL", name="ck_jobs_has_target"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True
+    )
+    ask_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ask_runs.id", ondelete="CASCADE"), nullable=True
     )
     state: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -236,3 +251,69 @@ class DocumentChunk(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class AskRun(Base):
+    """One POST /ask: the question, the agent's answer with its resolved
+    citations and tool trail, and the evidence it saw -- enough to audit
+    an answer, grade it later, or turn it into an eval case, without
+    re-running (and re-billing) the agent.
+
+    `evidence` is the run's tool results rendered as plain text
+    (app.evals.judge.render_evidence_from_messages): what the groundedness
+    grader reads. Two independent verdicts can attach to a run afterwards:
+    a person's `feedback` ('up' / 'down', POST /ask/runs/{id}/feedback),
+    and, for a sampled share of answers (ASK_JUDGE_SAMPLE_RATE), the
+    background grader's `judge_*` columns (a 'judge' job).
+    """
+
+    __tablename__ = "ask_runs"
+    __table_args__ = (
+        CheckConstraint("feedback IN ('up', 'down')", name="ck_ask_runs_feedback"),
+        Index("ix_ask_runs_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list] = mapped_column(JSONB, nullable=False)
+    tool_calls: Mapped[list] = mapped_column(JSONB, nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    steps: Mapped[int] = mapped_column(Integer, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_read_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), nullable=False, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    refusal_category: Mapped[str | None] = mapped_column(String, nullable=True)
+    unresolved_citations: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    trace_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    traceparent: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    feedback: Mapped[str | None] = mapped_column(String, nullable=True)
+    feedback_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feedback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # True when a judge job was enqueued for this run; the judge_* columns
+    # stay NULL until it finishes (judged_at set, with a verdict or an
+    # error -- a refusal or unreadable verdict is recorded, not retried).
+    judge_sampled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    judge_grounded: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    judge_answers_question: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    judge_claims: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    judge_explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    judge_prompt_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    judge_cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    judge_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
