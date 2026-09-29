@@ -1,0 +1,14 @@
+Amberlight Candle Co.
+27 Foundry Row, Asheville, NC
+
+Date: 2025-09-15
+
+Item                 Qty      Price      Total
+Recycled Paper Ream    1       $4.40      $4.40
+Scented Candle 8oz     2       $9.10     $18.20
+
+Subtotal: $22.60
+Tax: $1.36
+Total: $23.96
+
+Currency: USD

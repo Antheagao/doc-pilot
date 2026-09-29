@@ -460,3 +460,77 @@ async def test_reclaim_orphaned_jobs_resets_processing_to_pending(
 
     result = await _refresh_job(job.id)
     assert result.state == "pending"
+
+
+# --- job kinds (extract vs index) -------------------------------------------
+
+
+async def test_index_job_claim_leaves_document_status_alone(real_documents: Callable) -> None:
+    """Only an extract job drives the document's status: an index job for
+    an already-extracted document must not flip it back to processing."""
+    document = await real_documents(status="extracted")
+    await _make_job(document.id, state="pending", kind="index")
+    seen: list[str] = []
+
+    async def fake_handler(session, job) -> None:
+        seen.append((await session.get(Document, job.document_id)).status)
+
+    await run_once(fake_handler, document_id=document.id)
+
+    assert seen == ["extracted"]
+    assert (await _refresh_document(document.id)).status == "extracted"
+
+
+async def test_failed_index_job_leaves_document_extracted(real_documents: Callable) -> None:
+    document = await real_documents(status="extracted")
+    job = await _make_job(document.id, state="pending", kind="index")
+
+    async def failing_handler(session, job) -> None:
+        raise NonRetryableExtractionError("transcription refused")
+
+    await run_once(failing_handler, document_id=document.id)
+
+    assert (await _refresh_job(job.id)).state == "failed"
+    assert (await _refresh_document(document.id)).status == "extracted"
+
+
+async def test_dispatch_routes_by_job_kind(
+    real_documents: Callable, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = await real_documents(status="extracted")
+    job = await _make_job(document.id, state="pending", kind="index")
+    called: list[str] = []
+
+    async def extract_handler(session, job) -> None:
+        called.append("extract")
+
+    async def index_handler(session, job) -> None:
+        called.append("index")
+
+    monkeypatch.setattr(
+        worker_module, "HANDLERS", {"extract": extract_handler, "index": index_handler}
+    )
+
+    await run_once(worker_module.dispatch_job, document_id=document.id)
+
+    assert called == ["index"]
+    assert (await _refresh_job(job.id)).state == "done"
+
+
+async def test_unknown_job_kind_fails_permanently(real_documents: Callable) -> None:
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending", kind="summarize")
+
+    await run_once(worker_module.dispatch_job, document_id=document.id)
+
+    result = await _refresh_job(job.id)
+    assert result.state == "failed"
+    assert result.attempts == 1
+    assert "no handler for job kind 'summarize'" in result.last_error
+
+
+async def test_jobs_default_to_extract_kind(real_documents: Callable) -> None:
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+
+    assert job.kind == "extract"

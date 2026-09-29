@@ -27,6 +27,13 @@ Flags:
                    opt-in, not silent.
     --only STEM   regenerate a single doc/label pair, e.g.
                    `--only 001-clean-coffee-receipt`.
+    --text-only   write only evals/text/<stem>.txt -- each doc's gold page
+                   text for the retrieval eval (app/evals/retrieval.py) --
+                   leaving images and labels untouched. Refuses if a
+                   regenerated record no longer matches its committed
+                   label, since the text would then describe a different
+                   document than the image. Always overwrites: the text is
+                   derived data, not hand-edited.
 
 Determinism: each doc is seeded with `random.Random(doc_index)` and nothing
 else in the script consults global randomness or wall-clock time, so two
@@ -50,6 +57,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 EVALS_DIR = Path(__file__).resolve().parent.parent.parent / "evals"
 DOCS_DIR = EVALS_DIR / "docs"
 LABELS_DIR = EVALS_DIR / "labels"
+TEXT_DIR = EVALS_DIR / "text"
 
 # Mirrors app.extraction.TOP_LEVEL_FIELDS. Kept as an independent literal
 # rather than imported -- this script only needs the field-name set for
@@ -340,43 +348,61 @@ def _money(value: float, currency: str | None, eur: bool) -> str:
     return text
 
 
+def build_text_lines(spec: DocSpec, record: dict[str, Any]) -> list[tuple[str, str]]:
+    """Every line the rendered document shows, as (text, style) pairs with
+    style "bold" or "body" -- the pure-text half of rendering, with no
+    font or PIL dependency. render_document draws exactly these strings,
+    and render_text joins them into the document's gold page text for the
+    retrieval eval, so the two can never disagree about what is printed.
+    """
+    dc = LAYOUTS[spec.difficulty]["desc_col"]
+    currency = record["currency"]
+    eur = spec.eur
+
+    lines: list[tuple[str, str]] = []
+    if record["vendor"]:
+        lines.append((record["vendor"], "bold"))
+        assert spec.vendor_key is not None
+        _, street, citystate = VENDOR_POOL[spec.vendor_key]
+        lines.append((f"{street}, {citystate}", "body"))
+    else:
+        lines.append(("RECEIPT", "bold"))
+    lines.append(("", "body"))
+    lines.append((f"Date: {_format_date_display(record['document_date'], eur)}", "body"))
+    lines.append(("", "body"))
+    lines.append((f"{'Item':<{dc}} Qty      Price      Total", "body"))
+    for item in record["line_items"]:
+        desc = item["description"][:dc]
+        price = _money(item["unit_price"], currency, eur)
+        total = _money(item["total"], currency, eur)
+        lines.append((f"{desc:<{dc}} {item['quantity']:>3}  {price:>10} {total:>10}", "body"))
+    lines.append(("", "body"))
+    lines.append((f"Subtotal: {_money(record['subtotal'], currency, eur)}", "body"))
+    if record["tax"] is not None:
+        lines.append((f"Tax: {_money(record['tax'], currency, eur)}", "body"))
+    lines.append((f"Total: {_money(record['total'], currency, eur)}", "bold"))
+    if currency:
+        lines.append(("", "body"))
+        lines.append((f"Currency: {currency}", "body"))
+    return lines
+
+
+def render_text(spec: DocSpec, record: dict[str, Any]) -> str:
+    """The document's gold page text: exactly what render_document prints,
+    one printed line per line."""
+    return "\n".join(text for text, _ in build_text_lines(spec, record)) + "\n"
+
+
 def _build_lines(
     spec: DocSpec,
     record: dict[str, Any],
     layout: dict[str, Any],
 ) -> list[tuple[str, ImageFont.ImageFont | ImageFont.FreeTypeFont]]:
-    body_font = _load_font(layout["body"], spec.font_family)
-    bold_font = _load_font(layout["bold"], spec.font_family)
-    dc = layout["desc_col"]
-    currency = record["currency"]
-    eur = spec.eur
-
-    lines: list[tuple[str, ImageFont.ImageFont | ImageFont.FreeTypeFont]] = []
-    if record["vendor"]:
-        lines.append((record["vendor"], bold_font))
-        assert spec.vendor_key is not None
-        _, street, citystate = VENDOR_POOL[spec.vendor_key]
-        lines.append((f"{street}, {citystate}", body_font))
-    else:
-        lines.append(("RECEIPT", bold_font))
-    lines.append(("", body_font))
-    lines.append((f"Date: {_format_date_display(record['document_date'], eur)}", body_font))
-    lines.append(("", body_font))
-    lines.append((f"{'Item':<{dc}} Qty      Price      Total", body_font))
-    for item in record["line_items"]:
-        desc = item["description"][:dc]
-        price = _money(item["unit_price"], currency, eur)
-        total = _money(item["total"], currency, eur)
-        lines.append((f"{desc:<{dc}} {item['quantity']:>3}  {price:>10} {total:>10}", body_font))
-    lines.append(("", body_font))
-    lines.append((f"Subtotal: {_money(record['subtotal'], currency, eur)}", body_font))
-    if record["tax"] is not None:
-        lines.append((f"Tax: {_money(record['tax'], currency, eur)}", body_font))
-    lines.append((f"Total: {_money(record['total'], currency, eur)}", bold_font))
-    if currency:
-        lines.append(("", body_font))
-        lines.append((f"Currency: {currency}", body_font))
-    return lines
+    fonts = {
+        "body": _load_font(layout["body"], spec.font_family),
+        "bold": _load_font(layout["bold"], spec.font_family),
+    }
+    return [(text, fonts[style]) for text, style in build_text_lines(spec, record)]
 
 
 def _add_speckle_noise(image: Image.Image, rng: random.Random, amount: int) -> Image.Image:
@@ -521,12 +547,40 @@ def generate_one(spec: DocSpec) -> tuple[Path, Path]:
     return doc_path, label_path
 
 
+def write_text_only(specs: tuple[DocSpec, ...]) -> int:
+    """--text-only: regenerate each spec's record, confirm it still equals
+    the committed label (the determinism guarantee in the module
+    docstring, checked rather than assumed), and write its gold text."""
+    TEXT_DIR.mkdir(parents=True, exist_ok=True)
+    for spec in specs:
+        record = build_record(spec, random.Random(spec.index))
+        label_path = LABELS_DIR / f"{spec.stem}.json"
+        committed = json.loads(label_path.read_text(encoding="utf-8"))["fields"]
+        if committed != record:
+            print(
+                f"error: regenerated record for {spec.stem} differs from {label_path.name}; "
+                "refusing to write text for a different document than the image shows",
+                file=sys.stderr,
+            )
+            return 1
+        text_path = TEXT_DIR / f"{spec.stem}.txt"
+        text_path.write_text(render_text(spec, record), encoding="utf-8")
+        print(f"Wrote {text_path.relative_to(EVALS_DIR.parent)}")
+    print(f"\n{len(specs)} gold text file(s) written; records match committed labels.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--force", action="store_true", help="overwrite existing evals/docs|labels files"
     )
     parser.add_argument("--only", metavar="STEM", help="regenerate a single doc, e.g. 001-clean-coffee-receipt")
+    parser.add_argument(
+        "--text-only",
+        action="store_true",
+        help="write only evals/text/<stem>.txt gold page text; never touches images or labels",
+    )
     args = parser.parse_args()
 
     specs = DOC_SPECS
@@ -535,6 +589,9 @@ def main() -> int:
         if not specs:
             print(f"error: no doc spec with stem {args.only!r}", file=sys.stderr)
             return 1
+
+    if args.text_only:
+        return write_text_only(specs)
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     LABELS_DIR.mkdir(parents=True, exist_ok=True)

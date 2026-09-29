@@ -1,0 +1,14 @@
+Maple & Co. Stationery
+220 Birchwood Ln, Madison, WI
+
+Date: 2025-09-30
+
+Item                         Qty      Price      Total
+Cat Litter 10lb                2      $11.85     $23.70
+Dog Chew Toy                   4       $7.50     $30.00
+
+Subtotal: $53.70
+Tax: $2.69
+Total: $56.39
+
+Currency: USD

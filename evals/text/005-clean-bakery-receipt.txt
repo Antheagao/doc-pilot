@@ -1,0 +1,14 @@
+Cobblestone Bakery
+15 Market Sq, Savannah, GA
+
+Date: 2026-04-15
+
+Item                         Qty      Price      Total
+Bamboo Cutting Board           3      $17.55     $52.65
+Herbal Tea Sampler             1      $10.35     $10.35
+
+Subtotal: $63.00
+Tax: $3.78
+Total: $66.78
+
+Currency: USD

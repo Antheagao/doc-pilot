@@ -1,6 +1,9 @@
 services:
   db:
-    image: postgres:16
+    # postgres:16 plus the pgvector extension (the retrieval index,
+    # app/retrieval/). Same data-directory format as the plain postgres:16
+    # image this replaced, so an existing db_data volume keeps working.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: docpilot
       POSTGRES_PASSWORD: docpilot
@@ -52,8 +55,12 @@ services:
       # endpoint later re-open, so both containers have to resolve the
       # same path onto the same shared volume.
       UPLOAD_DIR: /data/uploads
+      # The API embeds search queries (GET /search), so it loads the same
+      # embedding model as the worker -- see EMBEDDING_CACHE_DIR on worker.
+      EMBEDDING_CACHE_DIR: /data/models
     volumes:
       - uploads:/data/uploads
+      - models:/data/models
     restart: unless-stopped
 
   worker:
@@ -76,8 +83,13 @@ services:
       # The API process never touches the model, so it doesn't get this
       # key -- least privilege.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # fastembed downloads BAAI/bge-small-en-v1.5 (~70 MB, ONNX) on first
+      # use into this volume, shared with api, so it's fetched once rather
+      # than on every container start.
+      EMBEDDING_CACHE_DIR: /data/models
     volumes:
       - uploads:/data/uploads
+      - models:/data/models
     restart: unless-stopped
     # The backend image's baked-in healthcheck probes the API's /healthz;
     # the worker runs no HTTP server, so without this override it would
@@ -103,3 +115,4 @@ services:
 volumes:
   db_data:
   uploads:
+  models:

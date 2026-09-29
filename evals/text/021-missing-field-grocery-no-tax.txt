@@ -1,0 +1,14 @@
+Green Valley Grocery
+12 Elm Court, Unit B, Boise, ID
+
+Date: 2025-08-24
+
+Item                       Qty      Price      Total
+Packing Tape Roll            3       $3.95     $11.85
+Throw Pillow Cover           2      $12.95     $25.90
+Produce Bags (set of 5)      4       $8.40     $33.60
+
+Subtotal: $71.35
+Total: $71.35
+
+Currency: USD

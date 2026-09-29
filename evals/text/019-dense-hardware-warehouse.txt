@@ -1,0 +1,28 @@
+Sterling Hardware & Supply
+142 Anvil St, Pittsburgh, PA
+
+Date: 2026-05-13
+
+Item                           Qty      Price      Total
+Ballpoint Pen 12-pack            3       $5.40     $16.20
+Extension Cord 25ft              1      $18.65     $18.65
+Scented Candle 8oz               3       $9.10     $27.30
+Cedar Bird Feeder                2      $21.05     $42.10
+Wall Calendar                    2       $6.45     $12.90
+Canvas Tote Bag                  4       $7.85     $31.40
+Notebook, ruled 80pg             1       $4.10      $4.10
+Garden Trowel                    4       $6.05     $24.20
+Yoga Mat                         4      $22.55     $90.20
+Wool Blend Socks (pair)          4       $8.75     $35.00
+Cat Litter 10lb                  3      $12.85     $38.55
+Ceramic Mug 12oz                 2       $8.15     $16.30
+Bamboo Cutting Board             4      $13.65     $54.60
+Kitchen Sponge 6-pack            1       $4.60      $4.60
+Dog Chew Toy                     4       $5.75     $23.00
+Furnace Filter 16x20             2      $15.75     $31.50
+
+Subtotal: $470.60
+Tax: $23.53
+Total: $494.13
+
+Currency: USD

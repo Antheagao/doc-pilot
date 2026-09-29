@@ -1,0 +1,16 @@
+Sunridge Electronics Depot
+410 Circuit Ave, Austin, TX
+
+Date: 2026-03-21
+
+Item                         Qty      Price      Total
+Kitchen Sponge 6-pack          3       $3.05      $9.15
+Steel Hex Bolts (box of 50)    2       $8.00     $16.00
+Picture Frame 5x7              4      $12.85     $51.40
+Furnace Filter 16x20           3      $13.90     $41.70
+
+Subtotal: $118.25
+Tax: $5.91
+Total: $124.16
+
+Currency: USD

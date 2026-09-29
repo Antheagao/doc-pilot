@@ -12,12 +12,22 @@ trivial and lets horizontal scaling do the work.
 
 Claim/commit split: claiming a job (state -> processing) is committed
 immediately, *before* the handler runs, rather than holding the row lock
-for the duration of the handler. The default handler (process_document_job,
-app/extraction.py) makes a VLM call and can take several seconds; holding
+for the duration of the handler. Both job handlers (process_document_job
+and process_index_job, see "Job kinds" below) make VLM calls that can take
+several seconds; holding
 a transaction open that long would tie up a connection and block other
 workers from even attempting SKIP LOCKED scans against the table. Once
 claimed, a job is "owned" by this process via its state, not via a held
 lock.
+
+Job kinds: every job row has a `kind` (app.models.JOB_KIND_*), and
+dispatch_job routes it to that kind's handler -- 'extract' runs the VLM
+extraction (process_document_job), 'index' transcribes, chunks and embeds
+a document for retrieval (app/retrieval/index_job.py). Only an extract
+job drives the document's user-visible status (processing / extracted /
+failed / refused): a document whose extraction succeeded stays
+'extracted' even if its index job later fails, since the extracted data
+is still valid -- the failure is on the job row.
 
 Consequence: if this process dies (crash, kill -9, power loss) after
 claiming a job but before it finishes, that job is orphaned in
@@ -59,7 +69,8 @@ from app.extraction import (
     NonRetryableExtractionError,
     process_document_job,
 )
-from app.models import Document, Job
+from app.models import JOB_KIND_EXTRACT, JOB_KIND_INDEX, Document, Job
+from app.retrieval.index_job import process_index_job
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +88,22 @@ BACKOFF_MAX = 60.0
 RETRY_AFTER_MAX = 900.0
 
 Handler = Callable[[AsyncSession, Job], Awaitable[None]]
+
+HANDLERS: dict[str, Handler] = {
+    JOB_KIND_EXTRACT: process_document_job,
+    JOB_KIND_INDEX: process_index_job,
+}
+
+
+async def dispatch_job(session: AsyncSession, job: Job) -> None:
+    """The default handler: route a job to its kind's handler. An unknown
+    kind (a row written by a newer version of the app, say) fails
+    permanently rather than retrying -- no amount of retrying teaches this
+    process a handler it doesn't have."""
+    handler = HANDLERS.get(job.kind)
+    if handler is None:
+        raise NonRetryableExtractionError(f"no handler for job kind {job.kind!r}")
+    await handler(session, job)
 
 
 def _backoff_delay(attempts: int, retry_after: float | None) -> float:
@@ -143,12 +170,13 @@ async def claim_job(session: AsyncSession, document_id: uuid.UUID | None = None)
     job.started_at = now
     job.attempts += 1
 
-    document = await session.get(Document, job.document_id)
-    if document is not None:
-        document.status = "processing"
+    if job.kind == JOB_KIND_EXTRACT:
+        document = await session.get(Document, job.document_id)
+        if document is not None:
+            document.status = "processing"
 
     await session.commit()
-    logger.info("claimed job %s (attempt %d)", job.id, job.attempts)
+    logger.info("claimed %s job %s (attempt %d)", job.kind, job.id, job.attempts)
     return job
 
 
@@ -226,10 +254,11 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
         job.state = "failed"
         job.last_error = error_tail
         job.finished_at = datetime.now(UTC)
-        document = await session.get(Document, job.document_id)
         refused = isinstance(exc, ModelRefusalError)
-        if document is not None:
-            document.status = "refused" if refused else "failed"
+        if job.kind == JOB_KIND_EXTRACT:
+            document = await session.get(Document, job.document_id)
+            if document is not None:
+                document.status = "refused" if refused else "failed"
         await session.commit()
         if refused:
             logger.info("failed job %s permanently (model refusal)", job.id)
@@ -258,7 +287,7 @@ async def reclaim_orphaned_jobs(session: AsyncSession) -> int:
 
 
 async def run_once(
-    handler: Handler = process_document_job, document_id: uuid.UUID | None = None
+    handler: Handler = dispatch_job, document_id: uuid.UUID | None = None
 ) -> bool:
     """Claim and run at most one job. Returns True if a job was claimed
     (regardless of success/failure), False if there was no work to do.
@@ -302,7 +331,7 @@ async def run_once(
     return True
 
 
-async def run_worker(handler: Handler = process_document_job) -> None:
+async def run_worker(handler: Handler = dispatch_job) -> None:
     """Poll indefinitely, processing one job at a time.
 
     Per-iteration exceptions from run_once (e.g. a handler that leaves

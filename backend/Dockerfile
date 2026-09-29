@@ -22,10 +22,11 @@ COPY alembic ./alembic
 COPY prompts ./prompts
 COPY scripts ./scripts
 
-# Non-root user. /data/uploads is created and chowned before switching users
-# so the named volume Docker mounts over it inherits writable ownership.
+# Non-root user. /data/uploads and /data/models (the embedding model cache,
+# see docker-compose.yml) are created and chowned before switching users so
+# the named volumes Docker mounts over them inherit writable ownership.
 RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /data/uploads \
+    && mkdir -p /data/uploads /data/models \
     && chown -R appuser:appuser /data
 
 USER appuser

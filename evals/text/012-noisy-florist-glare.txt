@@ -1,0 +1,14 @@
+Foxglove Florist & Gifts
+77 Petal Ln, Charleston, SC
+
+Date: 2026-01-29
+
+Item                         Qty      Price      Total
+Bamboo Cutting Board           3      $13.00     $39.00
+Whiteboard Marker Set          1       $8.00      $8.00
+
+Subtotal: $47.00
+Tax: $3.29
+Total: $50.29
+
+Currency: USD

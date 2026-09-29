@@ -1,0 +1,985 @@
+{
+  "query_set_version": "v1",
+  "notes": "Queries are hand-written; relevance is resolved against evals/labels/ at load time (item -> every doc whose labeled line items include it; vendors -> every doc with that labeled vendor), so judgments are correct by construction and track label changes. doc_ids entries (location, amount) name docs by their 3-digit prefix and were derived from the generator's vendor addresses and the labeled totals. Paraphrase queries deliberately avoid the item/vendor's own words.",
+  "queries": [
+    {
+      "id": "item-kw-recycled-paper-ream",
+      "type": "item_keyword",
+      "query": "Recycled Paper Ream",
+      "relevant": {
+        "item": "Recycled Paper Ream"
+      }
+    },
+    {
+      "id": "item-kw-ballpoint-pen-12-pack",
+      "type": "item_keyword",
+      "query": "Ballpoint Pen 12-pack",
+      "relevant": {
+        "item": "Ballpoint Pen 12-pack"
+      }
+    },
+    {
+      "id": "item-kw-steel-hex-bolts-box-of-50",
+      "type": "item_keyword",
+      "query": "Steel Hex Bolts (box of 50)",
+      "relevant": {
+        "item": "Steel Hex Bolts (box of 50)"
+      }
+    },
+    {
+      "id": "item-kw-cedar-bird-feeder",
+      "type": "item_keyword",
+      "query": "Cedar Bird Feeder",
+      "relevant": {
+        "item": "Cedar Bird Feeder"
+      }
+    },
+    {
+      "id": "item-kw-ceramic-mug-12oz",
+      "type": "item_keyword",
+      "query": "Ceramic Mug 12oz",
+      "relevant": {
+        "item": "Ceramic Mug 12oz"
+      }
+    },
+    {
+      "id": "item-kw-organic-roast-coffee-12oz",
+      "type": "item_keyword",
+      "query": "Organic Roast Coffee 12oz",
+      "relevant": {
+        "item": "Organic Roast Coffee 12oz"
+      }
+    },
+    {
+      "id": "item-kw-canvas-tote-bag",
+      "type": "item_keyword",
+      "query": "Canvas Tote Bag",
+      "relevant": {
+        "item": "Canvas Tote Bag"
+      }
+    },
+    {
+      "id": "item-kw-led-desk-lamp",
+      "type": "item_keyword",
+      "query": "LED Desk Lamp",
+      "relevant": {
+        "item": "LED Desk Lamp"
+      }
+    },
+    {
+      "id": "item-kw-bamboo-cutting-board",
+      "type": "item_keyword",
+      "query": "Bamboo Cutting Board",
+      "relevant": {
+        "item": "Bamboo Cutting Board"
+      }
+    },
+    {
+      "id": "item-kw-wool-blend-socks-pair",
+      "type": "item_keyword",
+      "query": "Wool Blend Socks (pair)",
+      "relevant": {
+        "item": "Wool Blend Socks (pair)"
+      }
+    },
+    {
+      "id": "item-kw-stainless-water-bottle",
+      "type": "item_keyword",
+      "query": "Stainless Water Bottle",
+      "relevant": {
+        "item": "Stainless Water Bottle"
+      }
+    },
+    {
+      "id": "item-kw-garden-trowel",
+      "type": "item_keyword",
+      "query": "Garden Trowel",
+      "relevant": {
+        "item": "Garden Trowel"
+      }
+    },
+    {
+      "id": "item-kw-notebook-ruled-80pg",
+      "type": "item_keyword",
+      "query": "Notebook, ruled 80pg",
+      "relevant": {
+        "item": "Notebook, ruled 80pg"
+      }
+    },
+    {
+      "id": "item-kw-packing-tape-roll",
+      "type": "item_keyword",
+      "query": "Packing Tape Roll",
+      "relevant": {
+        "item": "Packing Tape Roll"
+      }
+    },
+    {
+      "id": "item-kw-aa-batteries-8-pack",
+      "type": "item_keyword",
+      "query": "AA Batteries (8-pack)",
+      "relevant": {
+        "item": "AA Batteries (8-pack)"
+      }
+    },
+    {
+      "id": "item-kw-picture-frame-5x7",
+      "type": "item_keyword",
+      "query": "Picture Frame 5x7",
+      "relevant": {
+        "item": "Picture Frame 5x7"
+      }
+    },
+    {
+      "id": "item-kw-scented-candle-8oz",
+      "type": "item_keyword",
+      "query": "Scented Candle 8oz",
+      "relevant": {
+        "item": "Scented Candle 8oz"
+      }
+    },
+    {
+      "id": "item-kw-dog-chew-toy",
+      "type": "item_keyword",
+      "query": "Dog Chew Toy",
+      "relevant": {
+        "item": "Dog Chew Toy"
+      }
+    },
+    {
+      "id": "item-kw-cat-litter-10lb",
+      "type": "item_keyword",
+      "query": "Cat Litter 10lb",
+      "relevant": {
+        "item": "Cat Litter 10lb"
+      }
+    },
+    {
+      "id": "item-kw-bike-tire-patch-kit",
+      "type": "item_keyword",
+      "query": "Bike Tire Patch Kit",
+      "relevant": {
+        "item": "Bike Tire Patch Kit"
+      }
+    },
+    {
+      "id": "item-kw-produce-bags-set-of-5",
+      "type": "item_keyword",
+      "query": "Produce Bags (set of 5)",
+      "relevant": {
+        "item": "Produce Bags (set of 5)"
+      }
+    },
+    {
+      "id": "item-kw-whiteboard-marker-set",
+      "type": "item_keyword",
+      "query": "Whiteboard Marker Set",
+      "relevant": {
+        "item": "Whiteboard Marker Set"
+      }
+    },
+    {
+      "id": "item-kw-throw-pillow-cover",
+      "type": "item_keyword",
+      "query": "Throw Pillow Cover",
+      "relevant": {
+        "item": "Throw Pillow Cover"
+      }
+    },
+    {
+      "id": "item-kw-herbal-tea-sampler",
+      "type": "item_keyword",
+      "query": "Herbal Tea Sampler",
+      "relevant": {
+        "item": "Herbal Tea Sampler"
+      }
+    },
+    {
+      "id": "item-kw-furnace-filter-16x20",
+      "type": "item_keyword",
+      "query": "Furnace Filter 16x20",
+      "relevant": {
+        "item": "Furnace Filter 16x20"
+      }
+    },
+    {
+      "id": "item-kw-extension-cord-25ft",
+      "type": "item_keyword",
+      "query": "Extension Cord 25ft",
+      "relevant": {
+        "item": "Extension Cord 25ft"
+      }
+    },
+    {
+      "id": "item-kw-kitchen-sponge-6-pack",
+      "type": "item_keyword",
+      "query": "Kitchen Sponge 6-pack",
+      "relevant": {
+        "item": "Kitchen Sponge 6-pack"
+      }
+    },
+    {
+      "id": "item-kw-wall-calendar",
+      "type": "item_keyword",
+      "query": "Wall Calendar",
+      "relevant": {
+        "item": "Wall Calendar"
+      }
+    },
+    {
+      "id": "item-kw-yoga-mat",
+      "type": "item_keyword",
+      "query": "Yoga Mat",
+      "relevant": {
+        "item": "Yoga Mat"
+      }
+    },
+    {
+      "id": "item-kw-paperback-novel",
+      "type": "item_keyword",
+      "query": "Paperback Novel",
+      "relevant": {
+        "item": "Paperback Novel"
+      }
+    },
+    {
+      "id": "item-para-recycled-paper-ream",
+      "type": "item_paraphrase",
+      "query": "a pack of copy sheets for the printer",
+      "relevant": {
+        "item": "Recycled Paper Ream"
+      }
+    },
+    {
+      "id": "item-para-ballpoint-pen-12-pack",
+      "type": "item_paraphrase",
+      "query": "a box of writing instruments",
+      "relevant": {
+        "item": "Ballpoint Pen 12-pack"
+      }
+    },
+    {
+      "id": "item-para-steel-hex-bolts-box-of-50",
+      "type": "item_paraphrase",
+      "query": "metal fasteners for a construction project",
+      "relevant": {
+        "item": "Steel Hex Bolts (box of 50)"
+      }
+    },
+    {
+      "id": "item-para-cedar-bird-feeder",
+      "type": "item_paraphrase",
+      "query": "something to attract songbirds to the yard",
+      "relevant": {
+        "item": "Cedar Bird Feeder"
+      }
+    },
+    {
+      "id": "item-para-ceramic-mug-12oz",
+      "type": "item_paraphrase",
+      "query": "a cup for hot drinks",
+      "relevant": {
+        "item": "Ceramic Mug 12oz"
+      }
+    },
+    {
+      "id": "item-para-organic-roast-coffee-12oz",
+      "type": "item_paraphrase",
+      "query": "beans for my morning espresso",
+      "relevant": {
+        "item": "Organic Roast Coffee 12oz"
+      }
+    },
+    {
+      "id": "item-para-canvas-tote-bag",
+      "type": "item_paraphrase",
+      "query": "cloth carryall for groceries",
+      "relevant": {
+        "item": "Canvas Tote Bag"
+      }
+    },
+    {
+      "id": "item-para-led-desk-lamp",
+      "type": "item_paraphrase",
+      "query": "a light for my workspace",
+      "relevant": {
+        "item": "LED Desk Lamp"
+      }
+    },
+    {
+      "id": "item-para-bamboo-cutting-board",
+      "type": "item_paraphrase",
+      "query": "chopping block for the kitchen",
+      "relevant": {
+        "item": "Bamboo Cutting Board"
+      }
+    },
+    {
+      "id": "item-para-wool-blend-socks-pair",
+      "type": "item_paraphrase",
+      "query": "warm hosiery for my feet",
+      "relevant": {
+        "item": "Wool Blend Socks (pair)"
+      }
+    },
+    {
+      "id": "item-para-stainless-water-bottle",
+      "type": "item_paraphrase",
+      "query": "reusable metal flask for drinks",
+      "relevant": {
+        "item": "Stainless Water Bottle"
+      }
+    },
+    {
+      "id": "item-para-garden-trowel",
+      "type": "item_paraphrase",
+      "query": "hand tool for digging in flower beds",
+      "relevant": {
+        "item": "Garden Trowel"
+      }
+    },
+    {
+      "id": "item-para-notebook-ruled-80pg",
+      "type": "item_paraphrase",
+      "query": "lined journal for jotting things down",
+      "relevant": {
+        "item": "Notebook, ruled 80pg"
+      }
+    },
+    {
+      "id": "item-para-packing-tape-roll",
+      "type": "item_paraphrase",
+      "query": "adhesive for sealing shipping boxes",
+      "relevant": {
+        "item": "Packing Tape Roll"
+      }
+    },
+    {
+      "id": "item-para-aa-batteries-8-pack",
+      "type": "item_paraphrase",
+      "query": "double-A cells for the remote control",
+      "relevant": {
+        "item": "AA Batteries (8-pack)"
+      }
+    },
+    {
+      "id": "item-para-picture-frame-5x7",
+      "type": "item_paraphrase",
+      "query": "something to display a photo in",
+      "relevant": {
+        "item": "Picture Frame 5x7"
+      }
+    },
+    {
+      "id": "item-para-scented-candle-8oz",
+      "type": "item_paraphrase",
+      "query": "aromatic wax for relaxing evenings",
+      "relevant": {
+        "item": "Scented Candle 8oz"
+      }
+    },
+    {
+      "id": "item-para-dog-chew-toy",
+      "type": "item_paraphrase",
+      "query": "something for my puppy to gnaw on",
+      "relevant": {
+        "item": "Dog Chew Toy"
+      }
+    },
+    {
+      "id": "item-para-cat-litter-10lb",
+      "type": "item_paraphrase",
+      "query": "supplies for the kitty's box",
+      "relevant": {
+        "item": "Cat Litter 10lb"
+      }
+    },
+    {
+      "id": "item-para-bike-tire-patch-kit",
+      "type": "item_paraphrase",
+      "query": "a way to fix a flat on my bicycle",
+      "relevant": {
+        "item": "Bike Tire Patch Kit"
+      }
+    },
+    {
+      "id": "item-para-produce-bags-set-of-5",
+      "type": "item_paraphrase",
+      "query": "mesh sacks for fruit and vegetables",
+      "relevant": {
+        "item": "Produce Bags (set of 5)"
+      }
+    },
+    {
+      "id": "item-para-whiteboard-marker-set",
+      "type": "item_paraphrase",
+      "query": "dry-erase pens",
+      "relevant": {
+        "item": "Whiteboard Marker Set"
+      }
+    },
+    {
+      "id": "item-para-throw-pillow-cover",
+      "type": "item_paraphrase",
+      "query": "cushion case for the sofa",
+      "relevant": {
+        "item": "Throw Pillow Cover"
+      }
+    },
+    {
+      "id": "item-para-herbal-tea-sampler",
+      "type": "item_paraphrase",
+      "query": "assortment of caffeine-free infusions",
+      "relevant": {
+        "item": "Herbal Tea Sampler"
+      }
+    },
+    {
+      "id": "item-para-furnace-filter-16x20",
+      "type": "item_paraphrase",
+      "query": "replacement part for the home heating system",
+      "relevant": {
+        "item": "Furnace Filter 16x20"
+      }
+    },
+    {
+      "id": "item-para-extension-cord-25ft",
+      "type": "item_paraphrase",
+      "query": "long power cable for an outlet",
+      "relevant": {
+        "item": "Extension Cord 25ft"
+      }
+    },
+    {
+      "id": "item-para-kitchen-sponge-6-pack",
+      "type": "item_paraphrase",
+      "query": "dish scrubbers",
+      "relevant": {
+        "item": "Kitchen Sponge 6-pack"
+      }
+    },
+    {
+      "id": "item-para-wall-calendar",
+      "type": "item_paraphrase",
+      "query": "a hanging planner showing the months",
+      "relevant": {
+        "item": "Wall Calendar"
+      }
+    },
+    {
+      "id": "item-para-yoga-mat",
+      "type": "item_paraphrase",
+      "query": "exercise pad for stretching",
+      "relevant": {
+        "item": "Yoga Mat"
+      }
+    },
+    {
+      "id": "item-para-paperback-novel",
+      "type": "item_paraphrase",
+      "query": "a book to read on vacation",
+      "relevant": {
+        "item": "Paperback Novel"
+      }
+    },
+    {
+      "id": "vendor-kw-cascade-coffee-roasters",
+      "type": "vendor_keyword",
+      "query": "Cascade Coffee Roasters",
+      "relevant": {
+        "vendors": [
+          "Cascade Coffee Roasters"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-ironclad-hardware-supply",
+      "type": "vendor_keyword",
+      "query": "Ironclad Hardware Supply",
+      "relevant": {
+        "vendors": [
+          "Ironclad Hardware Supply"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-maple-co-stationery",
+      "type": "vendor_keyword",
+      "query": "Maple & Co. Stationery",
+      "relevant": {
+        "vendors": [
+          "Maple & Co. Stationery"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-ridgeline-bike-works",
+      "type": "vendor_keyword",
+      "query": "Ridgeline Bike Works",
+      "relevant": {
+        "vendors": [
+          "Ridgeline Bike Works"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-cobblestone-bakery",
+      "type": "vendor_keyword",
+      "query": "Cobblestone Bakery",
+      "relevant": {
+        "vendors": [
+          "Cobblestone Bakery"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-sunridge-electronics-depot",
+      "type": "vendor_keyword",
+      "query": "Sunridge Electronics Depot",
+      "relevant": {
+        "vendors": [
+          "Sunridge Electronics Depot"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-thistlewood-garden-center",
+      "type": "vendor_keyword",
+      "query": "Thistlewood Garden Center",
+      "relevant": {
+        "vendors": [
+          "Thistlewood Garden Center"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-blue-harbor-pet-supply",
+      "type": "vendor_keyword",
+      "query": "Blue Harbor Pet Supply",
+      "relevant": {
+        "vendors": [
+          "Blue Harbor Pet Supply"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-pinecrest-outdoor-supply",
+      "type": "vendor_keyword",
+      "query": "Pinecrest Outdoor Supply",
+      "relevant": {
+        "vendors": [
+          "Pinecrest Outdoor Supply"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-driftwood-general-store",
+      "type": "vendor_keyword",
+      "query": "Driftwood General Store",
+      "relevant": {
+        "vendors": [
+          "Driftwood General Store"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-union-square-print-shop",
+      "type": "vendor_keyword",
+      "query": "Union Square Print Shop",
+      "relevant": {
+        "vendors": [
+          "Union Square Print Shop"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-foxglove-florist-gifts",
+      "type": "vendor_keyword",
+      "query": "Foxglove Florist & Gifts",
+      "relevant": {
+        "vendors": [
+          "Foxglove Florist & Gifts"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-copper-kettle-tea-house",
+      "type": "vendor_keyword",
+      "query": "Copper Kettle Tea House",
+      "relevant": {
+        "vendors": [
+          "Copper Kettle Tea House"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-willow-creek-home-goods",
+      "type": "vendor_keyword",
+      "query": "Willow Creek Home Goods",
+      "relevant": {
+        "vendors": [
+          "Willow Creek Home Goods"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-amberlight-candle-co",
+      "type": "vendor_keyword",
+      "query": "Amberlight Candle Co.",
+      "relevant": {
+        "vendors": [
+          "Amberlight Candle Co."
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-sunny-acres-farm-stand",
+      "type": "vendor_keyword",
+      "query": "Sunny Acres Farm Stand",
+      "relevant": {
+        "vendors": [
+          "Sunny Acres Farm Stand"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-northgate-office-outfitters",
+      "type": "vendor_keyword",
+      "query": "Northgate Office Outfitters",
+      "relevant": {
+        "vendors": [
+          "Northgate Office Outfitters"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-sterling-hardware-supply",
+      "type": "vendor_keyword",
+      "query": "Sterling Hardware & Supply",
+      "relevant": {
+        "vendors": [
+          "Sterling Hardware & Supply"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-green-valley-grocery",
+      "type": "vendor_keyword",
+      "query": "Green Valley Grocery",
+      "relevant": {
+        "vendors": [
+          "Green Valley Grocery"
+        ]
+      }
+    },
+    {
+      "id": "vendor-kw-lindenplatz-bakery",
+      "type": "vendor_keyword",
+      "query": "Lindenplatz Bakery",
+      "relevant": {
+        "vendors": [
+          "Lindenplatz Bakery"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-coffee-roastery",
+      "type": "vendor_paraphrase",
+      "query": "coffee roastery",
+      "relevant": {
+        "vendors": [
+          "Cascade Coffee Roasters"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-hardware-store",
+      "type": "vendor_paraphrase",
+      "query": "hardware store",
+      "relevant": {
+        "vendors": [
+          "Ironclad Hardware Supply",
+          "Sterling Hardware & Supply"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-shop-selling-fine-paper-and-greeting-cards",
+      "type": "vendor_paraphrase",
+      "query": "shop selling fine paper and greeting cards",
+      "relevant": {
+        "vendors": [
+          "Maple & Co. Stationery"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-bicycle-repair-shop",
+      "type": "vendor_paraphrase",
+      "query": "bicycle repair shop",
+      "relevant": {
+        "vendors": [
+          "Ridgeline Bike Works"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-where-i-bought-bread-and-pastries",
+      "type": "vendor_paraphrase",
+      "query": "where I bought bread and pastries",
+      "relevant": {
+        "vendors": [
+          "Cobblestone Bakery",
+          "Lindenplatz Bakery"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-gadget-and-computer-retailer",
+      "type": "vendor_paraphrase",
+      "query": "gadget and computer retailer",
+      "relevant": {
+        "vendors": [
+          "Sunridge Electronics Depot"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-plant-nursery",
+      "type": "vendor_paraphrase",
+      "query": "plant nursery",
+      "relevant": {
+        "vendors": [
+          "Thistlewood Garden Center"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-shop-for-animal-supplies",
+      "type": "vendor_paraphrase",
+      "query": "shop for animal supplies",
+      "relevant": {
+        "vendors": [
+          "Blue Harbor Pet Supply"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-camping-and-hiking-gear-store",
+      "type": "vendor_paraphrase",
+      "query": "camping and hiking gear store",
+      "relevant": {
+        "vendors": [
+          "Pinecrest Outdoor Supply"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-copy-and-printing-service",
+      "type": "vendor_paraphrase",
+      "query": "copy and printing service",
+      "relevant": {
+        "vendors": [
+          "Union Square Print Shop"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-flower-shop",
+      "type": "vendor_paraphrase",
+      "query": "flower shop",
+      "relevant": {
+        "vendors": [
+          "Foxglove Florist & Gifts"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-cafe-that-serves-tea",
+      "type": "vendor_paraphrase",
+      "query": "cafe that serves tea",
+      "relevant": {
+        "vendors": [
+          "Copper Kettle Tea House"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-home-decor-store",
+      "type": "vendor_paraphrase",
+      "query": "home decor store",
+      "relevant": {
+        "vendors": [
+          "Willow Creek Home Goods"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-candle-maker",
+      "type": "vendor_paraphrase",
+      "query": "candle maker",
+      "relevant": {
+        "vendors": [
+          "Amberlight Candle Co."
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-roadside-stand-selling-fresh-vegetables-from-the-farm",
+      "type": "vendor_paraphrase",
+      "query": "roadside stand selling fresh vegetables from the farm",
+      "relevant": {
+        "vendors": [
+          "Sunny Acres Farm Stand"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-office-supply-store",
+      "type": "vendor_paraphrase",
+      "query": "office supply store",
+      "relevant": {
+        "vendors": [
+          "Northgate Office Outfitters"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-supermarket",
+      "type": "vendor_paraphrase",
+      "query": "supermarket",
+      "relevant": {
+        "vendors": [
+          "Green Valley Grocery"
+        ]
+      }
+    },
+    {
+      "id": "vendor-para-old-fashioned-seaside-general-merchandise-shop",
+      "type": "vendor_paraphrase",
+      "query": "old-fashioned seaside general merchandise shop",
+      "relevant": {
+        "vendors": [
+          "Driftwood General Store"
+        ]
+      }
+    },
+    {
+      "id": "location-receipts-from-stores-in-oregon",
+      "type": "location",
+      "query": "receipts from stores in Oregon",
+      "relevant": {
+        "doc_ids": [
+          "001",
+          "004",
+          "010",
+          "023"
+        ]
+      }
+    },
+    {
+      "id": "location-purchases-made-in-asheville",
+      "type": "location",
+      "query": "purchases made in Asheville",
+      "relevant": {
+        "doc_ids": [
+          "007",
+          "015"
+        ]
+      }
+    },
+    {
+      "id": "location-shopping-in-new-york",
+      "type": "location",
+      "query": "shopping in New York",
+      "relevant": {
+        "doc_ids": [
+          "011",
+          "017"
+        ]
+      }
+    },
+    {
+      "id": "location-stores-in-michigan",
+      "type": "location",
+      "query": "stores in Michigan",
+      "relevant": {
+        "doc_ids": [
+          "002",
+          "014"
+        ]
+      }
+    },
+    {
+      "id": "location-purchase-made-in-germany",
+      "type": "location",
+      "query": "purchase made in Germany",
+      "relevant": {
+        "doc_ids": [
+          "024"
+        ]
+      }
+    },
+    {
+      "id": "location-receipts-from-austin-texas",
+      "type": "location",
+      "query": "receipts from Austin, Texas",
+      "relevant": {
+        "doc_ids": [
+          "006",
+          "020"
+        ]
+      }
+    },
+    {
+      "id": "amount-receipt-with-a-total-of-425-58",
+      "type": "amount",
+      "query": "receipt with a total of $425.58",
+      "relevant": {
+        "doc_ids": [
+          "018"
+        ]
+      }
+    },
+    {
+      "id": "amount-the-12-09-purchase",
+      "type": "amount",
+      "query": "the $12.09 purchase",
+      "relevant": {
+        "doc_ids": [
+          "001"
+        ]
+      }
+    },
+    {
+      "id": "amount-invoice-that-came-to-494-13",
+      "type": "amount",
+      "query": "invoice that came to 494.13",
+      "relevant": {
+        "doc_ids": [
+          "019"
+        ]
+      }
+    },
+    {
+      "id": "amount-order-totaling-124-16",
+      "type": "amount",
+      "query": "order totaling $124.16",
+      "relevant": {
+        "doc_ids": [
+          "006"
+        ]
+      }
+    },
+    {
+      "id": "amount-the-receipt-for-27-82-euros",
+      "type": "amount",
+      "query": "the receipt for 27.82 euros",
+      "relevant": {
+        "doc_ids": [
+          "024"
+        ]
+      }
+    }
+  ]
+}

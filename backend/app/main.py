@@ -4,7 +4,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.routers import documents, review, stats
+from app.routers import documents, review, search, stats
 from app.routers.documents import MAX_UPLOAD_SIZE
 
 
@@ -100,6 +100,7 @@ app.add_middleware(MaxBodySizeMiddleware, max_body_size=MAX_UPLOAD_SIZE)
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(review.router, prefix="/review", tags=["review"])
 app.include_router(stats.router, prefix="/stats", tags=["stats"])
+app.include_router(search.router, prefix="/search", tags=["search"])
 
 
 @app.get("/healthz")

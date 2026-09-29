@@ -1,0 +1,14 @@
+Cobblestone Bakery
+15 Market Sq, Savannah, GA
+
+Date: 2025-12-03
+
+Item                 Qty      Price      Total
+Picture Frame 5x7      4       $9.15     $36.60
+Wool Blend Socks (pa   1       $8.65      $8.65
+
+Subtotal: $45.25
+Tax: $3.05
+Total: $48.30
+
+Currency: USD

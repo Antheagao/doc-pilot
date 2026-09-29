@@ -1,0 +1,15 @@
+Copper Kettle Tea House
+19 Steep St, Seattle, WA
+
+Date: 2025-10-11
+
+Item                         Qty      Price      Total
+Wool Blend Socks (pair)        2       $9.60     $19.20
+Whiteboard Marker Set          2       $7.60     $15.20
+Paperback Novel                2       $8.80     $17.60
+
+Subtotal: $52.00
+Tax: $4.29
+Total: $56.29
+
+Currency: USD

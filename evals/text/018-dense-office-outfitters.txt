@@ -1,0 +1,24 @@
+Northgate Office Outfitters
+500 Commerce Dr, Columbus, OH
+
+Date: 2025-09-01
+
+Item                           Qty      Price      Total
+Cedar Bird Feeder                4      $21.10     $84.40
+Whiteboard Marker Set            2       $5.75     $11.50
+AA Batteries (8-pack)            1       $6.80      $6.80
+Stainless Water Bottle           2      $14.20     $28.40
+LED Desk Lamp                    2      $19.70     $39.40
+Canvas Tote Bag                  2       $9.05     $18.10
+Picture Frame 5x7                2      $12.05     $24.10
+Produce Bags (set of 5)          4       $6.65     $26.60
+Herbal Tea Sampler               3       $8.05     $24.15
+Organic Roast Coffee 12oz        3      $15.90     $47.70
+Yoga Mat                         2      $22.70     $45.40
+Wool Blend Socks (pair)          4       $9.15     $36.60
+
+Subtotal: $393.15
+Tax: $32.43
+Total: $425.58
+
+Currency: USD

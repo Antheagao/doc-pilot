@@ -13,6 +13,8 @@ dependencies = [
     "pydantic-settings",
     "python-multipart",
     "pypdf",
+    "pgvector",
+    "fastembed",
 ]
 
 [project.optional-dependencies]

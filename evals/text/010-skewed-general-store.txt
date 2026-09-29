@@ -1,0 +1,14 @@
+Driftwood General Store
+3 Shoreline Dr, Astoria, OR
+
+Date: 2026-03-20
+
+Item                 Qty      Price      Total
+Ballpoint Pen 12-pac   4       $4.45     $17.80
+Packing Tape Roll      2       $3.95      $7.90
+
+Subtotal: $25.70
+Tax: $1.80
+Total: $27.50
+
+Currency: USD

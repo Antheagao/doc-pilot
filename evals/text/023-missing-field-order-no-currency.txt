@@ -1,0 +1,13 @@
+Driftwood General Store
+3 Shoreline Dr, Astoria, OR
+
+Date: 2025-10-27
+
+Item                       Qty      Price      Total
+Yoga Mat                     1       20.90      20.90
+Kitchen Sponge 6-pack        4        3.75      15.00
+Steel Hex Bolts (box of 50   3        6.40      19.20
+
+Subtotal: 55.10
+Tax: 3.31
+Total: 58.41

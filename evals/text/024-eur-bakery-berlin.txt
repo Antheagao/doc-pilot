@@ -1,0 +1,15 @@
+Lindenplatz Bakery
+12 Marktplatz, Berlin, Germany
+
+Date: 31/05/2026
+
+Item                         Qty      Price      Total
+Notebook, ruled 80pg           2    2,95 EUR   5,90 EUR
+Kitchen Sponge 6-pack          2    3,40 EUR   6,80 EUR
+Cat Litter 10lb                1   13,55 EUR  13,55 EUR
+
+Subtotal: 26,25 EUR
+Tax: 1,57 EUR
+Total: 27,82 EUR
+
+Currency: EUR

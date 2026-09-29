@@ -1196,3 +1196,64 @@ def test_leaf_is_malformed_false_for_well_formed_null_value() -> None:
     leaf = {"value": None, "confidence": 0.3}
     assert _leaf_is_malformed(leaf) is False
     assert _coerce_leaf(leaf) == (None, 0.3)
+
+
+async def _jobs_for(db_session: AsyncSession, document_id) -> list[Job]:
+    return list(
+        (await db_session.execute(select(Job).where(Job.document_id == document_id)))
+        .scalars()
+        .all()
+    )
+
+
+async def test_successful_extraction_enqueues_an_index_job(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(100, 50)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    index_jobs = [j for j in await _jobs_for(db_session, document.id) if j.kind == "index"]
+    assert len(index_jobs) == 1
+    assert index_jobs[0].state == "pending"
+
+
+async def test_index_after_extraction_off_enqueues_nothing(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        extraction_module,
+        "get_settings",
+        lambda: Settings(extraction_model="claude-sonnet-5", index_after_extraction=False),
+    )
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(100, 50)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    assert [j.kind for j in await _jobs_for(db_session, document.id)] == ["extract"]
+
+
+async def test_failed_extraction_enqueues_no_index_job(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_client(monkeypatch, _FakeMessage("refusal", [], _FakeUsage(100, 0)))
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    with pytest.raises(ModelRefusalError):
+        await process_document_job(db_session, job)
+    await db_session.rollback()
+
+    assert [j.kind for j in await _jobs_for(db_session, document.id)] == ["extract"]

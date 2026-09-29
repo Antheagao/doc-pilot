@@ -49,6 +49,46 @@ class Settings(BaseSettings):
     # going to be able to chunk usefully anyway.
     pdf_max_pages: int = 20
 
+    # --- Retrieval (app/retrieval/, app/transcription.py) -----------------
+    # After a successful extraction, enqueue an 'index' job that transcribes
+    # each page, chunks it, embeds the chunks, and writes them to pgvector
+    # (see app.retrieval.indexing.process_index_job). Off means documents
+    # are extracted but never become searchable -- and no transcription
+    # spend is incurred.
+    index_after_extraction: bool = True
+    # Model for per-page transcription, the text source the retrieval
+    # index is built from. Plain transcription doesn't need the extraction
+    # model's judgment, so this defaults to the cheapest priced model --
+    # must have an entry in app.extraction.PRICING_PER_MTOK.
+    transcription_model: str = "claude-haiku-4-5"
+    # "fastembed" (BAAI/bge-small-en-v1.5 via ONNX, local, no API key) or
+    # "hashing" (deterministic feature hashing: offline and instant, but
+    # lexical rather than semantic -- what the test suite and CI use).
+    # Both produce EMBEDDING_DIM-dimensional vectors (app/models.py).
+    embedding_backend: str = "fastembed"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    # Where fastembed caches downloaded model files. None uses fastembed's
+    # own default (a temp directory); docker-compose.yml points it at a
+    # shared volume so the model downloads once, not per container start.
+    embedding_cache_dir: str | None = None
+    # A local directory holding an already-downloaded ONNX export of
+    # embedding_model, bypassing the download entirely (air-gapped hosts).
+    embedding_model_path: str | None = None
+    # Chunking (app/retrieval/chunking.py). 0 means one chunk per page.
+    # 200/80 is what the retrieval eval measured best on this corpus
+    # (README "Retrieval eval"): whole-page chunks blur a 16-item receipt
+    # into one vector that matches none of its items well, while recall
+    # plateaus between 120 and 200 chars and falls off again by 300.
+    # Receipt lines run ~60 chars, so a chunk is ~3 lines. A corpus of
+    # prose-heavy documents would want larger chunks -- re-run the eval
+    # with --chunk-sizes before changing this.
+    chunk_max_chars: int = 200
+    chunk_overlap_chars: int = 80
+    # Prefix each chunk's embedded/searchable text with its document's
+    # title line and page number, so a chunk cut from the middle of a page
+    # still carries the context of which document it came from.
+    chunk_context_headers: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

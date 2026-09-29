@@ -1,0 +1,16 @@
+Ironclad Hardware Supply
+78 Foundry Ave, Detroit, MI
+
+Date: 2025-06-29
+
+Item                         Qty      Price      Total
+Steel Hex Bolts (box of 50)    3       $6.75     $20.25
+Garden Trowel                  2       $8.10     $16.20
+Kitchen Sponge 6-pack          2       $5.00     $10.00
+Organic Roast Coffee 12oz      4      $15.00     $60.00
+
+Subtotal: $106.45
+Tax: $8.78
+Total: $115.23
+
+Currency: USD

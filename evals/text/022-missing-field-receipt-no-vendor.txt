@@ -1,0 +1,13 @@
+RECEIPT
+
+Date: 2025-08-11
+
+Item                       Qty      Price      Total
+LED Desk Lamp                4      $19.85     $79.40
+Recycled Paper Ream          1       $5.85      $5.85
+
+Subtotal: $85.25
+Tax: $5.75
+Total: $91.00
+
+Currency: USD

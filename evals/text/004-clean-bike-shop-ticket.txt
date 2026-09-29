@@ -1,0 +1,15 @@
+Ridgeline Bike Works
+88 Summit Ave, Bend, OR
+
+Date: 2025-09-29
+
+Item                         Qty      Price      Total
+Wool Blend Socks (pair)        4       $8.90     $35.60
+Cedar Bird Feeder              1      $14.55     $14.55
+Herbal Tea Sampler             4       $9.20     $36.80
+
+Subtotal: $86.95
+Tax: $5.87
+Total: $92.82
+
+Currency: USD

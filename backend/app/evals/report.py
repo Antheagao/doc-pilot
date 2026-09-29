@@ -250,7 +250,13 @@ def render_tables(results: list[dict[str, Any]]) -> str:
     )
 
 
-def update_readme(markdown: str, readme_path: Path) -> None:
+def update_readme(
+    markdown: str,
+    readme_path: Path,
+    *,
+    start_marker: str = START_MARKER,
+    end_marker: str = END_MARKER,
+) -> None:
     """Replace the block between START_MARKER and END_MARKER in
     `readme_path` with `markdown`, keeping the markers themselves in
     place. Idempotent: calling this twice with the same `markdown`
@@ -262,19 +268,23 @@ def update_readme(markdown: str, readme_path: Path) -> None:
     before START -- README's Evals section is added once, by hand; a
     missing marker means it was edited out from under this function and
     needs a human to look, not a silent no-op.
+
+    The markers default to the extraction eval's EVAL_TABLE pair; the
+    retrieval eval passes its own (app.evals.retrieval) to maintain a
+    second table in the same README the same way.
     """
     text = readme_path.read_text(encoding="utf-8")
-    start_idx = text.find(START_MARKER)
-    end_idx = text.find(END_MARKER)
+    start_idx = text.find(start_marker)
+    end_idx = text.find(end_marker)
     if start_idx == -1 or end_idx == -1:
         raise ValueError(
-            f"{readme_path}: EVAL_TABLE markers not found -- expected both "
-            f"{START_MARKER!r} and {END_MARKER!r}"
+            f"{readme_path}: table markers not found -- expected both "
+            f"{start_marker!r} and {end_marker!r}"
         )
     if start_idx > end_idx:
-        raise ValueError(f"{readme_path}: {END_MARKER!r} appears before {START_MARKER!r}")
+        raise ValueError(f"{readme_path}: {end_marker!r} appears before {start_marker!r}")
 
-    before = text[: start_idx + len(START_MARKER)]
+    before = text[: start_idx + len(start_marker)]
     after = text[end_idx:]
     readme_path.write_text(f"{before}\n\n{markdown}\n\n{after}", encoding="utf-8")
 

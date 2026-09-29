@@ -1,0 +1,14 @@
+Blue Harbor Pet Supply
+301 Wharf St, Providence, RI
+
+Date: 2025-09-25
+
+Item                 Qty      Price      Total
+Garden Trowel          2       $6.70     $13.40
+Notebook, ruled 80pg   1       $2.65      $2.65
+
+Subtotal: $16.05
+Tax: $0.96
+Total: $17.01
+
+Currency: USD

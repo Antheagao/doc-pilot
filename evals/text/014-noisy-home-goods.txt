@@ -1,0 +1,14 @@
+Willow Creek Home Goods
+63 Orchard Way, Traverse City, MI
+
+Date: 2025-07-25
+
+Item                         Qty      Price      Total
+Bike Tire Patch Kit            2       $4.80      $9.60
+Throw Pillow Cover             3       $9.45     $28.35
+
+Subtotal: $37.95
+Tax: $1.90
+Total: $39.85
+
+Currency: USD

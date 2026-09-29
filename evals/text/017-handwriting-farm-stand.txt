@@ -1,0 +1,15 @@
+Sunny Acres Farm Stand
+40 Rural Route 2, Ithaca, NY
+
+Date: 2026-02-23
+
+Item                 Qty      Price      Total
+Packing Tape Roll      3       $3.60     $10.80
+Extension Cord 25ft    3      $14.65     $43.95
+Wool Blend Socks (pa   1       $8.00      $8.00
+
+Subtotal: $62.75
+Tax: $4.39
+Total: $67.14
+
+Currency: USD

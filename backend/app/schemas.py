@@ -127,3 +127,30 @@ class ReviewResolveRequest(BaseModel):
 
     action: Literal["approve", "correct"]
     corrected_value: Any = None
+
+
+class SearchHitOut(BaseModel):
+    """One retrieved chunk and its citation: which document, which page,
+    and where on that page (char offsets into the page's stored text --
+    text == page_text[char_start:char_end])."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    filename: str
+    page_number: int
+    chunk_index: int
+    char_start: int
+    char_end: int
+    text: str
+    score: float
+    dense_rank: int | None
+    lexical_rank: int | None
+
+
+class SearchResponse(BaseModel):
+    query: str
+    mode: Literal["dense", "lexical", "hybrid"]
+    embedding_model: str
+    results: list[SearchHitOut]

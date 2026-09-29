@@ -1,0 +1,15 @@
+Union Square Print Shop
+205 Broadway, Brooklyn, NY
+
+Date: 2026-01-18
+
+Item                         Qty      Price      Total
+Wall Calendar                  4       $7.80     $31.20
+Dog Chew Toy                   2       $5.75     $11.50
+Paperback Novel                4      $11.80     $47.20
+
+Subtotal: $89.90
+Tax: $5.39
+Total: $95.29
+
+Currency: USD

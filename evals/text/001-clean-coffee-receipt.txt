@@ -1,0 +1,13 @@
+Cascade Coffee Roasters
+456 Pine St, Portland, OR
+
+Date: 2025-08-08
+
+Item                         Qty      Price      Total
+Cat Litter 10lb                1      $11.30     $11.30
+
+Subtotal: $11.30
+Tax: $0.79
+Total: $12.09
+
+Currency: USD

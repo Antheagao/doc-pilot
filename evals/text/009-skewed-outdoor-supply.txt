@@ -1,0 +1,15 @@
+Pinecrest Outdoor Supply
+5 Trailhead Ct, Missoula, MT
+
+Date: 2026-01-24
+
+Item                 Qty      Price      Total
+Bike Tire Patch Kit    2       $4.55      $9.10
+Garden Trowel          1       $7.20      $7.20
+Bamboo Cutting Board   4      $18.30     $73.20
+
+Subtotal: $89.50
+Tax: $4.48
+Total: $93.98
+
+Currency: USD
