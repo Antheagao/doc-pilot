@@ -1,0 +1,40 @@
+# Temporary: find a stable source for the embedding model after
+# storage.googleapis.com/qdrant-fastembed went private. Deleted after use.
+name: model-probe
+on:
+  push:
+    branches: [claude/model-probe]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hash candidate files
+        run: |
+          set -u
+          echo "archive onnx to match: 20e3bd678b8e67a722f151f3ee1e3827fc3f230839c0d57c025a3753cefa6b2e 132883455"
+          for repo in BAAI/bge-small-en-v1.5 Qdrant/bge-small-en-v1.5-onnx-Q Xenova/bge-small-en-v1.5 Qdrant/bge-small-en-v1.5-onnx; do
+            echo "== $repo"
+            curl -sS "https://huggingface.co/api/models/$repo" | python3 -c "import json,sys; d=json.load(sys.stdin); print('commit', d.get('sha'), 'error', d.get('error'))" || true
+            curl -sS "https://huggingface.co/api/models/$repo/tree/main?recursive=true" | python3 -c "
+          import json,sys
+          try:
+              items = json.load(sys.stdin)
+          except Exception as e:
+              print('tree error', e); sys.exit(0)
+          if isinstance(items, dict):
+              print('tree', items); sys.exit(0)
+          for i in items:
+              if i.get('type') != 'file': continue
+              lfs = i.get('lfs') or {}
+              print('  ', i['path'], i.get('size'), 'lfs-sha256', lfs.get('oid'))
+          " || true
+          done
+          echo "== BAAI small files (sha256 of the bytes)"
+          for f in config.json tokenizer.json tokenizer_config.json special_tokens_map.json vocab.txt; do
+            curl -sSL -o file "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/$f"
+            echo "  $f $(sha256sum file | cut -c1-64) $(stat -c %s file)"
+          done
+          echo "== Qdrant onnx-Q small files"
+          for f in config.json tokenizer.json tokenizer_config.json special_tokens_map.json vocab.txt ort_config.json; do
+            curl -sSL -o file "https://huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q/resolve/main/$f" && echo "  $f $(sha256sum file | cut -c1-64) $(stat -c %s file)"
+          done
