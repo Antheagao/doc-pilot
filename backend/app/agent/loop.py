@@ -42,6 +42,7 @@ from app.extraction import (
     _build_client,
     _classify_api_error,
 )
+from app.langfuse_link import observation_attributes
 from app.telemetry import (
     DOCPILOT_COST_USD,
     GEN_AI_AGENT_NAME,
@@ -297,6 +298,7 @@ async def _run_tool(ctx: ToolContext, block: Any) -> tuple[dict[str, Any], ToolC
             GEN_AI_OPERATION_NAME: "execute_tool",
             GEN_AI_TOOL_NAME: block.name,
             GEN_AI_TOOL_CALL_ID: block.id,
+            **observation_attributes("tool"),
         },
     ) as span:
         handler = TOOL_HANDLERS.get(block.name)
@@ -391,6 +393,8 @@ async def answer_question(
             GEN_AI_PROVIDER_NAME: "anthropic",
             GEN_AI_AGENT_NAME: AGENT_NAME,
             GEN_AI_REQUEST_MODEL: model,
+            # A document chat is a Langfuse session: its turns, together.
+            **observation_attributes("agent", session_id=conversation_id),
         },
     ) as agent_span:
         if conversation_id is not None:

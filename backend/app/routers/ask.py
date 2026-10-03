@@ -39,6 +39,7 @@ from app.config import Settings, get_settings
 from app.db import get_session, get_session_factory
 from app.evals.online import record_ask_run
 from app.extraction import ExtractionError, NonRetryableExtractionError, _build_client
+from app.langfuse_link import score_feedback
 from app.models import AskRun
 from app.ratelimit import limit_ask
 from app.retrieval.embeddings import Embedder, get_embedder
@@ -318,4 +319,5 @@ async def give_feedback(
     run.feedback_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(run)
+    score_feedback(run)
     return ask_response(run)

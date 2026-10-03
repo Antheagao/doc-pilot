@@ -106,6 +106,7 @@ from app.telemetry import (
     configure_tracing,
     context_from_traceparent,
     instrument_engine,
+    otlp_enabled,
     shutdown_tracing,
     tracer,
     untraced,
@@ -486,7 +487,7 @@ async def run_worker(handler: Handler = dispatch_job, stop: asyncio.Event | None
 
 
 async def main() -> None:
-    if configure_tracing("doc-pilot-worker"):
+    if configure_tracing("doc-pilot-worker") and otlp_enabled():
         instrument_engine(engine)
         logger.info("tracing enabled (OTLP export)")
 

@@ -18,7 +18,9 @@ the worker starts the job's span as a child of that context.
 Off by default. Nothing is installed or exported unless the standard
 OTEL_EXPORTER_OTLP_ENDPOINT environment variable is set, so tests, CI and a
 plain `docker compose up` pay nothing. With it set (see docker-compose.yml's
-`tracing` profile, which runs Jaeger), spans go out over OTLP/HTTP.
+`tracing` profile, which runs Jaeger), spans go out over OTLP/HTTP. With
+Langfuse keys set (app/langfuse_link.py), the same provider also sends the
+GenAI spans to Langfuse -- either exporter, or both.
 
 Content capture: prompts, document images, transcriptions and search
 queries are never recorded on spans -- receipts carry personal data, and
@@ -35,6 +37,8 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.propagate import extract, inject
 from opentelemetry.trace import Span, SpanKind
+
+from app import langfuse_link
 
 TRACER_NAME = "doc-pilot"
 
@@ -80,14 +84,19 @@ def tracer() -> trace.Tracer:
     return trace.get_tracer(TRACER_NAME)
 
 
-def tracing_enabled() -> bool:
+def otlp_enabled() -> bool:
     return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip())
 
 
+def tracing_enabled() -> bool:
+    return otlp_enabled() or langfuse_link.langfuse_configured()
+
+
 def configure_tracing(service_name: str) -> bool:
-    """Install an OTLP-exporting TracerProvider when
-    OTEL_EXPORTER_OTLP_ENDPOINT is set; otherwise leave OpenTelemetry's
-    no-op default in place. Returns whether tracing is on.
+    """Install a TracerProvider when OTEL_EXPORTER_OTLP_ENDPOINT or the
+    Langfuse keys are set -- exporting over OTLP, to Langfuse, or both --
+    otherwise leave OpenTelemetry's no-op default in place. Returns whether
+    tracing is on.
 
     OTEL_SERVICE_NAME, if set, overrides `service_name` (the SDK's
     standard resource detection), so one image can run as several
@@ -103,14 +112,18 @@ def configure_tracing(service_name: str) -> bool:
 
     resource = Resource.create({"service.name": os.environ.get("OTEL_SERVICE_NAME") or service_name})
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    if otlp_enabled():
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)
+    if langfuse_link.langfuse_configured():
+        langfuse_link.attach(provider)
     return True
 
 
 def instrument_api(app: Any, engine: Any) -> None:
     """HTTP server spans for every request plus a span per SQL statement.
-    Called only when configure_tracing() turned tracing on."""
+    Called only when spans go out over OTLP: Langfuse keeps GenAI spans
+    only, so for it these would be made just to be dropped."""
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
     FastAPIInstrumentor.instrument_app(app, excluded_urls="healthz")
@@ -148,6 +161,7 @@ def shutdown_tracing() -> None:
     shutdown = getattr(provider, "shutdown", None)
     if shutdown is not None:
         shutdown()
+    langfuse_link.shutdown()  # its queued scores
 
 
 def current_traceparent() -> str | None:
@@ -217,3 +231,16 @@ def record_model_response(span: Span, response: Any, cost_usd: float) -> None:
         if isinstance(value, int):
             span.set_attribute(key, value)
     span.set_attribute(DOCPILOT_COST_USD, cost_usd)
+    langfuse_link.record_generation(
+        span,
+        cost_usd=cost_usd,
+        usage={
+            "input": usage.input_tokens,
+            "output": usage.output_tokens,
+            **{
+                name: value
+                for name in ("cache_read_input_tokens", "cache_creation_input_tokens")
+                if isinstance(value := getattr(usage, name, None), int)
+            },
+        },
+    )

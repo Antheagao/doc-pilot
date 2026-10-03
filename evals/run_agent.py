@@ -57,6 +57,7 @@ def main() -> int:
     if args.effort:
         os.environ["AGENT_EFFORT"] = args.effort
 
+    from app import langfuse_link
     from app.config import get_settings
     from app.db import engine
     from app.evals.agent import (
@@ -73,9 +74,14 @@ def main() -> int:
     from app.evals.retrieval import load_gold_corpus
     from app.extraction import _ensure_model_priced
     from app.retrieval.embeddings import build_embedder
+    from app.telemetry import configure_tracing, shutdown_tracing
 
     out_dir = Path(args.out) if args.out else None
     settings = get_settings()
+    # The eval's agent runs are traced like production's (OTLP and/or
+    # Langfuse, when configured); with Langfuse, each question's rubric
+    # result is also scored on its run's trace.
+    configure_tracing("doc-pilot-evals")
 
     if not args.report_only:
         if not settings.anthropic_api_key:
@@ -110,6 +116,9 @@ def main() -> int:
         result = asyncio.run(run())
         path = write_agent_result(result, out_dir)
         print(f"wrote {path}\n")
+        if langfuse_link.active():
+            print(f"queued {langfuse_link.score_eval_run(result.to_dict())} Langfuse score(s)")
+        shutdown_tracing()
         for entry in result.per_question:
             if "scores" not in entry:
                 print(f"  SKIP  {entry['id']} ({entry['skipped']})")

@@ -20,6 +20,9 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http",
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-instrumentation-sqlalchemy",
+    # Only used when LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are set
+    # (app/langfuse_link.py).
+    "langfuse>=4.16,<5",
 ]
 
 [project.optional-dependencies]

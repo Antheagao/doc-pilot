@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings
+from app.langfuse_link import observation_attributes
 from app.models import DocumentChunk, DocumentPage
 from app.retrieval.chunking import chunk_page, context_header, document_title
 from app.retrieval.embeddings import Embedder
@@ -129,6 +130,7 @@ async def index_document_pages(
             GEN_AI_REQUEST_MODEL: embedder.name,
             DOCPILOT_DOCUMENT_ID: str(document_id),
             "docpilot.chunk_count": len(texts),
+            **observation_attributes("embedding"),
         },
     ):
         vectors = await run_in_threadpool(embedder.embed_documents, texts)

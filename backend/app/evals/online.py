@@ -34,6 +34,7 @@ from app.agent.loop import AgentResult, Turn, history_messages
 from app.config import Settings, get_settings
 from app.evals.judge import grade_groundedness, render_evidence_from_messages
 from app.extraction import NonRetryableExtractionError, _build_client
+from app.langfuse_link import score_judgment
 from app.models import JOB_KIND_JUDGE, AskRun, Job
 
 logger = logging.getLogger(__name__)
@@ -188,3 +189,4 @@ async def process_judge_job(session: AsyncSession, job: Job) -> None:
     run.judge_error = verdict.error
     run.judged_at = datetime.now(UTC)
     await session.flush()
+    score_judgment(run)

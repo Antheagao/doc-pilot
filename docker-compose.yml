@@ -61,6 +61,11 @@ services:
       # Tracing is off unless this is set -- see the `jaeger` service.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: doc-pilot-api
+      # Langfuse (app/langfuse_link.py): LLM traces and evaluation scores,
+      # on when both keys are set. Base URL defaults to Langfuse Cloud.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
       # Share of answered /ask questions (0-1) the worker grades in the
       # background for groundedness -- one more model call each, so off
       # unless set. See app/evals/online.py.
@@ -116,6 +121,10 @@ services:
       EMBEDDING_CACHE_DIR: /data/models
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: doc-pilot-worker
+      # Langfuse: see the api service.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
     volumes:
       - uploads:/data/uploads
       - models:/data/models

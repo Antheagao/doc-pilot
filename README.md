@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-471 mocked backend tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+481 mocked backend tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -346,6 +346,24 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT="http://jaeger:4318"; docker compose --profile 
 ```
 
 then open http://localhost:16686. Content is never recorded on spans: no prompts, document images, transcriptions, or search queries -- receipts carry personal data, and the GenAI conventions make message content opt-in for the same reason.
+
+### Langfuse: LLM traces and evaluation scores
+
+Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`, plus `LANGFUSE_BASE_URL` for a self-hosted Langfuse (Langfuse Cloud otherwise). The API, the worker and `evals/run_agent.py` then send [Langfuse](https://langfuse.com) the same GenAI spans, either alongside Jaeger or on their own (`app/langfuse_link.py`).
+
+- **Traces, with no second layer of instrumentation.** Langfuse's SDK is built on OpenTelemetry, so it is one more span processor on doc-pilot's tracer provider. It forwards only the GenAI spans; SQL and HTTP spans stay out. Each span is typed for Langfuse:
+  - every model call is a *generation* with doc-pilot's own cost (cache pricing included) and token counts, rather than a price Langfuse looks up from its model table;
+  - an `/ask` run is an *agent* and its tool calls are *tools*;
+  - retrieval is a *retriever* and indexing an *embedding*;
+  - the online grader is an *evaluator*;
+  - a document chat's `conversation_id` is the Langfuse *session*, so a conversation's turns read as one thread.
+- **Evaluation scores, on the trace of the answer they grade:**
+  - the online grader's `grounded` and `answers_question` verdicts;
+  - a person's *was this right?* as `user_feedback`. It is upserted by ID, so changing a rating replaces the score instead of adding a second one.
+  - the offline agent eval's `eval_correct` and `eval_cites_relevant`, per question, on the trace of the run that answered it.
+- **The content rule holds.** Langfuse gets models, tokens, cost, latency, IDs and verdicts. It gets no prompts, documents, questions, answers or grader explanations, which can quote a receipt.
+
+A failed score is logged and dropped, so observability never fails the request or job it observes. `tests/test_langfuse.py` runs the real SDK against a local stand-in for the Langfuse API. It checks which spans are exported and which are dropped, the generation cost, the session, and the score payload.
 
 ## Failure handling
 

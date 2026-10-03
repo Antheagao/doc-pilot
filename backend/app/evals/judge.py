@@ -42,6 +42,7 @@ from app.extraction import (
     _classify_api_error,
     _ensure_model_priced,
 )
+from app.langfuse_link import observation_attributes
 from app.records import DocumentRecord
 from app.telemetry import (
     context_from_traceparent,
@@ -315,6 +316,7 @@ async def _grade(
         "evaluate agent_answer",
         context=context_from_traceparent(traceparent) if traceparent else None,
         kind=SpanKind.INTERNAL,
+        attributes=observation_attributes("evaluator"),
     ) as eval_span:
         with model_call_span(
             model, max_tokens=settings.judge_max_tokens, prompt_version=prompt_version

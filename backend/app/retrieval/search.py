@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.langfuse_link import observation_attributes
 from app.models import Document, DocumentChunk
 from app.retrieval.embeddings import Embedder
 from app.retrieval.normalize import normalize_query
@@ -346,6 +347,7 @@ async def search(
             "docpilot.search.mode": mode,
             "docpilot.search.k": k,
             "docpilot.search.lexical_scoring": lexical_scoring,
+            **observation_attributes("retriever"),
         },
     ) as span:
         hits = await _search(

@@ -14,7 +14,7 @@ from app.db import engine
 from app.retrieval.embeddings import warm_up_embedder
 from app.routers import ask, chat, documents, monitoring, review, search, stats
 from app.routers.documents import MAX_UPLOAD_SIZE
-from app.telemetry import configure_tracing, instrument_api
+from app.telemetry import configure_tracing, instrument_api, otlp_enabled
 
 
 class MaxBodySizeMiddleware:
@@ -136,7 +136,7 @@ app.include_router(ask.router, prefix="/ask", tags=["ask"])
 
 # Tracing is opt-in via OTEL_EXPORTER_OTLP_ENDPOINT (see app/telemetry.py);
 # when it's off this is a no-op and no instrumentation is installed.
-if configure_tracing("doc-pilot-api"):
+if configure_tracing("doc-pilot-api") and otlp_enabled():
     instrument_api(app, engine)
 
 
