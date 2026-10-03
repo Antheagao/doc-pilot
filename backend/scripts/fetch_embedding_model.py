@@ -9,6 +9,7 @@ directory):
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from app.retrieval.model_fetch import ensure_pinned_model
 
 
 def main() -> int:
+    # INFO shows each file's URL and the revision the host served.
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     settings = get_settings()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dest", default=settings.embedding_cache_dir, help="default: EMBEDDING_CACHE_DIR")
