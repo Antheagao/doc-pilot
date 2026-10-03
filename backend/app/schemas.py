@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -320,3 +320,69 @@ class ConversationSummary(BaseModel):
 class AskFeedbackRequest(BaseModel):
     rating: Literal["up", "down"]
     note: str | None = Field(default=None, max_length=1000)
+
+
+# ---- Monitoring dashboard (GET /monitoring/*) -------------------------------
+
+
+class EvalRunOut(BaseModel):
+    """One committed eval run, normalized across suites (app/evals/history.py)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    suite: Literal["extraction", "agent", "retrieval"]
+    started_at: datetime
+    series: str
+    detail: str
+    n: int
+    accuracy: float | None
+    accuracy_metric: str
+    mean_cost_usd: float | None
+    total_cost_usd: float | None
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+    extra: dict[str, float | None]
+
+
+class EvalHistoryOut(BaseModel):
+    extraction: list[EvalRunOut]
+    agent: list[EvalRunOut]
+    retrieval: list[EvalRunOut]
+
+
+class DailySpend(BaseModel):
+    """Model spend billed that day (UTC), by what it paid for."""
+
+    documents_usd: float  # extraction + page transcription
+    answers_usd: float  # the /ask agent and document chat
+    grading_usd: float  # the online groundedness grader
+    total_usd: float
+
+
+class DailyAnswers(BaseModel):
+    """/ask questions and chat turns asked that day."""
+
+    runs: int
+    answered: int
+    judged: int
+    # Of the answers the grader read (judged), the share it found grounded.
+    grounded_rate: float | None
+    feedback_up: int
+    feedback_down: int
+    mean_cost_usd: float | None
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+
+
+class DailyExtractions(BaseModel):
+    documents: int
+    mean_cost_usd: float | None
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+
+
+class DailyPoint(BaseModel):
+    date: date
+    spend: DailySpend
+    answers: DailyAnswers
+    extractions: DailyExtractions

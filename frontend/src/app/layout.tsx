@@ -28,6 +28,9 @@ export default function RootLayout({
             <Link href="/ask" className="nav-link">
               Ask
             </Link>
+            <Link href="/dashboard" className="nav-link">
+              Dashboard
+            </Link>
             <ReviewQueueLink />
           </nav>
         </header>

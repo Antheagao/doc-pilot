@@ -537,3 +537,61 @@ export async function getConversation(
   );
   return handle<AskResponse[]>(res);
 }
+
+// ---- Monitoring dashboard: GET /monitoring/* --------------------------------
+
+export type EvalSuite = "extraction" | "agent" | "retrieval";
+
+// One committed eval run, normalized across suites. `accuracy` is the
+// suite's headline metric, named by `accuracy_metric`; cost and latency
+// are per document / question / query.
+export interface EvalRun {
+  suite: EvalSuite;
+  started_at: string;
+  series: string;
+  detail: string;
+  n: number;
+  accuracy: number | null;
+  accuracy_metric: string;
+  mean_cost_usd: number | null;
+  total_cost_usd: number | null;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  extra: Record<string, number | null>;
+}
+
+export type EvalHistory = Record<EvalSuite, EvalRun[]>;
+
+export async function getEvalHistory(): Promise<EvalHistory> {
+  const res = await fetch(`${API_URL}/monitoring/evals`, { cache: "no-store" });
+  return handle<EvalHistory>(res);
+}
+
+// Live traffic for one UTC day.
+export interface DailyPoint {
+  date: string;
+  spend: { documents_usd: number; answers_usd: number; grading_usd: number; total_usd: number };
+  answers: {
+    runs: number;
+    answered: number;
+    judged: number;
+    grounded_rate: number | null;
+    feedback_up: number;
+    feedback_down: number;
+    mean_cost_usd: number | null;
+    latency_p50_ms: number | null;
+    latency_p95_ms: number | null;
+  };
+  extractions: {
+    documents: number;
+    mean_cost_usd: number | null;
+    latency_p50_ms: number | null;
+    latency_p95_ms: number | null;
+  };
+}
+
+export async function getDailyMetrics(days: number): Promise<DailyPoint[]> {
+  const params = new URLSearchParams({ days: String(days) });
+  const res = await fetch(`${API_URL}/monitoring/daily?${params}`, { cache: "no-store" });
+  return handle<DailyPoint[]>(res);
+}

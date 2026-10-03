@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml)
 
-AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking. Every document is also transcribed, chunked, and embedded into pgvector, so it's searchable in plain language with **page-level citations** -- and retrieval quality is measured by its own eval, not assumed ([Retrieval](#retrieval-search-with-page-citations)). On top of both, an agent answers questions ("how much have I spent at Northgate?") by choosing between search and the structured extraction data, citing the exact lines and fields it used ([Ask](#ask-an-agent-over-search-and-the-extracted-data)) -- and every extracted document has its own chat, whose answers point at the field they came from ([Chat](#chat-about-one-document)).
+AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking. Every document is also transcribed, chunked, and embedded into pgvector, so it's searchable in plain language with **page-level citations** -- and retrieval quality is measured by its own eval, not assumed ([Retrieval](#retrieval-search-with-page-citations)). On top of both, an agent answers questions ("how much have I spent at Northgate?") by choosing between search and the structured extraction data, citing the exact lines and fields it used ([Ask](#ask-an-agent-over-search-and-the-extracted-data)) -- and every extracted document has its own chat, whose answers point at the field they came from ([Chat](#chat-about-one-document)). A [monitoring dashboard](#monitoring-dashboard) charts accuracy, cost and latency for every eval run and for live traffic.
 
 <!-- LIVE_DEMO: hosted demo link goes here once a host is picked -->
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-455 mocked tests across four CI jobs (backend, frontend, compose config validation, and a retrieval-quality gate) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+462 mocked tests across four CI jobs (backend, frontend, compose config validation, and a retrieval-quality gate) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -293,6 +293,19 @@ The evals above grade the agent on questions whose answers are known. A real use
 - **A reference-free grader, sampled:** with `ASK_JUDGE_SAMPLE_RATE` set (0-1; off by default, since each grade is another model call), that share of answered questions gets a `judge` job on the same Postgres queue as extraction and indexing. The worker grades the stored answer with its own prompt (`prompts/groundedness_v1.md`): with no reference it can't say whether an answer is *correct*, so it judges only what the evidence can settle -- is every claim *grounded* in what the agent retrieved, and does the answer actually *address the question*. It runs off the request path, retries on API errors like any job, records a refusal or unreadable verdict instead of retrying it, and never grades the same answer twice. Its span joins the question's own trace (via the traceparent stored on the job, like an index job's), so one trace runs `invoke_agent` -> `job judge` -> `evaluate agent_answer` -> `chat`.
 
 The grader is held to the same standard as the eval judge: `python evals/run_judge_calibration.py --judge --grader groundedness` scores it against the calibration set's human *groundedness* labels, and it gets its own row in the table above. `GET /stats` reports both signals side by side (thumbs up/down, share of sampled answers judged grounded) along with spend by stage -- extraction, transcription, the agent, and the grader -- so the cost of making a document searchable and of answering questions about it is visible, not just the cost of extraction.
+
+## Monitoring dashboard
+
+`/dashboard` answers three questions about the AI parts -- how good, how expensive, how slow -- twice: offline, for every committed eval run, and in production, per day.
+
+<img src="screenshots/dashboard.png" width="900" alt="The monitoring dashboard: stat tiles and line charts of field accuracy, cost per document and latency per document across three extraction eval runs, then production tiles and charts of daily spend by stage, trailing 7-day answer quality, cost per answer and answer latency">
+
+*Top half: the committed extraction eval runs, as they are in `evals/results/` -- Claude Sonnet 5 twice, then Claude Haiku 4.5 (4 points less accurate, for 42% of the cost per document). Bottom half: synthetic traffic seeded into a local database for this capture -- there is no hosted deployment yet producing real traffic to show.*
+
+- **Eval runs** (`GET /monitoring/evals`, `app/evals/history.py`): the three offline suites write differently shaped artifacts, so each run is normalized to one headline accuracy (field accuracy for extraction, rubric-correct for the agent, recall@5 for retrieval -- the configuration production search runs, picked out of the eval's grid), cost per item and latency per item. A series is a model (or embedding model), so a model swap shows as a new line rather than a jump in an old one, and the headline tile compares a run with the same model's previous run. Corrupt artifacts are skipped, as in `/stats`. In compose the API container mounts `evals/results` read-only for this.
+- **Production** (`GET /monitoring/daily?days=N`, UTC days like the daily budget): spend by stage (documents = extraction + transcription, answers = Ask and chat, grading = the online grader, billed on the day it ran), answer quality from both online signals -- the sampled groundedness grade and people's *was this right?* -- as trailing 7-day rates (a day's handful of graded answers would swing a raw daily rate between 0% and 100%), and mean cost and p50/p95 latency per answer.
+
+The charts are hand-rolled SVG, not a chart library: series colors validated for color-vision deficiency against the page's own light and dark surfaces, a legend and end-of-line labels so identity never rests on color alone, a crosshair tooltip that also works from the keyboard (arrow keys), and a table view behind every chart so no value is reachable only by hovering.
 
 ## Tracing
 

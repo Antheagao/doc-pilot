@@ -83,6 +83,11 @@ services:
     volumes:
       - uploads:/data/uploads
       - models:/data/models
+      # The committed eval-run artifacts, for GET /stats (last_eval) and the
+      # monitoring dashboard's eval history (GET /monitoring/evals). The
+      # image holds only backend/, and app/evals resolves EVALS_DIR to
+      # /evals beside it.
+      - ./evals/results:/evals/results:ro
     restart: unless-stopped
 
   worker:
