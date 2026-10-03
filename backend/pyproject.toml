@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "doc-pilot backend — FastAPI service for document intelligence extraction"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi",
+    "fastapi>=0.142",  # app/main.py passes FastAPI(telemetry=...)
     "uvicorn[standard]",
     "sqlalchemy[asyncio]",
     "alembic",

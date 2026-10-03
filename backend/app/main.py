@@ -99,7 +99,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     warm_up.cancel()
 
 
-app = FastAPI(title="doc-pilot", lifespan=lifespan)
+# FastAPI's built-in OpenTelemetry (0.142+) is off: doc-pilot configures
+# tracing itself (app/telemetry.py, opt-in via OTEL_EXPORTER_OTLP_ENDPOINT)
+# and instruments the app with the OpenTelemetry ASGI middleware. Left on,
+# FastAPI would start its own root span for every request whenever any
+# tracer provider is set, and could add a second set of OTLP exporters
+# from the same environment variables.
+app = FastAPI(
+    title="doc-pilot",
+    lifespan=lifespan,
+    telemetry={"tracing": False, "metrics": False, "logs": False, "auto_configure": False},
+)
 
 # No cookies or HTTP auth are used anywhere, so credentialed CORS is
 # deliberately NOT enabled -- allow_credentials would only widen the
