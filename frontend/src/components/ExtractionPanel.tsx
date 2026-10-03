@@ -19,6 +19,14 @@ const SCALAR_FIELD_ORDER = [
   "currency",
 ];
 
+const NO_HIGHLIGHT: ReadonlySet<string> = new Set();
+
+/** The DOM id of a field's row, by the name a chat citation uses for it
+ * ("total", "line_items[2]"), so the chat can scroll to it. */
+export function fieldElementId(field: string): string {
+  return `field-${field.replace(/\[(\d+)\]/, "-$1")}`;
+}
+
 function isLeaf(value: unknown): value is FieldLeaf {
   return (
     typeof value === "object" &&
@@ -66,7 +74,13 @@ function LineItemCell({ leaf }: { leaf: unknown }) {
   );
 }
 
-function LineItemsTable({ items }: { items: unknown[] }) {
+function LineItemsTable({
+  items,
+  highlight,
+}: {
+  items: unknown[];
+  highlight: ReadonlySet<string>;
+}) {
   if (items.length === 0) {
     return <div className="field-value null-value">No line items extracted</div>;
   }
@@ -87,7 +101,11 @@ function LineItemsTable({ items }: { items: unknown[] }) {
               ? (item as Record<string, unknown>)
               : {};
           return (
-            <tr key={i}>
+            <tr
+              key={i}
+              id={fieldElementId(`line_items[${i}]`)}
+              className={highlight.has(`line_items[${i}]`) ? "cited" : undefined}
+            >
               <LineItemCell leaf={row.description} />
               <LineItemCell leaf={row.quantity} />
               <LineItemCell leaf={row.unit_price} />
@@ -104,12 +122,12 @@ function ReviewBadge({ action }: { action: ReviewAction }) {
   return <span className={`review-badge ${action}`}>{action}</span>;
 }
 
-function ScalarFieldRow({ field }: { field: ExtractedField }) {
+function ScalarFieldRow({ field, cited }: { field: ExtractedField; cited: boolean }) {
   const leaf = isLeaf(field.value) ? field.value : null;
   const corrected = field.review_action === "corrected";
   const display = formatScalar(corrected ? field.corrected_value : leaf?.value);
   return (
-    <div className="field-row">
+    <div id={fieldElementId(field.field_name)} className={`field-row${cited ? " cited" : ""}`}>
       <span className="field-name">{field.field_name.replace(/_/g, " ")}</span>
       <span className="field-value-wrap">
         <span className={`field-value${display === "—" ? " null-value" : ""}`}>
@@ -132,7 +150,15 @@ function ScalarFieldRow({ field }: { field: ExtractedField }) {
   );
 }
 
-export default function ExtractionPanel({ extraction }: { extraction: Extraction }) {
+/** `highlight` names the fields a selected chat citation points at, as
+ * the citation names them ("total", "line_items[2]"). */
+export default function ExtractionPanel({
+  extraction,
+  highlight = NO_HIGHLIGHT,
+}: {
+  extraction: Extraction;
+  highlight?: ReadonlySet<string>;
+}) {
   const byName = new Map(extraction.fields.map((f) => [f.field_name, f]));
   const orderedFields = SCALAR_FIELD_ORDER.map((name) => byName.get(name)).filter(
     (f): f is ExtractedField => f !== undefined
@@ -160,7 +186,11 @@ export default function ExtractionPanel({ extraction }: { extraction: Extraction
     <div className="results-panel">
       <div className="field-list">
         {scalarFields.map((field) => (
-          <ScalarFieldRow key={field.field_name} field={field} />
+          <ScalarFieldRow
+            key={field.field_name}
+            field={field}
+            cited={highlight.has(field.field_name)}
+          />
         ))}
       </div>
 
@@ -181,7 +211,7 @@ export default function ExtractionPanel({ extraction }: { extraction: Extraction
               )}
             </span>
           </div>
-          <LineItemsTable items={lineItems} />
+          <LineItemsTable items={lineItems} highlight={highlight} />
         </div>
       )}
 

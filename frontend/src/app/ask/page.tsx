@@ -1,20 +1,26 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   askQuestionStream,
   getAskRun,
   StreamInterruptedError,
   listAskRuns,
-  sendAskFeedback,
   ApiError,
   type AskEvent,
   type AskResponse,
   type AskRunSummary,
-  type Citation,
-  type Feedback,
 } from "@/lib/api";
+import {
+  AnswerText,
+  FeedbackButtons,
+  Judgment,
+  LiveProgress,
+  STATUS_NOTES,
+  sourceLabel,
+  useLiveProgress,
+} from "@/components/AgentRun";
 
 const EXAMPLES = [
   "How much have I spent at Northgate Office Outfitters?",
@@ -23,152 +29,14 @@ const EXAMPLES = [
   "How much did I spend in May 2026?",
 ];
 
-const STATUS_NOTES: Record<string, string> = {
-  refused: "The model declined this question.",
-  truncated: "The answer was cut off by the output limit.",
-  step_limit: "The agent hit its step limit before finishing.",
-  budget_exceeded: "The agent hit its per-question cost cap before finishing.",
-};
-
-/** The answer text with each [n] marker turned into a link to its source. */
-function AnswerText({ answer, citations }: { answer: string; citations: Citation[] }) {
-  const known = new Set(citations.map((c) => c.number));
-  const parts = answer.split(/\s?\[(\d+)\]/);
-  return (
-    <p className="answer-text">
-      {parts.map((part, i) => {
-        if (i % 2 === 0) return <Fragment key={i}>{part}</Fragment>;
-        const n = Number(part);
-        return known.has(n) ? (
-          <a key={i} href={`#citation-${n}`} className="cite-marker">
-            {n}
-          </a>
-        ) : (
-          <Fragment key={i}>[{part}]</Fragment>
-        );
-      })}
-    </p>
-  );
-}
-
-function sourceLabel(c: Citation): string {
-  if (c.kind === "record") {
-    return `extracted fields${c.fields.length ? `: ${c.fields.join(", ")}` : ""}`;
-  }
-  return `page ${c.page_number}${c.kind === "page" ? " (full page)" : ""}`;
-}
-
-/** A person's verdict on the answer: stored with the run, and counted
- * beside the automatic grader's in /stats. */
-function FeedbackButtons({
-  response,
-  onChange,
-}: {
-  response: AskResponse;
-  onChange: (updated: AskResponse) => void;
-}) {
-  const [saving, setSaving] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  async function rate(rating: Feedback) {
-    setSaving(true);
-    setFailed(false);
-    try {
-      onChange(await sendAskFeedback(response.id, rating));
-    } catch {
-      setFailed(true);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="feedback-row" role="group" aria-label="Was this answer right?">
-      <span className="example-label">Was this right?</span>
-      {(["up", "down"] as const).map((rating) => (
-        <button
-          key={rating}
-          type="button"
-          className={`mode-option feedback-option${response.feedback === rating ? " active" : ""}`}
-          aria-pressed={response.feedback === rating}
-          disabled={saving}
-          onClick={() => rate(rating)}
-        >
-          {rating === "up" ? "Yes" : "No"}
-        </button>
-      ))}
-      {failed && <span className="feedback-note">Couldn&apos;t save that. Try again?</span>}
-    </div>
-  );
-}
-
-/** The background groundedness grader's verdict, when this answer was
- * sampled for one. */
-function Judgment({ response }: { response: AskResponse }) {
-  const judgment = response.judgment;
-  if (!judgment) {
-    return response.judge_sampled ? (
-      <p className="answer-meta">Queued for an automatic groundedness check.</p>
-    ) : null;
-  }
-  if (judgment.error || judgment.grounded === null) {
-    return <p className="answer-meta">The automatic check couldn&apos;t grade this answer.</p>;
-  }
-  return (
-    <div className="judgment">
-      <span className={`review-badge ${judgment.grounded ? "" : "judgment-fail"}`}>
-        {judgment.grounded ? "grounded" : "not grounded"}
-      </span>
-      {judgment.answers_question === false && (
-        <span className="review-badge judgment-fail">doesn&apos;t answer the question</span>
-      )}
-      <span className="muted-inline">
-        automatic check ({judgment.model}, {judgment.prompt_version})
-      </span>
-      {judgment.unsupported_claims.length > 0 && (
-        <ul className="judgment-claims">
-          {judgment.unsupported_claims.map((claim, i) => (
-            <li key={i}>{claim}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-interface LiveStep {
-  name: string;
-  input: Record<string, unknown>;
-  summary: string | null;
-  isError: boolean;
-}
-
-/** What the agent is doing right now, from the stream's events. */
-function LiveProgress({ steps, modelCalls, cost }: { steps: LiveStep[]; modelCalls: number; cost: number }) {
-  return (
-    <div className="review-row answer-card live-progress" aria-live="polite">
-      <p className="answer-meta">
-        Working: {modelCalls === 0 ? "reading the question" : `step ${modelCalls}`}
-        {cost > 0 && <> · ${cost.toFixed(4)} so far</>}
-      </p>
-      {steps.length > 0 && (
-        <ol className="tool-trail">
-          {steps.map((step, i) => (
-            <li key={i} className={step.isError ? "tool-error" : undefined}>
-              <code className="tool-name">{step.name}</code>
-              <code className="tool-input">{JSON.stringify(step.input)}</code>
-              <span className="tool-summary">{step.summary ?? "running…"}</span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </div>
-  );
-}
-
 function RunChips({ run }: { run: AskRunSummary }) {
   return (
     <span className="rank-chips">
+      {run.document_id && (
+        <Link href={`/documents/${run.document_id}`} className="rank-chip">
+          document chat
+        </Link>
+      )}
       {run.status !== "answered" && <span className="rank-chip">{run.status.replace("_", " ")}</span>}
       {run.feedback && <span className="rank-chip">{run.feedback === "up" ? "marked right" : "marked wrong"}</span>}
       {run.judge_grounded !== null && (
@@ -184,9 +52,7 @@ export default function AskPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<AskRunSummary[]>([]);
-  const [liveSteps, setLiveSteps] = useState<LiveStep[]>([]);
-  const [modelCalls, setModelCalls] = useState(0);
-  const [liveCost, setLiveCost] = useState(0);
+  const live = useLiveProgress();
 
   const refreshHistory = useCallback(() => {
     listAskRuns(10)
@@ -211,27 +77,8 @@ export default function AskPage() {
   }
 
   function onEvent(event: AskEvent) {
+    live.onEvent(event);
     switch (event.type) {
-      case "model_call":
-        setModelCalls(event.step);
-        setLiveCost(event.cost_usd);
-        break;
-      case "tool_start":
-        setLiveSteps((steps) => [
-          ...steps,
-          { name: event.name, input: event.input, summary: null, isError: false },
-        ]);
-        break;
-      case "tool_call":
-        // Tools run one at a time, so the finished one is the last started.
-        setLiveSteps((steps) =>
-          steps.map((step, i) =>
-            i === steps.length - 1
-              ? { ...step, summary: event.result_summary, isError: event.is_error }
-              : step
-          )
-        );
-        break;
       case "answer":
         setResponse(event.run);
         break;
@@ -250,9 +97,7 @@ export default function AskPage() {
     setLoading(true);
     setError(null);
     setResponse(null);
-    setLiveSteps([]);
-    setModelCalls(0);
-    setLiveCost(0);
+    live.reset();
     try {
       await askQuestionStream(q.trim(), onEvent);
     } catch (err) {
@@ -324,7 +169,7 @@ export default function AskPage() {
       </div>
 
       {error && <div className="error-banner">{error}</div>}
-      {loading && <LiveProgress steps={liveSteps} modelCalls={modelCalls} cost={liveCost} />}
+      {loading && <LiveProgress steps={live.steps} modelCalls={live.modelCalls} cost={live.cost} />}
 
       {response && (
         <section aria-live="polite">

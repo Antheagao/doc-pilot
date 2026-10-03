@@ -463,6 +463,36 @@ async def test_agent_run_is_an_invoke_agent_span_over_chat_and_tool_spans(
     assert result.trace_id == format(agent.context.trace_id, "032x")
 
 
+async def test_a_chat_turn_records_its_conversation_and_prompt(
+    db_session: AsyncSession, spans
+) -> None:
+    from types import SimpleNamespace
+
+    from app.agent.loop import DOCUMENT_CHAT_PROMPT, Turn, answer_question
+    from app.agent.tools import ToolContext
+
+    usage = SimpleNamespace(
+        input_tokens=900, output_tokens=120, cache_read_input_tokens=0, cache_creation_input_tokens=0
+    )
+    client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(
+        return_value=SimpleNamespace(
+            id="m1", model="claude-opus-5-5", content=[_Text("Yes.")], stop_reason="end_turn",
+            stop_details=None, usage=usage,
+        )
+    ))))
+    ctx = ToolContext(session=db_session, embedder=HashingEmbedder(), document_ids=[])
+
+    await answer_question(
+        ctx, "Sure?", Settings(agent_model="claude-opus-5-5"), client,
+        prompt=DOCUMENT_CHAT_PROMPT, history=[Turn("Total?", "$5. [1]")], conversation_id="c-1",
+    )
+
+    (agent,) = _named(spans, "invoke_agent doc-pilot-ask")
+    (chat,) = _named(spans, "chat claude-opus-5-5")
+    assert agent.attributes["gen_ai.conversation.id"] == "c-1"
+    assert chat.attributes["docpilot.prompt_version"] == "agent_v1+document_chat_v1"
+
+
 async def test_judge_verdict_lands_on_the_agent_runs_trace(spans) -> None:
     import json as _json
     from types import SimpleNamespace

@@ -263,6 +263,12 @@ class AskRun(Base):
     an answer, grade it later, or turn it into an eval case, without
     re-running (and re-billing) the agent.
 
+    A turn of a per-document chat (POST /documents/{id}/chat) is a run
+    too, with `document_id` (the document the tools were scoped to) and
+    `conversation_id` (shared by the conversation's turns) set; both are
+    NULL for a POST /ask question. Storing turns as runs means a chat is
+    billed, budgeted, rate-limited, rated and graded exactly like /ask.
+
     `evidence` is the run's tool results rendered as plain text
     (app.evals.judge.render_evidence_from_messages): what the groundedness
     grader reads. Two independent verdicts can attach to a run afterwards:
@@ -276,6 +282,11 @@ class AskRun(Base):
         CheckConstraint("feedback IN ('up', 'down')", name="ck_ask_runs_feedback"),
         Index("ix_ask_runs_created_at", "created_at"),
         Index("ix_ask_runs_judged_at", "judged_at"),
+        Index("ix_ask_runs_conversation", "conversation_id", "created_at"),
+        Index("ix_ask_runs_document_id", "document_id"),
+        CheckConstraint(
+            "(document_id IS NULL) = (conversation_id IS NULL)", name="ck_ask_runs_chat_scope"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -302,6 +313,10 @@ class AskRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     feedback: Mapped[str | None] = mapped_column(String, nullable=True)
     feedback_note: Mapped[str | None] = mapped_column(Text, nullable=True)

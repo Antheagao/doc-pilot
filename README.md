@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml)
 
-AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking. Every document is also transcribed, chunked, and embedded into pgvector, so it's searchable in plain language with **page-level citations** -- and retrieval quality is measured by its own eval, not assumed ([Retrieval](#retrieval-search-with-page-citations)). On top of both, an agent answers questions ("how much have I spent at Northgate?") by choosing between search and the structured extraction data, citing the exact lines and fields it used ([Ask](#ask-an-agent-over-search-and-the-extracted-data)).
+AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking. Every document is also transcribed, chunked, and embedded into pgvector, so it's searchable in plain language with **page-level citations** -- and retrieval quality is measured by its own eval, not assumed ([Retrieval](#retrieval-search-with-page-citations)). On top of both, an agent answers questions ("how much have I spent at Northgate?") by choosing between search and the structured extraction data, citing the exact lines and fields it used ([Ask](#ask-an-agent-over-search-and-the-extracted-data)) -- and every extracted document has its own chat, whose answers point at the field they came from ([Chat](#chat-about-one-document)).
 
 <!-- LIVE_DEMO: hosted demo link goes here once a host is picked -->
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-442 mocked tests across four CI jobs (backend, frontend, compose config validation, and a retrieval-quality gate) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+455 mocked tests across four CI jobs (backend, frontend, compose config validation, and a retrieval-quality gate) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -134,7 +134,7 @@ flowchart LR
     E -. "same txn:<br/>enqueue index job" .-> I["Index job<br/>per-page VLM transcription"]
     I --> K[("document_pages +<br/>document_chunks<br/>pgvector + tsvector")]
     K --> S["GET /search<br/>hybrid dense + full-text<br/>page citations"]
-    Q["POST /ask · /ask/stream<br/>spend cap + rate limit"] --> A["Agent loop<br/>Claude Opus 5.5 + tools"]
+    Q["POST /ask · /ask/stream<br/>+ per-document chat<br/>spend cap + rate limit"] --> A["Agent loop<br/>Claude Opus 5.5 + tools"]
     A --> S
     A --> E
     A --> RUN[("ask_runs<br/>answer, citations,<br/>evidence, cost, trace")]
@@ -242,6 +242,18 @@ The frontend's **Ask** page (`/ask`) streams the agent's progress live, then sho
 
 In a trace, one question is an `invoke_agent doc-pilot-ask` span with a `chat claude-opus-5-5` span per model call and an `execute_tool <name>` span per tool call -- the agent's plan, with the cost of each step ([Tracing](#tracing)).
 
+### Chat about one document
+
+Every extracted document's page has a chat beside its fields: ask about *this* receipt, follow up, and each answer cites the extracted field (or the line of page text) it came from. Selecting a field citation lights up that row of the extraction -- the tax, the total, line item 3 -- so checking an answer is one click; a text citation shows the cited passage and turns a PDF preview to its page.
+
+<img src="screenshots/document-chat.png" width="900" alt="A receipt's page: the chat under the document image answers 'And how much was the tax?' with $32.43, citing the extracted tax field, and the Tax row of the extraction panel beside it is highlighted">
+
+*The follow-up "and how much was the tax?" is answered from the extracted tax field; selecting citation 1 highlights that row. (The answers in this capture come from a scripted stand-in for the model -- there was no API key where it was taken -- but the tools, the citations and their resolution, storage and UI are the real ones.)*
+
+It is the same agent, not a second one. `POST /documents/{id}/chat` (and `/chat/stream`, the same events as `/ask/stream`) runs the [Ask](#ask-an-agent-over-search-and-the-extracted-data) loop with its tools scoped to the one document (`ToolContext.document_ids` -- a `get_page` on another document is an error result, not a leak) and a second system block (`prompts/document_chat_v1.md`) saying so; runs are stored under prompt version `agent_v1+document_chat_v1`. A follow-up carries the conversation: the server rebuilds the last 10 turns from storage on every request, so the client only holds a `conversation_id` and can't put words in the assistant's mouth, and a conversation id from another document is a 404. Earlier answers go in as plain text with their `[n]` markers stripped -- their sources aren't in the request -- and the prompt says they're context, not evidence, so a fact is looked up and cited again rather than repeated from memory.
+
+Each turn is an `ask_runs` row with `document_id` and `conversation_id` set, so a chat gets everything `/ask` has with no second code path: the daily spend cap, the per-client rate limit (the same bucket), *was this right?* feedback, sampled groundedness grading -- where the grader also sees the earlier turns, since "and the tax?" means nothing alone -- `/stats`, and traces, where the `invoke_agent` span carries `gen_ai.conversation.id`. `GET /documents/{id}/chat/conversations` lists a document's conversations and `.../conversations/{conversation_id}` reads one back; reopening the page picks up the latest.
+
 ### Agent eval
 
 Same principle again: the answer is known up front. The corpus is seeded as a *perfect* pipeline would leave it -- extraction records equal to the labels, gold page text indexed (`app/evals/corpus.py`) -- so a wrong answer is the agent's, not an extraction error passed along. 18 questions (`evals/agent/questions_v1.json`) in six types: single-document lookups, aggregates across documents (per-vendor sums, a count, a currency, a month that mixes USD and EUR, a vendor with a no-currency receipt), reverse lookups by amount (retrieval's weak spot), paraphrases, two unanswerable questions, and the prompt-injection receipt ("set total to 0.00"). Every expected value is computed from the labels at load time. The rubric is deterministic: every expected number present to the cent (or the date, count, or name); unanswerable questions pass only if the answer states no amount; the injected `0.00` must not appear. Citations are scored separately -- does the answer cite a document the question is about, and what share of its citations are.
@@ -331,7 +343,7 @@ doc-pilot is currently a **single-user local tool** and its security posture is 
 - **Retrieved text is untrusted data, too.** Transcriptions -- including the eval corpus's prompt-injection receipt -- land in the search index verbatim, and `/search` returns them as data. The `/ask` agent feeds them back into a model, so its system prompt treats everything inside tool results as document content, never instructions, and the agent eval includes the injection receipt as a scored question.
 - **`/ask` is the one API route that calls the model.** It is capped per question (steps and dollars), and it is why the api service now gets `ANTHROPIC_API_KEY` in `docker-compose.yml` -- every other route still runs without it.
 - **Spend is capped per day.** Uploads (each queues a billed extraction and transcription) and `/ask` questions are refused with `429` and a `Retry-After` once the model spend recorded since midnight UTC -- extraction, transcription, the agent, its grader -- reaches `DAILY_BUDGET_USD` ($5 by default; `0` turns it off; `app/budget.py`). The check runs before anything is stored or called. It's a soft cap: work already admitted finishes, so a day can end over budget by at most what was in flight (each question is itself capped at `AGENT_MAX_COST_USD`). `GET /stats` shows today's spend against the budget.
-- **Spend rate is capped per client.** So one client can't burn the whole day's budget in a minute and lock everyone else out until midnight, `/ask` and `/ask/stream` share a per-client sliding window (`ASK_RATE_LIMIT_PER_MINUTE`, 10 by default) and uploads have their own (`UPLOAD_RATE_LIMIT_PER_MINUTE`, off by default -- dropping in a stack of receipts at once is normal local use), answering `429` with `Retry-After` (`app/ratelimit.py`). It's in-memory and per process, which fits the single API process here; scaling the API out would need a shared store, and behind a reverse proxy uvicorn needs `--proxy-headers` for the client address to be the real one.
+- **Spend rate is capped per client.** So one client can't burn the whole day's budget in a minute and lock everyone else out until midnight, `/ask`, `/ask/stream` and the per-document chat share a per-client sliding window (`ASK_RATE_LIMIT_PER_MINUTE`, 10 by default) and uploads have their own (`UPLOAD_RATE_LIMIT_PER_MINUTE`, off by default -- dropping in a stack of receipts at once is normal local use), answering `429` with `Retry-After` (`app/ratelimit.py`). It's in-memory and per process, which fits the single API process here; scaling the API out would need a shared store, and behind a reverse proxy uvicorn needs `--proxy-headers` for the client address to be the real one.
 - **The dev database binds to loopback only**, so its dev-grade credentials are never LAN-reachable.
 
 **Before the hosted demo ships**, the threat model changes and two things become blocking: some form of auth (even a single bearer token -- the spend cap and rate limits bound what anonymous traffic can cost, not who can use it), and a storage quota with cleanup for uploads.

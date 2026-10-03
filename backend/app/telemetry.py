@@ -58,6 +58,7 @@ GEN_AI_DATA_SOURCE_ID = "gen_ai.data_source.id"
 GEN_AI_TOOL_NAME = "gen_ai.tool.name"
 GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
 GEN_AI_AGENT_NAME = "gen_ai.agent.name"
+GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
 
 # doc-pilot's own attributes, namespaced so they can't collide with a
 # future convention.

@@ -11,7 +11,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.db import engine
 from app.retrieval.embeddings import warm_up_embedder
-from app.routers import ask, documents, review, search, stats
+from app.routers import ask, chat, documents, review, search, stats
 from app.routers.documents import MAX_UPLOAD_SIZE
 from app.telemetry import configure_tracing, instrument_api
 
@@ -116,6 +116,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(MaxBodySizeMiddleware, max_body_size=MAX_UPLOAD_SIZE)
 
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
+app.include_router(chat.router, prefix="/documents", tags=["chat"])
 app.include_router(review.router, prefix="/review", tags=["review"])
 app.include_router(stats.router, prefix="/stats", tags=["stats"])
 app.include_router(search.router, prefix="/search", tags=["search"])

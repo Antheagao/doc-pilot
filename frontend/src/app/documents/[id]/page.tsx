@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -9,17 +9,21 @@ import {
   ApiError,
   type DocumentDetail,
 } from "@/lib/api";
-import ExtractionPanel from "@/components/ExtractionPanel";
+import ExtractionPanel, { fieldElementId } from "@/components/ExtractionPanel";
+import ChatPanel, { type SelectedCitation } from "@/components/ChatPanel";
 
 const POLL_INTERVAL_MS = 2000;
 const IN_FLIGHT_STATUSES = new Set(["uploaded", "processing"]);
 
-function DocumentPreview({ doc }: { doc: DocumentDetail }) {
+/** `page`, for a PDF, is the page a selected chat citation is on. */
+function DocumentPreview({ doc, page }: { doc: DocumentDetail; page: number | null }) {
   const url = documentFileUrl(doc.id);
   if (doc.mime_type === "application/pdf") {
+    const src = page ? `${url}#page=${page}` : url;
     return (
       <div className="doc-preview">
-        <iframe src={url} title={doc.filename} />
+        {/* Keyed by src: a fragment change alone doesn't move the viewer. */}
+        <iframe key={src} src={src} title={doc.filename} />
       </div>
     );
   }
@@ -42,6 +46,24 @@ export default function DocumentPage() {
   // pattern (and rationale) in app/page.tsx.
   const [tick, setTick] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The chat citation a person selected: a field citation lights up its
+  // row of the extraction; a text citation turns a PDF to its page.
+  const [selected, setSelected] = useState<SelectedCitation | null>(null);
+  const citation = selected?.citation ?? null;
+  const highlight = useMemo(
+    () => new Set(citation?.kind === "record" ? citation.fields : []),
+    [citation]
+  );
+  const previewPage = citation && citation.kind !== "record" ? citation.page_number : null;
+
+  useEffect(() => {
+    const first = citation?.kind === "record" ? citation.fields[0] : undefined;
+    if (first) {
+      document
+        .getElementById(fieldElementId(first))
+        ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [citation]);
 
   const refresh = useCallback(async () => {
     try {
@@ -101,7 +123,19 @@ export default function DocumentPage() {
         <>
           <div className="detail-title">{doc.filename}</div>
           <div className="split-view">
-            <DocumentPreview doc={doc} />
+            {/* The chat sits under the preview, beside the extraction, so
+                the field a citation points at is in view next to it. */}
+            <div className="detail-column">
+              <DocumentPreview doc={doc} page={previewPage} />
+              {doc.status === "extracted" && doc.extraction && (
+                <ChatPanel
+                  key={doc.id}
+                  documentId={doc.id}
+                  selected={selected}
+                  onSelect={setSelected}
+                />
+              )}
+            </div>
 
             {IN_FLIGHT_STATUSES.has(doc.status) && (
               <div className="results-panel">
@@ -137,7 +171,7 @@ export default function DocumentPage() {
 
             {doc.status === "extracted" &&
               (doc.extraction ? (
-                <ExtractionPanel extraction={doc.extraction} />
+                <ExtractionPanel extraction={doc.extraction} highlight={highlight} />
               ) : (
                 <div className="results-panel">
                   <div className="empty-state">

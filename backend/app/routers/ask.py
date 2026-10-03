@@ -10,14 +10,18 @@ saw, so it can be audited and graded after the fact: GET /ask/runs lists
 them, POST /ask/runs/{id}/feedback records a person's thumbs up / down,
 and a sampled share gets a background groundedness grade
 (app/evals/online.py).
+
+The per-document chat (app/routers/chat.py) runs and stores its turns
+through the same run_agent / stream_answer below, with a ChatScope.
 """
 
 import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -28,7 +32,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.loop import answer_question
+from app.agent.loop import DOCUMENT_CHAT_PROMPT, EventSink, Turn, answer_question
 from app.agent.tools import ToolContext
 from app.budget import enforce_daily_budget
 from app.config import Settings, get_settings
@@ -87,6 +91,8 @@ def ask_response(run: AskRun) -> AskResponse:
         id=run.id,
         question=run.question,
         created_at=run.created_at,
+        document_id=run.document_id,
+        conversation_id=run.conversation_id,
         status=run.status,
         answer=run.answer,
         citations=run.citations,
@@ -108,6 +114,60 @@ def ask_response(run: AskRun) -> AskResponse:
     )
 
 
+@dataclass(frozen=True)
+class ChatScope:
+    """A per-document chat turn: the tools see only `document_id`, and the
+    conversation so far goes to the model as `history`."""
+
+    document_id: uuid.UUID
+    conversation_id: uuid.UUID
+    history: Sequence[Turn] = ()
+
+
+async def run_agent(
+    session: AsyncSession,
+    embedder: Embedder,
+    settings: Settings,
+    client: anthropic.AsyncAnthropic,
+    question: str,
+    chat: ChatScope | None = None,
+    on_event: EventSink | None = None,
+) -> AskRun:
+    """Answer one question (or chat turn) and store it."""
+    if chat is None:
+        ctx = ToolContext(session=session, embedder=embedder)
+        result = await answer_question(ctx, question, settings, client, on_event)
+        return await record_ask_run(session, question, result, settings)
+    ctx = ToolContext(session=session, embedder=embedder, document_ids=[chat.document_id])
+    result = await answer_question(
+        ctx,
+        question,
+        settings,
+        client,
+        on_event,
+        prompt=DOCUMENT_CHAT_PROMPT,
+        history=chat.history,
+        conversation_id=str(chat.conversation_id),
+    )
+    return await record_ask_run(
+        session,
+        question,
+        result,
+        settings,
+        document_id=chat.document_id,
+        conversation_id=chat.conversation_id,
+    )
+
+
+def model_error(exc: ExtractionError) -> HTTPException:
+    """The HTTP error for a model call that failed outright."""
+    if isinstance(exc, NonRetryableExtractionError):
+        return HTTPException(status_code=502, detail=f"model request rejected: {exc}")
+    # Transient (rate limit, overload, network): the client may retry.
+    headers = {"Retry-After": str(int(exc.retry_after_seconds))} if exc.retry_after_seconds else None
+    return HTTPException(status_code=503, detail=f"model unavailable: {exc}", headers=headers)
+
+
 @router.post("", response_model=AskResponse, dependencies=[Depends(limit_ask)])
 async def ask(
     request: AskRequest,
@@ -120,18 +180,9 @@ async def ask(
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured")
     await enforce_daily_budget(session, settings)
     try:
-        result = await answer_question(
-            ToolContext(session=session, embedder=embedder), request.question, settings, client
-        )
-    except NonRetryableExtractionError as exc:
-        raise HTTPException(status_code=502, detail=f"model request rejected: {exc}") from exc
+        run = await run_agent(session, embedder, settings, client, request.question)
     except ExtractionError as exc:
-        # Transient (rate limit, overload, network): the client may retry.
-        headers = (
-            {"Retry-After": str(int(exc.retry_after_seconds))} if exc.retry_after_seconds else None
-        )
-        raise HTTPException(status_code=503, detail=f"model unavailable: {exc}", headers=headers) from exc
-    run = await record_ask_run(session, request.question, result, settings)
+        raise model_error(exc) from exc
     return ask_response(run)
 
 
@@ -153,6 +204,7 @@ async def stream_answer(
     settings: Settings,
     client: anthropic.AsyncAnthropic,
     question: str,
+    chat: ChatScope | None = None,
 ) -> AsyncIterator[str]:
     """The agent run as server-sent events: its progress as it happens
     (answer_question's model_call / tool_start / tool_call events), then
@@ -172,21 +224,16 @@ async def stream_answer(
     async def run() -> None:
         try:
             async with session_factory() as session:
-                result = await answer_question(
-                    ToolContext(session=session, embedder=embedder),
-                    question,
-                    settings,
-                    client,
-                    on_event=queue.put,
+                stored = await run_agent(
+                    session, embedder, settings, client, question, chat, on_event=queue.put
                 )
-                stored = await record_ask_run(session, question, result, settings)
                 await queue.put({"type": "answer", "run": ask_response(stored).model_dump(mode="json")})
         except NonRetryableExtractionError as exc:
             await queue.put({"type": "error", "status": 502, "detail": f"model request rejected: {exc}"})
         except ExtractionError as exc:
             await queue.put({"type": "error", "status": 503, "detail": f"model unavailable: {exc}"})
         except Exception:
-            logger.exception("streamed /ask run failed")
+            logger.exception("streamed agent run failed")
             await queue.put({"type": "error", "status": 500, "detail": "the run failed unexpectedly"})
         finally:
             await queue.put(_DONE)

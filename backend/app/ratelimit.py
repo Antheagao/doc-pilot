@@ -4,7 +4,8 @@ The daily budget (app/budget.py) bounds what a day of traffic can cost,
 but one client could still spend all of it in a minute and lock everyone
 else out until midnight. These limits bound how fast any one client can
 spend: a sliding window of requests per minute, keyed by client address.
-/ask (and /ask/stream) share one bucket; uploads have their own.
+/ask, /ask/stream and the per-document chat share one bucket; uploads have
+their own.
 
 In-memory and per process, which fits this deployment (one API process;
 see docker-compose.yml). It resets on restart, and N API processes would

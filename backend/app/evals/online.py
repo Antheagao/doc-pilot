@@ -14,17 +14,23 @@ two other signals are collected per stored answer (app.models.AskRun):
 The grader is scored against the same human groundedness labels as the
 offline judge (`run_judge_calibration.py --judge --grader groundedness`);
 its production rate is worth what that agreement says it is.
+
+A turn of a per-document chat is graded the same way; the grader also
+sees the turns before it (judge_question), since "and the tax?" means
+nothing on its own.
 """
 
 import dataclasses
 import logging
 import random
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.loop import AgentResult
+from app.agent.loop import AgentResult, Turn, history_messages
 from app.config import Settings, get_settings
 from app.evals.judge import grade_groundedness, render_evidence_from_messages
 from app.extraction import NonRetryableExtractionError, _build_client
@@ -33,11 +39,29 @@ from app.models import JOB_KIND_JUDGE, AskRun, Job
 logger = logging.getLogger(__name__)
 
 
-def ask_run_from_result(question: str, result: AgentResult) -> AskRun:
-    """The row to store for one /ask call. The evidence is rendered now,
-    from the conversation, because the conversation itself isn't kept."""
+# How many earlier turns of a chat the agent (app/routers/chat.py) and the
+# grader are shown.
+CHAT_HISTORY_TURNS = 10
+
+
+def ask_run_from_result(
+    question: str,
+    result: AgentResult,
+    *,
+    document_id: uuid.UUID | None = None,
+    conversation_id: uuid.UUID | None = None,
+) -> AskRun:
+    """The row to store for one /ask call or chat turn. The evidence is
+    rendered now, from the conversation, because the conversation itself
+    isn't kept."""
     return AskRun(
         question=question,
+        # Stamped when the answer exists, not left to the column default
+        # (the transaction's start time): a chat's history is ordered by
+        # it, and a turn belongs after the ones that finished before it.
+        created_at=datetime.now(UTC),
+        document_id=document_id,
+        conversation_id=conversation_id,
         status=result.status,
         answer=result.answer,
         citations=[dataclasses.asdict(c) for c in result.citations],
@@ -69,11 +93,19 @@ def should_judge(
 
 
 async def record_ask_run(
-    session: AsyncSession, question: str, result: AgentResult, settings: Settings
+    session: AsyncSession,
+    question: str,
+    result: AgentResult,
+    settings: Settings,
+    *,
+    document_id: uuid.UUID | None = None,
+    conversation_id: uuid.UUID | None = None,
 ) -> AskRun:
     """Store the run and, if sampled, its judge job -- one transaction, so
     a sampled answer can't be stored without the job that grades it."""
-    run = ask_run_from_result(question, result)
+    run = ask_run_from_result(
+        question, result, document_id=document_id, conversation_id=conversation_id
+    )
     session.add(run)
     await session.flush()
     if should_judge(result, settings):
@@ -81,6 +113,39 @@ async def record_ask_run(
         session.add(Job(kind=JOB_KIND_JUDGE, ask_run_id=run.id, traceparent=result.traceparent))
     await session.commit()
     return run
+
+
+async def earlier_turns(
+    session: AsyncSession,
+    conversation_id: uuid.UUID,
+    *,
+    before: datetime | None = None,
+    limit: int = CHAT_HISTORY_TURNS,
+) -> list[Turn]:
+    """The last `limit` turns of a conversation (before `before`, if
+    given), oldest first."""
+    stmt = select(AskRun.question, AskRun.answer).where(AskRun.conversation_id == conversation_id)
+    if before is not None:
+        stmt = stmt.where(AskRun.created_at < before)
+    stmt = stmt.order_by(AskRun.created_at.desc(), AskRun.id.desc()).limit(limit)
+    rows = (await session.execute(stmt)).all()
+    return [Turn(question, answer) for question, answer in reversed(rows)]
+
+
+def judge_question(question: str, turns: list[Turn]) -> str:
+    """The question as the grader should read it: a chat turn comes with
+    the conversation before it, so a follow-up's meaning is clear. The
+    earlier answers are context, not evidence -- the grader still checks
+    claims against this turn's evidence only."""
+    history = history_messages(turns)
+    if not history:
+        return question
+    lines = [f"{m['role']}: {m['content']}" for m in history]
+    return (
+        "Earlier in this conversation (context only, not evidence):\n"
+        + "\n".join(lines)
+        + f"\n\nThe question being answered now:\n{question}"
+    )
 
 
 async def process_judge_job(session: AsyncSession, job: Job) -> None:
@@ -97,6 +162,9 @@ async def process_judge_job(session: AsyncSession, job: Job) -> None:
         return
 
     run_id, question, evidence, answer = run.id, run.question, run.evidence, run.answer
+    if run.conversation_id is not None:
+        turns = await earlier_turns(session, run.conversation_id, before=run.created_at)
+        question = judge_question(question, turns)
     # Release the connection during the model call, like the other handlers.
     await session.rollback()
 

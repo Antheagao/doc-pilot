@@ -204,6 +204,14 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
 
 
+class ChatRequest(BaseModel):
+    """One turn of a per-document chat. Omit conversation_id to start a
+    conversation; the answer carries the id to send with follow-ups."""
+
+    question: str = Field(min_length=1, max_length=1000)
+    conversation_id: uuid.UUID | None = None
+
+
 class CitationOut(BaseModel):
     """One numbered source for the answer. `cited_text` is copied by the
     API from the tool result, never written by the model. For a page
@@ -258,6 +266,9 @@ class AskResponse(BaseModel):
     id: uuid.UUID
     question: str
     created_at: datetime
+    # Set for a turn of a per-document chat; null for a POST /ask question.
+    document_id: uuid.UUID | None
+    conversation_id: uuid.UUID | None
     status: AskStatus
     answer: str
     citations: list[CitationOut]
@@ -288,11 +299,22 @@ class AskRunSummary(BaseModel):
     question: str
     status: AskStatus
     created_at: datetime
+    document_id: uuid.UUID | None
     cost_usd: float
     latency_ms: int
     feedback: Literal["up", "down"] | None
     judge_sampled: bool
     judge_grounded: bool | None
+
+
+class ConversationSummary(BaseModel):
+    """One row of GET /documents/{id}/chat/conversations."""
+
+    conversation_id: uuid.UUID
+    first_question: str
+    turns: int
+    started_at: datetime
+    last_turn_at: datetime
 
 
 class AskFeedbackRequest(BaseModel):

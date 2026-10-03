@@ -11,11 +11,17 @@ adaptive-thinking models require of a conversation history.
 One run is one `invoke_agent` span; under it, each model call is a `chat`
 span and each tool call an `execute_tool` span, so a question's trace
 reads as the agent's plan: which tools, in what order, what each cost.
+
+The same loop answers a follow-up in a per-document chat
+(app/routers/chat.py): the earlier turns go in as plain text, the tools
+are scoped to the one document (ToolContext.document_ids), and a second
+system block (DOCUMENT_CHAT_PROMPT) tells the model so.
 """
 
 import logging
+import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -39,6 +45,7 @@ from app.extraction import (
 from app.telemetry import (
     DOCPILOT_COST_USD,
     GEN_AI_AGENT_NAME,
+    GEN_AI_CONVERSATION_ID,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
     GEN_AI_REQUEST_MODEL,
@@ -56,6 +63,29 @@ AGENT_NAME = "doc-pilot-ask"
 AGENT_PROMPT_PATH = PROMPTS_DIR / "agent_v1.md"
 AGENT_PROMPT_VERSION = AGENT_PROMPT_PATH.stem
 AGENT_PROMPT_TEXT = AGENT_PROMPT_PATH.read_text(encoding="utf-8")
+DOCUMENT_CHAT_PROMPT_PATH = PROMPTS_DIR / "document_chat_v1.md"
+
+
+@dataclass(frozen=True)
+class AgentPrompt:
+    """The system prompt a run is given, and the version it is stored and
+    traced under."""
+
+    version: str
+    system: str | list[dict[str, Any]]
+
+
+# POST /ask: questions across every document.
+ASK_PROMPT = AgentPrompt(AGENT_PROMPT_VERSION, AGENT_PROMPT_TEXT)
+# A chat about one document: the same instructions, plus a block saying
+# the tools only see that document and earlier turns aren't evidence.
+DOCUMENT_CHAT_PROMPT = AgentPrompt(
+    f"{AGENT_PROMPT_VERSION}+{DOCUMENT_CHAT_PROMPT_PATH.stem}",
+    [
+        {"type": "text", "text": AGENT_PROMPT_TEXT},
+        {"type": "text", "text": DOCUMENT_CHAT_PROMPT_PATH.read_text(encoding="utf-8")},
+    ],
+)
 
 # Models that take `output_config.effort` and adaptive thinking, and the
 # subset that accept server-side refusal fallbacks (fallbacks="default").
@@ -121,6 +151,32 @@ class AgentResult:
     # happen with API-generated citations; counted rather than trusted.
     unresolved_citations: int = 0
     messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
+
+
+@dataclass(frozen=True)
+class Turn:
+    """One earlier question and its answer, in a conversation."""
+
+    question: str
+    answer: str
+
+
+_CITATION_MARKER = re.compile(r"\s?\[\d+\]")
+
+
+def history_messages(turns: Sequence[Turn]) -> list[dict[str, Any]]:
+    """Earlier turns as plain user / assistant text, oldest first. The [n]
+    markers are stripped: the sources they number aren't in this request,
+    so the model couldn't resolve them -- and shouldn't cite them. A turn
+    with no answer (a refusal, an API error) is left out; the
+    conversation still alternates."""
+    messages: list[dict[str, Any]] = []
+    for turn in turns:
+        answer = _CITATION_MARKER.sub("", turn.answer).strip()
+        if answer:
+            messages.append({"role": "user", "content": turn.question})
+            messages.append({"role": "assistant", "content": answer})
+    return messages
 
 
 def call_cost_usd(requested_model: str, response: Any) -> float:
@@ -283,6 +339,10 @@ async def answer_question(
     settings: Settings,
     client: anthropic.AsyncAnthropic | None = None,
     on_event: EventSink | None = None,
+    *,
+    prompt: AgentPrompt = ASK_PROMPT,
+    history: Sequence[Turn] = (),
+    conversation_id: str | None = None,
 ) -> AgentResult:
     """Run the agent on one question. Never raises for model behavior
     (refusal, truncation, budgets) -- those come back as the result's
@@ -294,7 +354,11 @@ async def answer_question(
     each model call, {"type": "tool_start", name, input} before each tool
     runs and {"type": "tool_call", name, input, is_error, result_summary}
     after -- so POST /ask/stream can show the agent working instead of
-    ten silent seconds."""
+    ten silent seconds.
+
+    history is the conversation so far (oldest first) when this question
+    is a follow-up; conversation_id, when given, is recorded on the run's
+    span (gen_ai.conversation.id) so a chat's turns can be found together."""
 
     async def emit(event: dict[str, Any]) -> None:
         if on_event is not None:
@@ -303,7 +367,10 @@ async def answer_question(
     client = client or _build_client(settings)
     model = settings.agent_model
     options = _request_options(settings)
-    messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
+    messages: list[dict[str, Any]] = [
+        *history_messages(history),
+        {"role": "user", "content": question},
+    ]
     result = AgentResult(
         status="step_limit",
         answer="",
@@ -311,7 +378,7 @@ async def answer_question(
         tool_calls=[],
         steps=0,
         model=model,
-        prompt_version=AGENT_PROMPT_VERSION,
+        prompt_version=prompt.version,
         messages=messages,
     )
     start = time.perf_counter()
@@ -326,6 +393,8 @@ async def answer_question(
             GEN_AI_REQUEST_MODEL: model,
         },
     ) as agent_span:
+        if conversation_id is not None:
+            agent_span.set_attribute(GEN_AI_CONVERSATION_ID, conversation_id)
         span_context = agent_span.get_span_context()
         if span_context.is_valid:
             result.trace_id = format(span_context.trace_id, "032x")
@@ -333,13 +402,13 @@ async def answer_question(
 
         for _ in range(settings.agent_max_steps):
             with model_call_span(
-                model, max_tokens=settings.agent_max_tokens, prompt_version=AGENT_PROMPT_VERSION
+                model, max_tokens=settings.agent_max_tokens, prompt_version=prompt.version
             ) as span:
                 try:
                     response = await client.beta.messages.create(
                         model=model,
                         max_tokens=settings.agent_max_tokens,
-                        system=AGENT_PROMPT_TEXT,
+                        system=prompt.system,
                         tools=TOOL_DEFINITIONS,
                         messages=messages,
                         # Automatic prompt caching: each step re-sends the

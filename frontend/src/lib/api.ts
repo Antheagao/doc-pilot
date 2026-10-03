@@ -341,11 +341,14 @@ export interface AskJudgment {
   judged_at: string;
 }
 
-// One /ask run, as answered and as stored.
+// One /ask run (or chat turn), as answered and as stored.
 export interface AskResponse {
   id: string;
   question: string;
   created_at: string;
+  // Set for a turn of a per-document chat; null for an /ask question.
+  document_id: string | null;
+  conversation_id: string | null;
   status: AskStatus;
   answer: string;
   citations: Citation[];
@@ -372,6 +375,7 @@ export interface AskRunSummary {
   question: string;
   status: AskStatus;
   created_at: string;
+  document_id: string | null;
   cost_usd: number;
   latency_ms: number;
   feedback: Feedback | null;
@@ -427,10 +431,18 @@ export async function askQuestionStream(
   question: string,
   onEvent: (event: AskEvent) => void
 ): Promise<void> {
-  const res = await fetch(`${API_URL}/ask/stream`, {
+  await streamAgentRun(`${API_URL}/ask/stream`, { question }, onEvent);
+}
+
+async function streamAgentRun(
+  url: string,
+  body: Record<string, unknown>,
+  onEvent: (event: AskEvent) => void
+): Promise<void> {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) await handle<never>(res);
   if (!res.body) throw new ApiError(res.status, "the response had no body to stream");
@@ -475,4 +487,53 @@ export async function sendAskFeedback(id: string, rating: Feedback): Promise<Ask
     body: JSON.stringify({ rating }),
   });
   return handle<AskResponse>(res);
+}
+
+// ---- Per-document chat: POST /documents/{id}/chat ---------------------------
+
+export interface ConversationSummary {
+  conversation_id: string;
+  first_question: string;
+  turns: number;
+  started_at: string;
+  last_turn_at: string;
+}
+
+/** One chat turn, streamed: the same events as askQuestionStream. Pass
+ * null to start a conversation; the `answer` event's run carries the
+ * conversation_id to send with follow-ups. */
+export async function chatStream(
+  documentId: string,
+  question: string,
+  conversationId: string | null,
+  onEvent: (event: AskEvent) => void
+): Promise<void> {
+  await streamAgentRun(
+    `${API_URL}/documents/${encodeURIComponent(documentId)}/chat/stream`,
+    { question, conversation_id: conversationId },
+    onEvent
+  );
+}
+
+export async function listConversations(
+  documentId: string,
+  limit = 20
+): Promise<ConversationSummary[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(
+    `${API_URL}/documents/${encodeURIComponent(documentId)}/chat/conversations?${params}`,
+    { cache: "no-store" }
+  );
+  return handle<ConversationSummary[]>(res);
+}
+
+export async function getConversation(
+  documentId: string,
+  conversationId: string
+): Promise<AskResponse[]> {
+  const res = await fetch(
+    `${API_URL}/documents/${encodeURIComponent(documentId)}/chat/conversations/${encodeURIComponent(conversationId)}`,
+    { cache: "no-store" }
+  );
+  return handle<AskResponse[]>(res);
 }
