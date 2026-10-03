@@ -14,8 +14,8 @@ a pinned commit: its fp32 ONNX export, saved under the name fastembed
 loads (model_optimized.onnx), and its tokenizer files. (Until October 2026
 the pin was qdrant's archive of an fp32 export on Cloud Storage; that
 bucket went private, so the pin moved to the authors' export of the same
-weights. The retrieval eval's CI gate re-measured it against the committed
-baseline.)
+weights. Its first retrieval-eval run in CI reproduced every committed
+metric at the reported precision.)
 
 One patch is applied after download: a tokenizer_config.json that declares
 model_max_length larger than the model's real limit (the tokenizers
