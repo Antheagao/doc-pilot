@@ -4,9 +4,7 @@ pinned embedding model the real-model gate (and production) loads."""
 
 import copy
 import hashlib
-import io
 import json
-import tarfile
 from pathlib import Path
 
 import pytest
@@ -24,7 +22,12 @@ from app.evals.retrieval import (
 from app.retrieval import model_fetch
 from app.retrieval.embeddings import HashingEmbedder
 from app.retrieval.indexing import ChunkingConfig
-from app.retrieval.model_fetch import ModelFetchError, PinnedModel, ensure_pinned_model
+from app.retrieval.model_fetch import (
+    ModelFetchError,
+    PinnedFile,
+    PinnedModel,
+    ensure_pinned_model,
+)
 
 REGENERATE = (
     "python evals/run_retrieval.py --embedder hashing --chunk-sizes 200 --headers on "
@@ -117,42 +120,50 @@ def test_incomparable_runs_fail_rather_than_pass() -> None:
 # --- the pinned model ---------------------------------------------------------------
 
 
-def _archive(tmp_path: Path, members: dict[str, bytes], name: str = "model.tar.gz") -> tuple[Path, str]:
-    path = tmp_path / name
-    with tarfile.open(path, "w:gz") as tar:
-        for member, data in members.items():
-            info = tarfile.TarInfo(member)
-            info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
-    return path, hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 TOKENIZER = json.dumps({"model_max_length": 1000000000000000019884624838656, "do_lower_case": True}).encode()
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 @pytest.fixture
 def pinned(tmp_path, monkeypatch):
-    archive, sha = _archive(
-        tmp_path, {"m/tokenizer_config.json": TOKENIZER, "m/model_optimized.onnx": b"onnx"}
-    )
+    """A pinned model served from a local directory (file:// URLs): an
+    ONNX file stored under a different name upstream, and a tokenizer
+    config with the unset max-length sentinel."""
+    source = tmp_path / "repo"
+    (source / "onnx").mkdir(parents=True)
+    (source / "onnx" / "model.onnx").write_bytes(b"onnx")
+    (source / "tokenizer_config.json").write_bytes(TOKENIZER)
 
-    def pin(sha256: str = sha, url: str | None = None) -> None:
+    def pin(onnx_sha: str = _sha(b"onnx"), base_url: str | None = None) -> None:
         monkeypatch.setitem(
-            model_fetch.PINNED, "test/model", PinnedModel(url or archive.as_uri(), sha256, "m", 512)
+            model_fetch.PINNED,
+            "test/model",
+            PinnedModel(
+                base_url or source.as_uri(),
+                (
+                    PinnedFile("onnx/model.onnx", "model_optimized.onnx", onnx_sha),
+                    PinnedFile("tokenizer_config.json", "tokenizer_config.json", _sha(TOKENIZER)),
+                ),
+                "m",
+                512,
+            ),
         )
 
     pin()
     return pin
 
 
-def test_the_pinned_archive_is_verified_extracted_and_patched(tmp_path, pinned, monkeypatch) -> None:
+def test_the_pinned_files_are_verified_saved_and_patched(tmp_path, pinned, monkeypatch) -> None:
     dest = tmp_path / "models"
 
     path = ensure_pinned_model("test/model", dest)
 
     assert path == dest / "m" and (path / "model_optimized.onnx").read_bytes() == b"onnx"
     assert json.loads((path / "tokenizer_config.json").read_text())["model_max_length"] == 512
-    # Only the model directory is left behind: no temp dirs, no archive.
+    # Only the model directory is left behind: no temp dirs.
     assert [p.name for p in dest.iterdir()] == ["m"]
 
     # Already verified: no second download.
@@ -160,14 +171,26 @@ def test_the_pinned_archive_is_verified_extracted_and_patched(tmp_path, pinned, 
     assert ensure_pinned_model("test/model", dest) == path
 
 
-def test_a_checksum_mismatch_loads_nothing(tmp_path, pinned) -> None:
-    pinned(sha256="0" * 64)
+def test_a_checksum_mismatch_loads_nothing_and_names_every_file(tmp_path, pinned) -> None:
+    pinned(onnx_sha="0" * 64)
     dest = tmp_path / "models"
 
-    with pytest.raises(ModelFetchError, match="refusing to load it"):
+    with pytest.raises(ModelFetchError, match="refusing to load it") as raised:
         ensure_pinned_model("test/model", dest)
 
+    assert f"onnx/model.onnx: SHA-256 {_sha(b'onnx')}, expected {'0' * 64}" in str(raised.value)
     assert list(dest.iterdir()) == []
+
+
+def test_a_changed_pin_invalidates_the_cached_copy(tmp_path, pinned) -> None:
+    dest = tmp_path / "models"
+    ensure_pinned_model("test/model", dest)
+    (tmp_path / "repo" / "onnx" / "model.onnx").write_bytes(b"onnx v2")
+    pinned(onnx_sha=_sha(b"onnx v2"))
+
+    path = ensure_pinned_model("test/model", dest)
+
+    assert (path / "model_optimized.onnx").read_bytes() == b"onnx v2"
 
 
 def test_an_unverified_copy_in_the_way_is_replaced(tmp_path, pinned) -> None:
@@ -180,14 +203,10 @@ def test_an_unverified_copy_in_the_way_is_replaced(tmp_path, pinned) -> None:
     assert (path / "model_optimized.onnx").read_bytes() == b"onnx"
 
 
-def test_archive_entries_cannot_escape_the_target(tmp_path, pinned) -> None:
-    archive, sha = _archive(tmp_path, {"../escaped.txt": b"x", "m/tokenizer_config.json": TOKENIZER}, "evil.tar.gz")
-    pinned(sha256=sha, url=archive.as_uri())
-
-    with pytest.raises(tarfile.TarError):
-        ensure_pinned_model("test/model", tmp_path / "models")
-
-    assert not (tmp_path / "escaped.txt").exists()
+def test_pinned_file_names_cannot_leave_the_model_directory() -> None:
+    for name in ("../escaped", "a/b", "..", ""):
+        with pytest.raises(ValueError):
+            PinnedFile("x", name, "0" * 64)
 
 
 def test_models_that_are_not_pinned_are_left_to_fastembed(tmp_path) -> None:
@@ -195,10 +214,20 @@ def test_models_that_are_not_pinned_are_left_to_fastembed(tmp_path) -> None:
 
 
 def test_a_download_failure_says_how_to_recover(tmp_path, pinned) -> None:
-    pinned(url=(tmp_path / "missing.tar.gz").as_uri())
+    pinned(base_url=(tmp_path / "missing").as_uri())
 
     with pytest.raises(ModelFetchError, match="EMBEDDING_MODEL_PATH"):
         ensure_pinned_model("test/model", tmp_path / "models")
+
+
+def test_the_production_pin_is_complete() -> None:
+    pin = model_fetch.PINNED["BAAI/bge-small-en-v1.5"]
+
+    names = {f.name for f in pin.files}
+    # What fastembed loads from a model directory.
+    assert {"model_optimized.onnx", "tokenizer.json", "tokenizer_config.json"} <= names
+    assert all(len(f.sha256) == 64 for f in pin.files)
+    assert "/resolve/main" not in pin.base_url  # a fixed revision, not a moving branch
 
 
 def test_only_the_offline_run_can_become_the_snapshot(tmp_path) -> None:

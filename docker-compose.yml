@@ -104,8 +104,8 @@ services:
       # The worker calls the model for extraction and transcription; the
       # api service needs the key too, but only for POST /ask (see there).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # The pinned BAAI/bge-small-en-v1.5 archive (77 MB, checksummed; see
-      # app/retrieval/model_fetch.py) downloads on first
+      # The pinned BAAI/bge-small-en-v1.5 files (about 135 MB, each
+      # checksummed; see app/retrieval/model_fetch.py) download on first
       # use into this volume, shared with api, so it's fetched once rather
       # than on every container start.
       EMBEDDING_CACHE_DIR: /data/models
