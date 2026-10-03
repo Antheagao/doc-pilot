@@ -117,3 +117,26 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate compose config
         run: docker compose config -q
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.5
+      - name: Format
+        run: terraform fmt -check -recursive -diff
+      # Providers come from the registry and must match the committed lock
+      # file's hashes; no backend, no credentials.
+      - name: Init
+        run: terraform init -backend=false -input=false
+      - name: Validate
+        run: terraform validate
+      # Mocked providers (tests/*.tftest.hcl): checks the deployment's
+      # logic without a GCP project.
+      - name: Test
+        run: terraform test

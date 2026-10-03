@@ -8,7 +8,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-462 mocked tests across four CI jobs (backend, frontend, compose config validation, and a retrieval-quality gate) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+469 mocked backend tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Screenshots
 
@@ -120,6 +120,18 @@ npm run dev
 ```
 
 Open http://localhost:3000, upload a file from [`samples/`](samples/) (or generate fresh ones with `python backend/scripts/make_samples.py`), and watch it go `uploaded` -> `extracted` with per-field confidence.
+
+### Deploying to Google Cloud
+
+`infra/terraform` deploys the same services to Cloud Run with Cloud SQL:
+
+- the API and the frontend as Cloud Run services;
+- the queue worker as a one-instance worker pool;
+- migrations as a job Terraform runs, and waits on, before each rollout;
+- uploads in a Cloud Storage bucket that the API and worker both mount;
+- credentials in Secret Manager. The database password never reaches Terraform state.
+
+The deployment is private (IAM-gated) unless you set `public = true`; see the [Security model](#security-model). Steps, design notes and teardown are in [`infra/terraform/README.md`](infra/terraform/README.md). CI runs `terraform fmt`, `validate` and `test`. The tests use mocked providers, so they check the configuration's logic without touching a GCP project.
 
 ## Architecture
 
@@ -359,7 +371,7 @@ doc-pilot is currently a **single-user local tool** and its security posture is 
 - **Spend rate is capped per client.** So one client can't burn the whole day's budget in a minute and lock everyone else out until midnight, `/ask`, `/ask/stream` and the per-document chat share a per-client sliding window (`ASK_RATE_LIMIT_PER_MINUTE`, 10 by default) and uploads have their own (`UPLOAD_RATE_LIMIT_PER_MINUTE`, off by default -- dropping in a stack of receipts at once is normal local use), answering `429` with `Retry-After` (`app/ratelimit.py`). It's in-memory and per process, which fits the single API process here; scaling the API out would need a shared store, and behind a reverse proxy uvicorn needs `--proxy-headers` for the client address to be the real one.
 - **The dev database binds to loopback only**, so its dev-grade credentials are never LAN-reachable.
 
-**Before the hosted demo ships**, the threat model changes and two things become blocking: some form of auth (even a single bearer token -- the spend cap and rate limits bound what anonymous traffic can cost, not who can use it), and a storage quota with cleanup for uploads.
+**Before the hosted demo ships**, the threat model changes and two things become blocking: some form of auth (even a single bearer token -- the spend cap and rate limits bound what anonymous traffic can cost, not who can use it), and a storage quota with cleanup for uploads. Until then the Terraform deployment (`infra/terraform`) stands in for auth at the platform: it is private by default, with Cloud Run admitting only callers that hold `roles/run.invoker`, and making it public is an explicit `public = true`.
 
 ## Evals
 

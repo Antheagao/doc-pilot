@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+project_id = "your-gcp-project"
+region     = "us-central1"
+
+# Leave both unset for the first apply; set them once the images are pushed.
+# backend_image_tag  = "v1"
+# frontend_image_tag = "v1"
+
+# public            = false # see README.md before turning this on
+# daily_budget_usd  = 5
+# db_tier           = "db-f1-micro"

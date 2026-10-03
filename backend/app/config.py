@@ -17,9 +17,20 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", extra="ignore")
 
     database_url: str = "postgresql+asyncpg://docpilot:docpilot@localhost:5434/docpilot"
+    # Browser origins allowed to call the API (CORS) -- the frontend's.
+    # A JSON list in the environment: CORS_ORIGINS='["https://..."]'.
+    cors_origins: list[str] = ["http://localhost:3000"]
     anthropic_api_key: str | None = None
     upload_dir: str = "uploads"
     worker_poll_interval: float = 1.0
+    # Reclaiming orphaned jobs (app/worker.py). 0, the default, suits one
+    # long-lived worker (docker compose): every 'processing' job is
+    # reclaimed once, at startup. A platform that overlaps the old and new
+    # worker during a deploy (Cloud Run) sets a lease instead: only jobs
+    # that have been processing longer than this many seconds are
+    # reclaimed, at startup and then every minute -- so the new worker
+    # never steals a job the old one is still finishing.
+    worker_reclaim_after_seconds: float = Field(default=0, ge=0)
     # Model used for document extraction (app/extraction.py). Defaults to
     # the current Sonnet id -- see PRICING_PER_MTOK in that module for the
     # price table this must stay in sync with if overridden.

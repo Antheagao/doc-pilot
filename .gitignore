@@ -21,3 +21,12 @@ node_modules/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Terraform (infra/terraform): provider downloads, state and variable
+# files hold machine-local or sensitive values. The lock file is committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log

@@ -40,6 +40,15 @@ must be a leftover from a previous run of *this same process*, not a job
 another live worker is actively working on right now. Running two worker
 processes concurrently would make this sweep steal in-flight jobs.
 
+A platform that briefly runs the old and the new worker side by side
+during a deploy (Cloud Run; see infra/terraform) sets
+WORKER_RECLAIM_AFTER_SECONDS: then only jobs processing longer than that
+lease are reclaimed -- at startup and every RECLAIM_CHECK_SECONDS after --
+so a job the old worker is still finishing is left alone, and one it
+abandoned is picked up within the lease. SIGTERM (Cloud Run's and docker
+stop's shutdown signal) stops the loop claiming new work; the job in hand
+finishes if the platform's grace period allows, and is reclaimed if not.
+
 Retry/backoff: failed jobs are requeued (state -> pending) up to
 MAX_ATTEMPTS times, with an equal-jitter exponential backoff (see
 _backoff_delay) applied via the `run_after` column, capped at
@@ -53,8 +62,11 @@ by the next poll.
 """
 
 import asyncio
+import contextlib
 import logging
 import random
+import signal
+import time
 import traceback
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
@@ -62,7 +74,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -304,20 +316,35 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
             logger.info("failed job %s permanently after %d attempts", job.id, job.attempts)
 
 
-async def reclaim_orphaned_jobs(session: AsyncSession) -> int:
-    """Reset any job stuck in 'processing' back to 'pending'. Meant to be
-    called exactly once, at startup, before the poll loop begins -- see
-    the "Consequence" paragraph in the module docstring for why this is
-    only safe in a single-worker deployment.
+# How often a worker with a reclaim lease looks for abandoned jobs.
+RECLAIM_CHECK_SECONDS = 60.0
+
+
+async def reclaim_orphaned_jobs(
+    session: AsyncSession, older_than: timedelta | None = None
+) -> int:
+    """Reset jobs stuck in 'processing' back to 'pending'. With no lease
+    (older_than=None), every one -- meant to be called exactly once, at
+    startup, before the poll loop begins; see the "Consequence" paragraph
+    in the module docstring for why that is only safe in a single-worker
+    deployment. With a lease, only jobs that started longer ago than that.
     """
     stmt = select(Job).where(Job.state == "processing")
+    if older_than is not None:
+        cutoff = datetime.now(UTC) - older_than
+        stmt = stmt.where(or_(Job.started_at.is_(None), Job.started_at < cutoff))
     jobs = (await session.execute(stmt)).scalars().all()
     for job in jobs:
         job.state = "pending"
     if jobs:
         await session.commit()
-        logger.info("reclaimed %d orphaned processing job(s) at startup", len(jobs))
+        logger.info("reclaimed %d orphaned processing job(s)", len(jobs))
     return len(jobs)
+
+
+def _reclaim_lease() -> timedelta | None:
+    seconds = get_settings().worker_reclaim_after_seconds
+    return timedelta(seconds=seconds) if seconds > 0 else None
 
 
 async def run_once(
@@ -413,8 +440,11 @@ async def _run_handler(
         span.set_attribute(DOCPILOT_JOB_OUTCOME, "done")
 
 
-async def run_worker(handler: Handler = dispatch_job) -> None:
-    """Poll indefinitely, processing one job at a time.
+async def run_worker(handler: Handler = dispatch_job, stop: asyncio.Event | None = None) -> None:
+    """Poll until `stop` is set (never, without one), processing one job
+    at a time. Setting `stop` lets the job in hand finish, then returns.
+    With a reclaim lease (WORKER_RECLAIM_AFTER_SECONDS), it also reclaims
+    abandoned jobs every RECLAIM_CHECK_SECONDS.
 
     Per-iteration exceptions from run_once (e.g. a handler that leaves
     the session poisoned, or any other unexpected failure) are caught,
@@ -430,16 +460,26 @@ async def run_worker(handler: Handler = dispatch_job) -> None:
     the process exits -- we don't install a signal handler ourselves.
     """
     settings = get_settings()
+    stop = stop or asyncio.Event()
+    lease = _reclaim_lease()
+    next_reclaim = time.monotonic() + RECLAIM_CHECK_SECONDS
     logger.info("worker started (poll_interval=%.1fs)", settings.worker_poll_interval)
     try:
-        while True:
+        while not stop.is_set():
             try:
+                if lease is not None and time.monotonic() >= next_reclaim:
+                    next_reclaim = time.monotonic() + RECLAIM_CHECK_SECONDS
+                    with untraced():
+                        async with async_session_maker() as session:
+                            await reclaim_orphaned_jobs(session, older_than=lease)
                 claimed = await run_once(handler)
             except Exception:
                 logger.exception("run_once failed unexpectedly; backing off and continuing")
                 claimed = False
             if not claimed:
-                await asyncio.sleep(settings.worker_poll_interval)
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=settings.worker_poll_interval)
+        logger.info("worker stopping (asked to stop)")
     except asyncio.CancelledError:
         logger.info("worker stopping (cancelled)")
         raise
@@ -452,14 +492,20 @@ async def main() -> None:
 
     with untraced():
         async with async_session_maker() as session:
-            await reclaim_orphaned_jobs(session)
+            await reclaim_orphaned_jobs(session, older_than=_reclaim_lease())
 
     # Load the embedding model before claiming work, so the first index
     # job doesn't pay for it (tracing showed a cold first `embeddings`
     # span taking seconds inside the job).
     await run_in_threadpool(warm_up_embedder)
 
-    task = asyncio.ensure_future(run_worker())
+    # SIGTERM -- how Cloud Run and `docker stop` end a container -- stops
+    # the loop claiming new work instead of killing the job in hand.
+    stop = asyncio.Event()
+    with contextlib.suppress(NotImplementedError):  # no signal handlers on Windows
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
+
+    task = asyncio.ensure_future(run_worker(stop=stop))
     try:
         await task
     except asyncio.CancelledError:

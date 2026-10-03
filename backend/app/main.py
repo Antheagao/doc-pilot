@@ -9,6 +9,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.config import get_settings
 from app.db import engine
 from app.retrieval.embeddings import warm_up_embedder
 from app.routers import ask, chat, documents, monitoring, review, search, stats
@@ -106,7 +107,7 @@ app = FastAPI(title="doc-pilot", lifespan=lifespan)
 # blast radius of a misconfigured origin for zero functional gain.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=get_settings().cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

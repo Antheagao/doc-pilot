@@ -462,6 +462,102 @@ async def test_reclaim_orphaned_jobs_resets_processing_to_pending(
     assert result.state == "pending"
 
 
+async def test_a_reclaim_lease_leaves_jobs_still_being_worked_alone(
+    real_documents: Callable,
+) -> None:
+    """During a deploy that overlaps two workers, the new one's sweep must
+    not steal the job the old one is finishing -- only abandoned ones."""
+    document = await real_documents()
+    now = datetime.now(UTC)
+    fresh = await _make_job(document.id, state="processing", attempts=1, started_at=now - timedelta(seconds=30))
+    stale = await _make_job(document.id, state="processing", attempts=1, started_at=now - timedelta(hours=1))
+    unstamped = await _make_job(document.id, state="processing", attempts=1)
+
+    async with async_session_maker() as session:
+        await reclaim_orphaned_jobs(session, older_than=timedelta(minutes=30))
+
+    assert (await _refresh_job(fresh.id)).state == "processing"
+    assert (await _refresh_job(stale.id)).state == "pending"
+    assert (await _refresh_job(unstamped.id)).state == "pending"
+
+
+async def test_run_worker_reclaims_periodically_with_a_lease(monkeypatch) -> None:
+    sweeps: list[timedelta | None] = []
+
+    async def fake_reclaim(session, older_than=None):
+        sweeps.append(older_than)
+        return 0
+
+    async def idle(handler):
+        return False
+
+    monkeypatch.setattr(worker_module, "reclaim_orphaned_jobs", fake_reclaim)
+    monkeypatch.setattr(worker_module, "run_once", idle)
+    monkeypatch.setattr(worker_module, "RECLAIM_CHECK_SECONDS", 0.02)
+    monkeypatch.setattr(
+        worker_module,
+        "get_settings",
+        lambda: Settings(worker_poll_interval=0.01, worker_reclaim_after_seconds=1800),
+    )
+    stop = asyncio.Event()
+
+    task = asyncio.ensure_future(worker_module.run_worker(stop=stop))
+    await asyncio.sleep(0.15)
+    stop.set()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert len(sweeps) >= 2 and set(sweeps) == {timedelta(seconds=1800)}
+
+
+async def test_without_a_lease_the_loop_never_sweeps(monkeypatch) -> None:
+    """compose's single worker: the startup sweep in main() is the only one."""
+    sweeps = []
+
+    async def fake_reclaim(session, older_than=None):
+        sweeps.append(older_than)
+
+    async def idle(handler):
+        return False
+
+    monkeypatch.setattr(worker_module, "reclaim_orphaned_jobs", fake_reclaim)
+    monkeypatch.setattr(worker_module, "run_once", idle)
+    monkeypatch.setattr(worker_module, "RECLAIM_CHECK_SECONDS", 0.01)
+    monkeypatch.setattr(worker_module, "get_settings", lambda: Settings(worker_poll_interval=0.01))
+    stop = asyncio.Event()
+
+    task = asyncio.ensure_future(worker_module.run_worker(stop=stop))
+    await asyncio.sleep(0.08)
+    stop.set()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert sweeps == []
+
+
+async def test_stop_lets_the_job_in_hand_finish(monkeypatch) -> None:
+    """SIGTERM sets `stop`: no new claims, but the running job completes
+    rather than being cancelled mid-call."""
+    stop = asyncio.Event()
+    finished = []
+
+    async def slow_job(handler):
+        stop.set()  # the shutdown signal lands mid-job
+        await asyncio.sleep(0.05)
+        finished.append(1)
+        return True
+
+    monkeypatch.setattr(worker_module, "run_once", slow_job)
+    monkeypatch.setattr(worker_module, "get_settings", lambda: Settings(worker_poll_interval=0.01))
+
+    await asyncio.wait_for(worker_module.run_worker(stop=stop), timeout=1)
+
+    assert finished == [1]
+
+
+def test_worker_settings_are_validated() -> None:
+    with pytest.raises(ValueError):
+        Settings(worker_reclaim_after_seconds=-1)
+
+
 # --- job kinds (extract vs index) -------------------------------------------
 
 

@@ -1,0 +1,5 @@
+# Only infra/backend.Dockerfile builds from the repo root, and it needs
+# only the eval results. (backend/ and frontend/ builds use their own
+# directories as context.)
+*
+!evals/results
