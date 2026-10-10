@@ -25,6 +25,11 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-10 (agent docs adopt the claude-brain overlay convention)
+- `AGENTS.md` now holds the project rules (scope, orientation, running, gates, guides table, commits); `CLAUDE.md` is a two-line import of it, replacing the stale untracked project-memory file.
+- Twelve `doc-pilot-<topic>` overlay skills under `.claude/skills/` record what exists here, known gaps, and local exceptions for each claude-brain global guide.
+- Committed the Next.js-generated `frontend/AGENTS.md` and `frontend/CLAUDE.md` and the `/batch-loop` command; its step-5 "never commit the boards" line is stale, and `AGENTS.md` wins.
+
 ### 2026-10-09 (batch-loop: Batch 0 promoted, T0.0 done, loop stopped on disk space)
 - All 18 PRs marked merged on GitHub (retargeted to master, then master pushed at `98c4ae9`); boards committed in `d429076`.
 - Batch 0 (demo GIF pipeline) promoted and expanded by the planner into T0.0-T0.7 on PRESENT.md.

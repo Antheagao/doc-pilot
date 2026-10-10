@@ -1,0 +1,41 @@
+---
+name: doc-pilot-database
+description: doc-pilot's PostgreSQL 16 plus pgvector schema, Alembic revision chain, async SQLAlchemy session rules, money storage, and known gaps. Use when writing an Alembic migration, changing a model, column, or index, or writing a query or transaction in doc-pilot.
+---
+
+# doc-pilot database overlay
+
+Load the global `database` guide for the rules; this file holds what exists here.
+The sqlx subsections of the global guide map to SQLAlchemy and Alembic here.
+
+## Stack and migrations
+
+- PostgreSQL 16 with pgvector (`pgvector/pgvector:pg16`), SQLAlchemy 2 async ORM over asyncpg; models in `backend/app/models.py`, engine and `async_session_maker` (`expire_on_commit=False`) in `app/db.py`.
+- Migrations: `backend/alembic/versions/<revision>_<slug>.py`; async `alembic/env.py` sets `target_metadata = Base.metadata`; the module docstring's first line is the header.
+- Chain: `0eb534561f35` initial, `c538cc803902` `jobs.run_after`, `b7a91c4de2f0` review columns, `e3f19a7c2d40` retrieval tables and `CREATE EXTENSION vector`, `f7c2d9e4a1b3` `jobs.traceparent`, `a4d8e2f6b901` `search_aliases`, `b9e4c1d7f302` `ask_runs`, `c6f1a2b3d4e5` spend time indexes, `d2a7b5c9e013` chat columns (head).
+- Compose's one-shot `migrate` service runs `alembic upgrade head`; CI runs it on an empty database before `pytest`.
+
+## Schema facts
+
+- Tables: `documents`, `jobs`, `extractions`, `extracted_fields`, `document_pages`, `document_chunks`, `ask_runs`.
+- Local exception: primary keys are `UUID` with a Python-side `uuid.uuid4` default, because ids appear in URLs and upload file names.
+- Timestamps are `DateTime(timezone=True)` with `server_default=func.now()`; no table has `updated_at`.
+- `document_chunks.embedding` is `Vector(384)` (`EMBEDDING_DIM`) with an HNSW `vector_cosine_ops` index; `tsv` is a persisted generated column with a GIN index, and `a4d8e2f6b901` shows how to change one (drop the index and column, add both back).
+- A new embedding width is a migration plus `backend/scripts/reindex.py`; migrations copy constants as literals (`EMBEDDING_DIM = 384` in `e3f19a7c2d40`), never import them.
+- `CHECK` constraints today: `ck_jobs_has_target`, `ck_ask_runs_feedback`, `ck_ask_runs_chat_scope`.
+- Money: `cost_usd` columns are `Numeric(10, 6)` typed `Mapped[float]`; extracted amounts are JSON numbers inside `extracted_fields.value` leaves (`{"value", "confidence"}`), and corrections sit in `corrected_value`.
+  The eval scorer compares integer cents; Batch A (`FUTURE.md`) moves money to `Decimal` (`app/money.py`) and decimal strings.
+- Day boundaries are UTC in code: `budget.day_start`, and `routers/monitoring.py` groups with `func.timezone("UTC", ...)`.
+
+## Session rules
+
+- Job handlers never commit: the worker commits in `complete_job` or rolls back in `fail_job`, and each handler rolls back before its model call so no transaction spans it.
+- After `session.rollback()` every loaded ORM object is expired, and `AsyncSession` cannot lazy-load, so reading `job.id` raises `MissingGreenlet`.
+  Copy ids into locals before any rollback, carry the ids, and re-fetch with `session.get(Model, id)` (as `process_document_job` does for the document).
+- Queries are ORM or Core expressions; raw `text()` appears only for `SET LOCAL enable_indexscan = off` in `app/evals/`.
+
+## Known gaps
+
+- Closed sets with no `CHECK`: `documents.status`, `jobs.state`, `jobs.kind`, `extracted_fields.review_action`, `document_pages.source`, `ask_runs.status`.
+- No `ON DELETE` except `jobs.ask_run_id` (`CASCADE`), and no index on `jobs.document_id`, `extractions.document_id`, or `document_chunks.page_id`; no document deletion path exists (Batch G4).
+- No migration states a retention period for receipt text (`document_pages`, `document_chunks`) or stored questions and answers (`ask_runs`).
