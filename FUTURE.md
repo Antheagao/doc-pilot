@@ -9,16 +9,7 @@ The old Deploy and Stretch sections are gone: deploy was cancelled 2026-08-03, p
 Everything must run on one machine through `docker compose up`, and every feature must be showable in a short GIF.
 The Terraform Cloud Run code stays as an infrastructure-as-code sample but is never applied.
 
-## Batch 0 - Demo GIF pipeline and the backlog of merged features
-
-Goal: a repeatable way to record one short GIF per feature, then GIFs for everything the merged stack added.
-
-- **0.1 Recording harness** (`scripts/demos/`): one Playwright script per scenario against the compose stack, then ffmpeg palette conversion to GIF, plus a WebM/MP4 pair for the portfolio site, the same pipeline used for `screenshots/demo.gif`.
-  Fixed viewport, light theme, a scripted cursor and pauses so every GIF has the same look and pace, and a target of 15 seconds or less and under 1 MB each.
-- **0.2 Deterministic demo data:** a seed script that loads chosen eval documents and their label-perfect records (`evals/corpus.py` already does this for the agent eval) so recordings need no live model calls unless the scenario is the extraction itself.
-  Staged review cases (a plausible misread, a failed check) are seeded explicitly, as session 5 did by hand.
-- **0.3 GIFs for merged features:** hybrid search, /ask with live agent steps, per-document chat with field citations, the review queue correction flow, and the monitoring dashboard.
-- **0.4 README gallery:** a "Features" section with one GIF and one sentence per feature, the main demo GIF staying at the top.
+Batch 0 (demo GIF pipeline) was promoted to PRESENT.md on 2026-10-09.
 
 **Every batch below ends with a demo task:** record that batch's GIF(s) with the harness and add them to the gallery.
 The batch is not done until its GIF exists.

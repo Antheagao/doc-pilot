@@ -20,6 +20,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # Every long-running service restarts with the Docker daemon. Without
+    # this on db, a Docker Desktop restart brought api and worker back but
+    # not the database, and the worker crash-looped on the unresolvable
+    # `db` hostname until someone noticed.
+    restart: unless-stopped
 
   # One-shot: runs migrations to head and exits. api/worker wait on its
   # success so the schema is always current before either starts serving
@@ -149,6 +154,7 @@ services:
       - api
     ports:
       - "127.0.0.1:3000:3000"
+    restart: unless-stopped
 
   # Opt-in trace viewer (app/telemetry.py). Starts only with the profile,
   # and api/worker only export when OTEL_EXPORTER_OTLP_ENDPOINT is set:
@@ -161,6 +167,7 @@ services:
     ports:
       - "127.0.0.1:16686:16686"  # UI
       - "127.0.0.1:4318:4318"    # OTLP/HTTP, for exporting from the host (local dev)
+    restart: unless-stopped
 
 volumes:
   db_data:

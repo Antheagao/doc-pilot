@@ -25,6 +25,12 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-09 (batch-loop: Batch 0 promoted, T0.0 done, loop stopped on disk space)
+- All 18 PRs marked merged on GitHub (retargeted to master, then master pushed at `98c4ae9`); boards committed in `d429076`.
+- Batch 0 (demo GIF pipeline) promoted and expanded by the planner into T0.0-T0.7 on PRESENT.md.
+- T0.0: `restart: unless-stopped` on db, frontend, jaeger. Found live: the August compose stack's db had exited and the worker had been crash-looping on DNS since.
+- BLOCKED: C: has 0.5 GB free; Docker's disk is on C:, so builds fail read-only and the CLI hangs. Loop stopped until Anthony frees space or moves Docker's disk image to D:.
+
 ### 2026-10-09 (stack merge + feature roadmap)
 - Merged the 18 stacked cloud-session PRs (#1 retrieval through #18 Langfuse, all CI-green) into local master by fast-forward to `98c4ae9`; no merge commits, linear history kept.
 - Not yet pushed: GitHub writes were blocked in this session, so origin/master is still `50b9e05` and the PRs are still open.
