@@ -11,11 +11,20 @@ services:
     # No host port at all: the dev db owns 5434, and nothing outside the
     # demo network needs to reach this one.
     ports: !reset []
+    environment:
+      # Its own database name, which app/demo_seed.py requires before it
+      # will reset or seed anything: a seed pointed at the dev database
+      # (docpilot) refuses, whatever else is misconfigured.
+      POSTGRES_DB: docpilot_demo
+    healthcheck:
+      test: !override ["CMD-SHELL", "pg_isready -U docpilot -d docpilot_demo"]
     restart: "no"
 
   # The demo stack is short-lived (up for a recording session, then
   # down), so nothing restarts with the Docker daemon.
   migrate:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
     restart: "no"
 
   api:
@@ -23,6 +32,7 @@ services:
     ports: !override
       - "127.0.0.1:8100:8000"
     environment:
+      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
       # The browser calls the API from the demo frontend's origin.
       CORS_ORIGINS: '["http://localhost:3100"]'
       # Hard cap on live demo spend (/ask, chat), independent of the dev
@@ -40,6 +50,7 @@ services:
 
   worker:
     environment:
+      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
       # Langfuse and tracing off: see the api service.
       LANGFUSE_PUBLIC_KEY: ""
       LANGFUSE_SECRET_KEY: ""
@@ -69,7 +80,7 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
       # Must match api's UPLOAD_DIR and EMBEDDING_CACHE_DIR: the seed
       # copies the sample images into the shared uploads volume and
       # indexes pages with the same embedding model the api queries with.

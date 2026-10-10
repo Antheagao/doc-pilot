@@ -5,13 +5,14 @@ Run from anywhere with the backend venv (stdlib only, so no install step):
     backend\.venv\Scripts\python scripts\demos\demo.py stack up
     backend\.venv\Scripts\python scripts\demos\demo.py stack status
     backend\.venv\Scripts\python scripts\demos\demo.py stack down [--volumes] [--dry-run]
+    backend\.venv\Scripts\python scripts\demos\demo.py seed [--reset]
 
 Every docker call goes through compose() below, which pins the compose
 project to PROJECT. The project name is a constant, never an argument, so
 this CLI cannot address the dev stack (project `doc-pilot`) or its volumes:
 the dev database volume was wiped once by a careless `down -v`.
 
-Later demo tasks add their subcommands (seed, record, check) beside `stack`.
+Later demo tasks add their subcommands (record, check) beside `stack` and `seed`.
 """
 
 from __future__ import annotations
@@ -232,6 +233,26 @@ def stack_down(args: argparse.Namespace) -> int:
     return compose("down", "--volumes")
 
 
+def seed_command(reset: bool) -> list[str]:
+    """The compose arguments that run the seed one-shot. The seed profile is
+    a flag here, never COMPOSE_PROFILES, for the reason compose_env gives."""
+    # -T: no pseudo-TTY, so it works from automation as well as a terminal.
+    command = ["--profile", "seed", "run", "--rm", "-T", "seed"]
+    if reset:
+        command += ["python", "scripts/seed_demo.py", "--reset"]
+    return command
+
+
+def seed(args: argparse.Namespace) -> int:
+    # Build first so the seed image carries the current backend code (the
+    # layers are cached when nothing changed); `run` alone would reuse a
+    # stale image.
+    code = compose("--profile", "seed", "build", "seed")
+    if code != 0:
+        return code
+    return compose(*seed_command(args.reset))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -261,6 +282,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = stack_commands.add_parser("status", help="show the stack's containers")
     status.set_defaults(run=stack_status)
+
+    seed_parser = commands.add_parser(
+        "seed", help="load the deterministic demo dataset (replayed Sonnet run)"
+    )
+    seed_parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="wipe the demo database and uploads first (required if it has documents)",
+    )
+    seed_parser.set_defaults(run=seed)
 
     return parser
 

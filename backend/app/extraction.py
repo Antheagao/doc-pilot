@@ -26,6 +26,7 @@ import base64
 import logging
 import math
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1141,6 +1142,38 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
     )
 
 
+def build_extracted_fields(
+    extraction_id: uuid.UUID, tool_input: dict, review_threshold: float
+) -> list[ExtractedField]:
+    """One ExtractedField per TOP_LEVEL_FIELDS entry, read defensively out of
+    the model's tool_input (see _coerce_leaf); fields under review_threshold
+    get needs_review. Shared by the worker and the demo seed so a replayed
+    extraction is persisted exactly as a live one would be.
+    """
+    fields = []
+    for field_name in TOP_LEVEL_FIELDS:
+        value, confidence = _coerce_leaf(tool_input.get(field_name))
+        if field_name == "line_items":
+            # line_items is an array field: store the array itself as
+            # the ExtractedField value (its own confidence already
+            # lives in the confidence column below). Every other
+            # field is a scalar leaf, so the reconstructed
+            # {"value", "confidence"} object is stored.
+            field_value: Any = value if isinstance(value, list) else []
+        else:
+            field_value = {"value": value, "confidence": confidence}
+        fields.append(
+            ExtractedField(
+                extraction_id=extraction_id,
+                field_name=field_name,
+                value=field_value,
+                confidence=confidence,
+                needs_review=confidence < review_threshold,
+            )
+        )
+    return fields
+
+
 async def process_document_job(session: AsyncSession, job: Job) -> None:
     """The real worker handler (wired in as the default in app/worker.py).
 
@@ -1194,26 +1227,9 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
         await session.flush()  # assigns extraction.id without committing
 
         settings = get_settings()
-        for field_name in TOP_LEVEL_FIELDS:
-            value, confidence = _coerce_leaf(result.tool_input.get(field_name))
-            if field_name == "line_items":
-                # line_items is an array field: store the array itself as
-                # the ExtractedField value (its own confidence already
-                # lives in the confidence column below). Every other
-                # field is a scalar leaf, so the reconstructed
-                # {"value", "confidence"} object is stored.
-                field_value: Any = value if isinstance(value, list) else []
-            else:
-                field_value = {"value": value, "confidence": confidence}
-            session.add(
-                ExtractedField(
-                    extraction_id=extraction.id,
-                    field_name=field_name,
-                    value=field_value,
-                    confidence=confidence,
-                    needs_review=confidence < settings.review_threshold,
-                )
-            )
+        session.add_all(
+            build_extracted_fields(extraction.id, result.tool_input, settings.review_threshold)
+        )
 
         document.status = "extracted"
 

@@ -83,3 +83,25 @@ def test_worker_or_migrate_failure_is_reported() -> None:
         demo.check_one_shots_and_worker(
             {**ok, "migrate": {"State": "exited", "ExitCode": 1}}
         )
+
+
+def test_seed_runs_the_one_shot_in_the_seed_profile() -> None:
+    command = demo.seed_command(reset=False)
+    assert command[:2] == ["--profile", "seed"]
+    assert command[2:4] == ["run", "--rm"]
+    assert command[-1] == "seed"
+    assert "--reset" not in command
+
+
+def test_seed_reset_passes_reset_to_the_script() -> None:
+    assert demo.seed_command(reset=True)[-3:] == [
+        "python",
+        "scripts/seed_demo.py",
+        "--reset",
+    ]
+
+
+def test_seed_parser_reads_reset() -> None:
+    parser = demo.build_parser()
+    assert parser.parse_args(["seed"]).reset is False
+    assert parser.parse_args(["seed", "--reset"]).reset is True
