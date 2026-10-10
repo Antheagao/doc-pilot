@@ -19,9 +19,9 @@ Both tests use the same first eval case (evals/labels/001-clean-coffee-
 receipt.json via app.evals.dataset.load_cases) so there is exactly one
 real document involved across the whole file.
 
-Run this suite with the local dev worker STOPPED: a `python -m app.worker`
-polling the same dev database can legally claim test 2's pending job
-first, failing the test and spending the money itself. Cleanup only ever
+The suite runs on its own database (tests/conftest.py), so the compose
+worker polling the dev database cannot claim these jobs; only a
+`python -m app.worker` pointed at the test database could. Cleanup only ever
 deletes rows created by (or under) this test's own document_id.
 """
 
@@ -118,14 +118,14 @@ async def test_live_extract_document(live_budget) -> None:
 
 
 async def test_live_run_once_end_to_end(live_budget) -> None:
-    """Needs Postgres on 5434: end-to-end through the real job queue.
+    """Needs the test Postgres: end-to-end through the real job queue.
     Inserts a Document + pending Job with real commits (mirrors
     scripts/smoke.py's insert_document_and_job -- the rolled-back
     db_session fixture can't be used here since run_once opens its own
     sessions via async_session_maker), runs exactly one worker cycle
     scoped to this document_id (see pending_job_stmt in app/worker.py --
     this is what keeps a live run from claiming a stray real pending job
-    elsewhere in the shared dev table), then asserts what landed in the
+    elsewhere in the test table), then asserts what landed in the
     DB. Cleanup always runs, mirroring scripts/smoke.py's delete order:
     fields -> extraction -> job -> document.
     """

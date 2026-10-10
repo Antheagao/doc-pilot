@@ -21,7 +21,7 @@ The Rust subsections of the global guide do not apply; the backend is Python 3.1
 
 ## Lint gates here
 
-- `ruff check app tests scripts` from `backend/`; `[tool.ruff.lint]` only ignores `B008`, so ruff's default rule set applies and nothing checks formatting or line length.
+- `ruff check .` and `ruff check ../scripts/demos` from `backend/` (alembic, tests, scripts, and the demo scripts included); `[tool.ruff.lint]` only ignores `B008`, so ruff's default rule set applies and nothing checks formatting or line length.
 - No type checker runs on the backend (no mypy or pyright).
 - Frontend: `npx eslint src` in CI (`eslint-config-next` core-web-vitals and typescript); `tsconfig.json` is `strict`.
 

@@ -5,19 +5,19 @@ Revises: b7a91c4de2f0
 Create Date: 2026-09-29 00:30:00.000000
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'e3f19a7c2d40'
-down_revision: Union[str, Sequence[str], None] = 'b7a91c4de2f0'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = 'b7a91c4de2f0'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # Mirrors app.models.EMBEDDING_DIM at the time this migration was written.
 # Deliberately a literal, not an import: a migration must keep describing
@@ -28,7 +28,7 @@ EMBEDDING_DIM = 384
 def upgrade() -> None:
     """Upgrade schema."""
     # Requires the pgvector extension to be installed in the Postgres
-    # server (docker-compose.yml and CI use the pgvector/pgvector:pg16
+    # server (docker-compose.yml and CI use the pgvector/pgvector:pg16-trixie
     # image, a drop-in superset of postgres:16).
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 

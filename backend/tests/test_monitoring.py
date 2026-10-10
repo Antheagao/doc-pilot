@@ -129,7 +129,7 @@ def _run(day: datetime, **overrides) -> AskRun:
 
 @pytest.fixture
 async def empty_db(db_session: AsyncSession) -> AsyncSession:
-    """The dev database's own rows, out of the way -- inside the test's
+    """The test database's leftover rows, out of the way -- inside the test's
     transaction, so they come back when it rolls back."""
     for table in ("jobs", "ask_runs", "extracted_fields", "extractions", "document_chunks", "document_pages"):
         await db_session.execute(text(f"DELETE FROM {table}"))

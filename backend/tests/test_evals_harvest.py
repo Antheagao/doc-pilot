@@ -32,8 +32,8 @@ def _leaf(value, confidence: float) -> dict:
 def _labels_for(evals_dir: Path, document_id: uuid.UUID) -> list[Path]:
     """Label files harvested from a specific document. Tests must scope
     their filesystem assertions this way rather than counting all labels:
-    they run against the shared dev database (see tests/conftest.py), so
-    other committed extracted documents may legitimately be harvested
+    the test database can hold other committed extracted documents (see
+    tests/conftest.py), so they may legitimately be harvested
     into the same tmp evals dir during a test's harvest call."""
     matches = []
     for path in (evals_dir / "labels").glob("*.json"):
@@ -231,7 +231,7 @@ async def test_invalid_human_correction_is_rejected_and_cleaned_up(
     assert _labels_for(evals_dir, document.id) == []
     # Every image left in docs/ must belong to some surviving label (i.e.
     # no orphan was left behind by our rejected document) -- checked by
-    # stem pairing since other shared-DB documents may have harvested
+    # stem pairing since other documents in the test database may have harvested
     # legitimately into this same tmp dir.
     label_stems = {p.stem for p in (evals_dir / "labels").glob("*.json")}
     for image in (evals_dir / "docs").glob("*"):
@@ -254,7 +254,7 @@ async def test_numbers_continue_from_existing_labels(
     assert ours[0].status == "harvested"
     assert ours[0].doc_id is not None
     # Numbering must continue past the highest existing label (025-...).
-    # Other shared-DB documents may harvest ahead of ours in the same
+    # Other documents in the test database may harvest ahead of ours in the same
     # run, so assert the floor rather than an exact number.
     assert int(ours[0].doc_id.split("-", 1)[0]) >= 26
     assert "-review-" in ours[0].doc_id

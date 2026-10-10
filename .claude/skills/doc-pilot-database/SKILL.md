@@ -10,10 +10,10 @@ The sqlx subsections of the global guide map to SQLAlchemy and Alembic here.
 
 ## Stack and migrations
 
-- PostgreSQL 16 with pgvector (`pgvector/pgvector:pg16`), SQLAlchemy 2 async ORM over asyncpg; models in `backend/app/models.py`, engine and `async_session_maker` (`expire_on_commit=False`) in `app/db.py`.
+- PostgreSQL 16 with pgvector (`pgvector/pgvector:pg16-trixie`, pinned to match the glibc 2.41 the dev volume was initialized under), SQLAlchemy 2 async ORM over asyncpg; models in `backend/app/models.py`, engine and `async_session_maker` (`expire_on_commit=False`) in `app/db.py`.
 - Migrations: `backend/alembic/versions/<revision>_<slug>.py`; async `alembic/env.py` sets `target_metadata = Base.metadata`; the module docstring's first line is the header.
 - Chain: `0eb534561f35` initial, `c538cc803902` `jobs.run_after`, `b7a91c4de2f0` review columns, `e3f19a7c2d40` retrieval tables and `CREATE EXTENSION vector`, `f7c2d9e4a1b3` `jobs.traceparent`, `a4d8e2f6b901` `search_aliases`, `b9e4c1d7f302` `ask_runs`, `c6f1a2b3d4e5` spend time indexes, `d2a7b5c9e013` chat columns (head).
-- Compose's one-shot `migrate` service runs `alembic upgrade head`; CI runs it on an empty database before `pytest`.
+- Compose's one-shot `migrate` service runs `alembic upgrade head`; the test session does the same to its own `docpilot_test` database (created when missing) before the first test.
 
 ## Schema facts
 

@@ -72,6 +72,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 from sqlalchemy import or_, select
@@ -184,9 +185,9 @@ def pending_job_stmt(now: datetime, document_id: uuid.UUID | None = None):
 
     document_id narrows the scan to a single document's jobs. Production
     code never passes it (a worker should claim whatever is oldest); it
-    exists so tests running against the shared dev database can scope
-    themselves to rows they created instead of racing/corrupting a
-    stray real pending job left over from manual API use.
+    exists so tests can scope themselves to rows they created instead of
+    racing/corrupting a pending job left over in the test database by an
+    earlier crashed run.
     """
     stmt = select(Job).where(
         Job.state == "pending",
@@ -221,8 +222,12 @@ async def claim_job(session: AsyncSession, document_id: uuid.UUID | None = None)
     return job
 
 
-async def complete_job(session: AsyncSession, job: Job) -> None:
+async def complete_job(session: AsyncSession, job_id: uuid.UUID) -> None:
     """Mark a job done after its handler succeeded.
+
+    Takes the id, not the Job: a handler's pre-model-call rollback expires
+    every object in the session, and AsyncSession cannot lazy-load one
+    back, so the job is re-fetched here instead of touched stale.
 
     NOTE: unconditional UPDATE, not compare-and-set. Safe today because
     exactly one worker process ever exists (see module docstring) and
@@ -232,13 +237,17 @@ async def complete_job(session: AsyncSession, job: Job) -> None:
     a stale completion can't clobber a job another writer already
     reclaimed.
     """
+    job = await session.get(Job, job_id)
+    if job is None:
+        logger.warning("job %s vanished before completion", job_id)
+        return
     job.state = "done"
     job.finished_at = datetime.now(UTC)
     await session.commit()
-    logger.info("completed job %s", job.id)
+    logger.info("completed job %s", job_id)
 
 
-async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
+async def fail_job(session: AsyncSession, job_id: uuid.UUID, exc: Exception) -> None:
     """Handle a failed job: requeue with backoff if attempts remain,
     otherwise mark it permanently failed (and fail its document).
 
@@ -250,9 +259,9 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
     same result. Every other exception keeps the existing
     requeue-with-backoff-until-MAX_ATTEMPTS behavior.
 
-    Same compare-and-set caveat as complete_job applies here.
+    Same compare-and-set caveat as complete_job applies here, and the same
+    reason for taking the id: the handler's session may hold an expired Job.
     """
-    job_id = job.id
     non_retryable = isinstance(exc, NonRetryableExtractionError)
 
     # Roll back first, for two reasons: (1) a handler that failed with a
@@ -261,7 +270,7 @@ async def fail_job(session: AsyncSession, job: Job, exc: Exception) -> None:
     # InFailedSqlTransactionError -- and (2) a handler that failed after
     # partial, uncommitted writes shouldn't have those writes flushed
     # alongside the requeue/failure bookkeeping. Rollback may expire
-    # `job`'s attributes, and AsyncSession can't do the implicit
+    # the handler's Job, and AsyncSession can't do the implicit
     # lazy-load refresh a sync Session would do transparently, so
     # re-fetch it fresh afterward rather than touching the stale object.
     await session.rollback()
@@ -417,7 +426,7 @@ async def _run_handler(
         # reason fail_job does -- don't flush partial handler writes
         # alongside the requeue -- and re-fetch afterward since
         # rollback may have expired `job`.
-        logger.info("job %s cancelled mid-handler, requeuing", job.id)
+        logger.info("job %s cancelled mid-handler, requeuing", job_id)
         await session.rollback()
         job = await session.get(Job, job_id)
         if job is not None:
@@ -426,10 +435,10 @@ async def _run_handler(
             await session.commit()
         raise
     except Exception as exc:
-        logger.exception("job %s handler failed", job.id)
+        logger.exception("job %s handler failed", job_id)
         span.record_exception(exc)
         span.set_status(Status(StatusCode.ERROR, f"{type(exc).__name__}: {exc}"[:500]))
-        await fail_job(session, job, exc)
+        await fail_job(session, job_id, exc)
         settled = await session.get(Job, job_id)
         if settled is not None:
             span.set_attribute(
@@ -437,7 +446,7 @@ async def _run_handler(
                 "requeued" if settled.state == "pending" else settled.state,
             )
     else:
-        await complete_job(session, job)
+        await complete_job(session, job_id)
         span.set_attribute(DOCPILOT_JOB_OUTCOME, "done")
 
 
@@ -486,7 +495,35 @@ async def run_worker(handler: Handler = dispatch_job, stop: asyncio.Event | None
         raise
 
 
+# How often the heartbeat file is touched. The compose healthcheck calls
+# the worker unhealthy once the file is more than six intervals old.
+HEARTBEAT_INTERVAL_SECONDS = 10.0
+
+
+async def _heartbeat_loop(path: Path, interval: float) -> None:
+    """Touch `path` every `interval` seconds until cancelled: the worker's
+    liveness signal for the compose healthcheck, which reads the file's
+    mtime. It runs beside the poll loop rather than inside it, so it keeps
+    ticking through a long model call (a chunked PDF can take many
+    minutes) and through the embedding model's first download at startup,
+    and stops only when the event loop stalls or the process dies. A
+    write failure is logged once per outage and never stops the worker."""
+    failing = False
+    while True:
+        try:
+            path.touch()
+            failing = False
+        except OSError:
+            if not failing:
+                logger.warning("cannot touch worker heartbeat file %s", path, exc_info=True)
+            failing = True
+        await asyncio.sleep(interval)
+
+
 async def main() -> None:
+    heartbeat = asyncio.ensure_future(
+        _heartbeat_loop(Path(get_settings().worker_heartbeat_file), HEARTBEAT_INTERVAL_SECONDS)
+    )
     if configure_tracing("doc-pilot-worker") and otlp_enabled():
         instrument_engine(engine)
         logger.info("tracing enabled (OTLP export)")
@@ -512,6 +549,7 @@ async def main() -> None:
     except asyncio.CancelledError:
         pass
     finally:
+        heartbeat.cancel()
         await engine.dispose()
         shutdown_tracing()
         logger.info("worker stopped, engine disposed")

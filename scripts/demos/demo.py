@@ -159,8 +159,9 @@ def service_states() -> dict[str, dict]:
 
 
 def check_one_shots_and_worker(states: dict[str, dict]) -> None:
-    """`up --wait` on a subset of services never looks at the worker (it has
-    no healthcheck), so check it and the migrate one-shot here."""
+    """`up --wait` passes for a one-shot that exited, whatever its exit code,
+    so check the migrate one-shot here, and that the worker's heartbeat
+    healthcheck reports healthy."""
     migrate = states.get("migrate", {})
     if migrate.get("State") != "exited" or migrate.get("ExitCode") != 0:
         raise CliError(
@@ -168,8 +169,11 @@ def check_one_shots_and_worker(states: dict[str, dict]) -> None:
             f"exit code {migrate.get('ExitCode')!r}"
         )
     worker = states.get("worker", {})
-    if worker.get("State") != "running":
-        raise CliError(f"worker is not running: state {worker.get('State')!r}")
+    if worker.get("State") != "running" or worker.get("Health") != "healthy":
+        raise CliError(
+            f"worker is not healthy: state {worker.get('State')!r}, "
+            f"health {worker.get('Health')!r}"
+        )
 
 
 def wait_for_frontend() -> None:
@@ -191,15 +195,7 @@ def wait_for_frontend() -> None:
 
 
 def stack_up(_args: argparse.Namespace) -> int:
-    code = compose("up", "-d", "--build")
-    if code != 0:
-        return code
-    # Compose 2.40's `--wait` errors out ("has no healthcheck configured")
-    # on the worker, whose healthcheck docker-compose.yml disables on
-    # purpose, so wait on the services that serve HTTP instead (and their
-    # dependencies: db, migrate). This second `up` re-runs the idempotent
-    # migrate one-shot (`alembic upgrade head`).
-    code = compose("up", "-d", "--wait", "db", "api", "frontend")
+    code = compose("up", "-d", "--build", "--wait")
     if code != 0:
         return code
     check_one_shots_and_worker(service_states())

@@ -28,7 +28,8 @@ Longer procedures live in `.claude/skills/` and `.claude/commands/`.
 
 ## Gates (the same commands CI runs)
 
-- Backend, from `backend/` with `.venv`: `ruff check app tests scripts`, `alembic upgrade head`, `pytest -q`.
+- Backend, from `backend/` with `.venv`: `ruff check .`, `pytest -q` (the suite creates and migrates its own `docpilot_test` database).
+- Demo scripts, from `backend/`: `ruff check ../scripts/demos`, `pytest ../scripts/demos -q`.
 - Frontend, from `frontend/`: `npx eslint src`, `npm run build`.
 - Evals: `tests/test_evals_runner.py` pins the mock extraction accuracy inside pytest; `evals/run_retrieval.py --check` gates retrieval quality.
 - Compose: `docker compose config -q`, and with the demo overlay `docker compose -f docker-compose.yml -f docker-compose.demo.yml config -q`.

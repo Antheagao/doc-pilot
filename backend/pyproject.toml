@@ -32,6 +32,7 @@ dev = [
     "httpx",
     "ruff",
     "pillow",
+    "tzdata",  # Windows has no system tz database for ZoneInfo (tests/test_budget.py)
 ]
 
 [build-system]

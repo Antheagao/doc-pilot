@@ -2,9 +2,9 @@
 
 Follows test_review.py's pattern: rows are seeded directly through
 db_session (no worker/VLM involvement), and assertions use the delta
-pattern -- snapshot /stats, seed, assert the delta -- since tests share
-the dev Postgres on port 5434 and must never assert absolute global
-counts.
+pattern -- snapshot /stats, seed, assert the delta -- since the test
+database can hold rows committed by other tests, so no test may assert
+absolute global counts.
 """
 
 import json

@@ -246,7 +246,7 @@ async def test_a_judge_job_that_fails_for_good_marks_its_run(db_session: AsyncSe
     job.attempts = MAX_ATTEMPTS
     await db_session.commit()
 
-    await fail_job(db_session, job, NonRetryableExtractionError("unpriced model"))
+    await fail_job(db_session, job.id, NonRetryableExtractionError("unpriced model"))
 
     await db_session.refresh(run)
     assert run.judged_at is not None and run.judge_grounded is None

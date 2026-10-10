@@ -1,6 +1,6 @@
 ---
 name: doc-pilot-error-handling-logging
-description: doc-pilot's HTTPException detail errors, ExtractionError retry classes, job failure and backoff handling, stdlib logging, OpenTelemetry spans, and the open worker MissingGreenlet bug. Use when adding an error path, retry, log line, or span, or debugging a stuck or failed job in doc-pilot.
+description: doc-pilot's HTTPException detail errors, ExtractionError retry classes, job failure and backoff handling, stdlib logging, OpenTelemetry spans, and the rule about expired ORM objects in the worker. Use when adding an error path, retry, log line, or span, or debugging a stuck or failed job in doc-pilot.
 ---
 
 # doc-pilot error-handling-logging overlay
@@ -29,8 +29,9 @@ Load the global `error-handling-logging` guide for the rules; this file holds wh
 - There are no request ids; correlation is OpenTelemetry (`app/telemetry.py`): a `job <kind>` span with `docpilot.job.*` attributes and outcome, a `model_call_span` per model call, and `jobs.traceparent` plus `ask_runs.trace_id` to join them.
 - Jaeger runs under the compose `tracing` profile; Langfuse score failures are logged and dropped, never raised.
 
-## Known bug (being fixed)
+## Expired ORM objects in the worker
 
-- `_run_handler` logs `job.id` and `fail_job` reads `job.id` after the handler has rolled back (all three handlers roll back before their model call), so the expired `Job` raises `MissingGreenlet`.
-  The error escapes to `run_worker`, the real failure is lost, and the job sits in `processing` until the next worker start reclaims it.
-  After any rollback, never touch ORM attributes: carry `job_id` from `run_once` and re-fetch.
+- All three handlers roll back before their model call, which expires the session's `Job`; a read of `job.id` afterwards raises `MissingGreenlet`, which once escaped to `run_worker`, lost the real failure, and left the job in `processing`.
+- So `complete_job` and `fail_job` take `job_id` and re-fetch, and `_run_handler` logs the carried `job_id`; after any rollback, never touch ORM attributes of an object loaded before it.
+- `tests/test_worker.py` covers handlers that roll back and then succeed, fail, fail for good, or are cancelled.
+- The worker touches a heartbeat file (`WORKER_HEARTBEAT_FILE`) every 10 s from a task beside the poll loop; compose's worker healthcheck fails when it is over 60 s old.

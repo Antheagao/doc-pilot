@@ -66,6 +66,8 @@ Copy-Item backend\.env .env          # Windows
 docker compose up --build
 ```
 
+After pulling changes, rebuild with `docker compose up -d --build`: a stale worker image never writes the heartbeat file its healthcheck reads, so `docker compose up --wait` would report it unhealthy.
+
 Migrations run automatically -- a one-shot `migrate` service runs `alembic upgrade head` and `api`/`worker` wait on it before starting. Once the stack is up:
 
 - Frontend: http://localhost:3000

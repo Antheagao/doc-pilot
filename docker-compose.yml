@@ -3,7 +3,10 @@ services:
     # postgres:16 plus the pgvector extension (the retrieval index,
     # app/retrieval/). Same data-directory format as the plain postgres:16
     # image this replaced, so an existing db_data volume keeps working.
-    image: pgvector/pgvector:pg16
+    # Pinned to the trixie (Debian 13, glibc 2.41) variant: the dev volume
+    # was initialized under glibc 2.41, and the bookworm-based pg16 tag
+    # (glibc 2.36) logs a collation version mismatch on every connection.
+    image: pgvector/pgvector:pg16-trixie
     environment:
       POSTGRES_USER: docpilot
       POSTGRES_PASSWORD: docpilot
@@ -116,6 +119,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
       # Must match api's UPLOAD_DIR -- see the comment there.
       UPLOAD_DIR: /data/uploads
+      # Read by the healthcheck below as well as by the worker.
+      WORKER_HEARTBEAT_FILE: /tmp/worker-heartbeat
       # The worker calls the model for extraction and transcription; the
       # api service needs the key too, but only for POST /ask (see there).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -135,10 +140,24 @@ services:
       - models:/data/models
     restart: unless-stopped
     # The backend image's baked-in healthcheck probes the API's /healthz;
-    # the worker runs no HTTP server, so without this override it would
-    # sit "unhealthy" forever and break `docker compose up --wait`.
+    # the worker runs no HTTP server, so it gets its own: the worker touches
+    # WORKER_HEARTBEAT_FILE every 10 s from a task beside its poll loop
+    # (app/worker.py), through idle polls, long model calls and the first
+    # embedding-model download alike, so the job length does not matter. The
+    # check fails once the file is over 60 s old. Compose only reports
+    # "unhealthy" (it does not restart on it); restart: unless-stopped
+    # covers a crashed process. `up --wait` needs a healthcheck to wait on:
+    # `disable: true` makes it fail with "has no healthcheck configured".
     healthcheck:
-      disable: true
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, sys, time; sys.exit(0 if time.time() - os.path.getmtime(os.environ['WORKER_HEARTBEAT_FILE']) < 60 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   frontend:
     build:

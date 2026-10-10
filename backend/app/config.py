@@ -1,3 +1,4 @@
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -23,6 +24,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     upload_dir: str = "uploads"
     worker_poll_interval: float = 1.0
+    # The file the worker touches every few seconds while its event loop is
+    # alive (app/worker.py _heartbeat_loop); the compose healthcheck reads
+    # its mtime. In the container the temp dir is /tmp.
+    worker_heartbeat_file: str = Field(
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "doc-pilot-worker-heartbeat")
+    )
     # Reclaiming orphaned jobs (app/worker.py). 0, the default, suits one
     # long-lived worker (docker compose): every 'processing' job is
     # reclaimed once, at startup. A platform that overlaps the old and new

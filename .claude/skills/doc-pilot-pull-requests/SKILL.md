@@ -26,8 +26,8 @@ Gate commands and the commit rules live in `AGENTS.md`.
 ## CI (`.github/workflows/ci.yml`)
 
 - Runs on every push to `master` and on every pull request.
-- `backend`: a `pgvector/pgvector:pg16` service on 5434, `pip install -e .[dev]`, `ruff check app tests scripts`, `alembic upgrade head`, `pytest -q`.
-- `retrieval-eval`: fetches the pinned fastembed model, then `evals/run_retrieval.py --embedder fastembed --chunk-sizes 0,200 --headers both --check --slack-queries 1`.
+- `backend`: a `pgvector/pgvector:pg16-trixie` service on 5434, `pip install -e .[dev]`, `ruff check .`, `ruff check ../scripts/demos`, `pytest -q` (no migrate step: `tests/conftest.py` creates and migrates `docpilot_test`).
+- `retrieval-eval`: the same service image, `alembic upgrade head` on its `docpilot` database, then fetches the pinned fastembed model, then `evals/run_retrieval.py --embedder fastembed --chunk-sizes 0,200 --headers both --check --slack-queries 1`.
 - `frontend`: `npm ci`, `npx eslint src`, `npm run build`.
 - `compose`: `docker compose config -q`; the demo overlay check is being added with Batch 0 task T0.1.
 - `terraform`: `fmt -check`, `init -backend=false`, `validate`, and `test` with mocked providers.

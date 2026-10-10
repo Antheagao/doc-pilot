@@ -1,7 +1,9 @@
 import asyncio
+import tempfile
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -115,9 +117,9 @@ async def real_documents() -> AsyncGenerator[Callable]:
     two independently-committed transactions to exercise real row
     locking. These tests commit for real instead.
 
-    Scoping, not isolation: because these rows are committed for real
-    against the shared dev database, a stray real pending job (e.g. left
-    behind by a manual API upload with no worker running) could
+    Scoping on top of isolation: the suite has its own database (see
+    tests/conftest.py), so the compose worker never sees these rows, but
+    a pending job left behind by a crashed earlier test run could
     otherwise get claimed -- and corrupted -- by a test's fake handler,
     since run_once/claim_job normally claim whatever pending job is
     globally oldest. Every test below claims through `document_id=`
@@ -393,6 +395,90 @@ async def test_poisoned_session_survives_and_requeues(real_documents: Callable) 
     assert result.last_error is not None
 
 
+async def test_a_handler_that_rolled_back_then_failed_requeues_with_its_error(
+    real_documents: Callable,
+) -> None:
+    """Regression: every real handler rolls back before its model call,
+    which expires the Job in the session, and AsyncSession cannot lazy-load
+    it back. fail_job and the log lines used to read job.id from that
+    expired object, so a model failure (a 401, say) raised MissingGreenlet
+    out of run_once, lost the real error, and left the job 'processing'.
+    """
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+
+    async def rolls_back_then_fails(session, job) -> None:
+        await session.rollback()
+        raise ExtractionError("model call failed")
+
+    claimed = await run_once(rolls_back_then_fails, document_id=document.id)
+
+    assert claimed is True
+    result = await _refresh_job(job.id)
+    assert result.state == "pending"
+    assert result.attempts == 1
+    assert result.run_after is not None and result.run_after > datetime.now(UTC)
+    assert result.last_error is not None
+    assert "model call failed" in result.last_error
+
+
+async def test_a_handler_that_rolled_back_then_failed_for_good_fails_the_document(
+    real_documents: Callable,
+) -> None:
+    document = await real_documents(status="processing")
+    job = await _make_job(document.id, state="pending")
+
+    async def rolls_back_then_fails(session, job) -> None:
+        await session.rollback()
+        raise NonRetryableExtractionError("invalid api key")
+
+    claimed = await run_once(rolls_back_then_fails, document_id=document.id)
+
+    assert claimed is True
+    result = await _refresh_job(job.id)
+    assert result.state == "failed"
+    assert result.finished_at is not None
+    assert result.last_error is not None
+    assert "invalid api key" in result.last_error
+    assert (await _refresh_document(document.id)).status == "failed"
+
+
+async def test_a_handler_that_rolled_back_then_succeeded_marks_job_done(
+    real_documents: Callable,
+) -> None:
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+
+    async def rolls_back_then_succeeds(session, job) -> None:
+        await session.rollback()
+
+    claimed = await run_once(rolls_back_then_succeeds, document_id=document.id)
+
+    assert claimed is True
+    result = await _refresh_job(job.id)
+    assert result.state == "done"
+    assert result.finished_at is not None
+
+
+async def test_a_handler_cancelled_after_a_rollback_still_requeues(
+    real_documents: Callable,
+) -> None:
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+
+    async def rolls_back_then_is_cancelled(session, job) -> None:
+        await session.rollback()
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_once(rolls_back_then_is_cancelled, document_id=document.id)
+
+    result = await _refresh_job(job.id)
+    assert result.state == "pending"
+    assert result.attempts == 0
+    assert result.last_error is None
+
+
 async def test_run_worker_survives_unexpected_run_once_failure(monkeypatch) -> None:
     """Regression (HIGH): run_worker must not die if run_once itself
     raises -- not just if a handler exception is caught inside it (that
@@ -630,3 +716,67 @@ async def test_jobs_default_to_extract_kind(real_documents: Callable) -> None:
     job = await _make_job(document.id, state="pending")
 
     assert job.kind == "extract"
+
+
+# --- heartbeat (the compose healthcheck's liveness signal) -------------------
+
+
+async def test_the_heartbeat_file_is_touched_repeatedly(tmp_path) -> None:
+    path = tmp_path / "heartbeat"
+    task = asyncio.ensure_future(worker_module._heartbeat_loop(path, 0.01))
+    try:
+        await asyncio.sleep(0.05)
+        first = path.stat().st_mtime_ns
+        await asyncio.sleep(0.1)
+        assert path.stat().st_mtime_ns > first
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_the_heartbeat_keeps_ticking_while_a_job_runs(tmp_path, monkeypatch) -> None:
+    """A long extraction occupies run_once for minutes; the heartbeat must
+    not go stale meanwhile or the healthcheck would report a busy worker
+    as dead."""
+    path = tmp_path / "heartbeat"
+    mtimes: list[int] = []
+
+    async def long_job(handler):
+        for _ in range(5):
+            await asyncio.sleep(0.03)
+            mtimes.append(path.stat().st_mtime_ns)
+        return False
+
+    monkeypatch.setattr(worker_module, "run_once", long_job)
+    monkeypatch.setattr(worker_module, "get_settings", lambda: Settings(worker_poll_interval=0.01))
+    stop = asyncio.Event()
+    heartbeat = asyncio.ensure_future(worker_module._heartbeat_loop(path, 0.01))
+    run = asyncio.ensure_future(worker_module.run_worker(stop=stop))
+    try:
+        await asyncio.sleep(0.25)
+    finally:
+        stop.set()
+        await asyncio.wait_for(run, timeout=1)
+        heartbeat.cancel()
+
+    assert len(set(mtimes)) > 1
+
+
+async def test_an_unwritable_heartbeat_path_does_not_stop_the_loop(tmp_path) -> None:
+    path = tmp_path / "missing-directory" / "heartbeat"
+    task = asyncio.ensure_future(worker_module._heartbeat_loop(path, 0.01))
+    try:
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        path.parent.mkdir()
+        await asyncio.sleep(0.05)
+        assert path.exists()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+def test_the_heartbeat_path_defaults_under_the_temp_dir() -> None:
+    assert Path(Settings().worker_heartbeat_file).parent == Path(tempfile.gettempdir())

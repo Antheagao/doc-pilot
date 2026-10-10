@@ -70,11 +70,15 @@ def test_compose_env_drops_compose_profiles(monkeypatch: pytest.MonkeyPatch) -> 
 def test_worker_or_migrate_failure_is_reported() -> None:
     ok = {
         "migrate": {"State": "exited", "ExitCode": 0},
-        "worker": {"State": "running"},
+        "worker": {"State": "running", "Health": "healthy"},
     }
     demo.check_one_shots_and_worker(ok)
     with pytest.raises(demo.CliError, match="worker"):
         demo.check_one_shots_and_worker({**ok, "worker": {"State": "exited"}})
+    with pytest.raises(demo.CliError, match="worker"):
+        demo.check_one_shots_and_worker(
+            {**ok, "worker": {"State": "running", "Health": "unhealthy"}}
+        )
     with pytest.raises(demo.CliError, match="migrate"):
         demo.check_one_shots_and_worker(
             {**ok, "migrate": {"State": "exited", "ExitCode": 1}}
