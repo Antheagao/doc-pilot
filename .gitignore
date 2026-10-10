@@ -30,3 +30,7 @@ Thumbs.db
 *.tfvars
 !*.tfvars.example
 crash.log
+
+# Demo recordings (scripts/demos): WebM/MP4/poster pairs; the GIFs under
+# screenshots/features/ are the committed artifacts.
+scripts/demos/out/

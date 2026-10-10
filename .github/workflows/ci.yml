@@ -117,6 +117,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate compose config
         run: docker compose config -q
+      - name: Validate demo overlay config
+        run: docker compose -f docker-compose.yml -f docker-compose.demo.yml config -q
 
   terraform:
     runs-on: ubuntu-latest

@@ -1,0 +1,93 @@
+# Isolated stack for recording the feature demos (scripts/demos/demo.py).
+# An overlay on docker-compose.yml, always run as its own compose project:
+#   docker compose -p doc-pilot-demo -f docker-compose.yml -f docker-compose.demo.yml ...
+# A separate project gets its own containers, network, images and named
+# volumes (doc-pilot-demo_db_data, ...), so seeding or resetting demo data
+# can never touch the dev/test database on host port 5434.
+name: doc-pilot-demo
+
+services:
+  db:
+    # No host port at all: the dev db owns 5434, and nothing outside the
+    # demo network needs to reach this one.
+    ports: !reset []
+    restart: "no"
+
+  # The demo stack is short-lived (up for a recording session, then
+  # down), so nothing restarts with the Docker daemon.
+  migrate:
+    restart: "no"
+
+  api:
+    # 8100/3100 sit beside the dev stack's 8000/3000, so both can run at once.
+    ports: !override
+      - "127.0.0.1:8100:8000"
+    environment:
+      # The browser calls the API from the demo frontend's origin.
+      CORS_ORIGINS: '["http://localhost:3100"]'
+      # Hard cap on live demo spend (/ask, chat), independent of the dev
+      # stack's budget; see app/budget.py.
+      DAILY_BUDGET_USD: ${DEMO_DAILY_BUDGET_USD:-1.50}
+      # No background judge calls, and no demo trace or score ever goes to
+      # Langfuse Cloud (set empty here even if the shell exports keys).
+      ASK_JUDGE_SAMPLE_RATE: "0"
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      # Tracing off as well, even if the shell exports an endpoint: demo
+      # spans would land in the dev stack's jaeger.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    restart: "no"
+
+  worker:
+    environment:
+      # Langfuse and tracing off: see the api service.
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    restart: "no"
+
+  frontend:
+    # Compose names a built image <project>-<service>, so this builds
+    # doc-pilot-demo-frontend and never overwrites the dev stack's
+    # doc-pilot-frontend, which has the :8000 URL inlined.
+    build:
+      args:
+        # Inlined into the client bundle at build time (frontend/Dockerfile):
+        # the URL the BROWSER reaches the demo API at.
+        NEXT_PUBLIC_API_URL: "http://localhost:8100"
+    ports: !override
+      - "127.0.0.1:3100:3000"
+    restart: "no"
+
+  # One-shot, opt-in: `docker compose ... --profile seed run --rm seed`
+  # (scripts/demos/demo.py seed) loads the deterministic demo dataset.
+  seed:
+    build: ./backend
+    profiles: ["seed"]
+    command: python scripts/seed_demo.py
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+      # Must match api's UPLOAD_DIR and EMBEDDING_CACHE_DIR: the seed
+      # copies the sample images into the shared uploads volume and
+      # indexes pages with the same embedding model the api queries with.
+      UPLOAD_DIR: /data/uploads
+      EMBEDDING_CACHE_DIR: /data/models
+      # The seed's reset step refuses to run without this, so it can never
+      # be pointed at a real database by accident.
+      DOCPILOT_DEMO: "1"
+    volumes:
+      - uploads:/data/uploads
+      - models:/data/models
+      # The seed replays the committed eval artifacts and reads the source
+      # images and gold page text. The image holds only backend/, and
+      # app/evals resolves EVALS_DIR to /evals beside it. Unlike api's
+      # results-only mount, this one carries the whole evals/ tree.
+      - ./evals:/evals:ro
+    restart: "no"
+    # One-shot like migrate: the image's baked-in /healthz probe is
+    # meaningless for a script.
+    healthcheck:
+      disable: true
