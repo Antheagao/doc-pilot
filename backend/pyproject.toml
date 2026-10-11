@@ -32,6 +32,7 @@ dev = [
     "httpx",
     "ruff",
     "pillow",
+    "hypothesis",  # property tests (tests/test_reconcile_properties.py)
     "tzdata",  # Windows has no system tz database for ZoneInfo (tests/test_budget.py)
 ]
 # Recording the feature GIFs (scripts/demos/harness.py); never installed in the

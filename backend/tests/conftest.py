@@ -9,6 +9,7 @@ import asyncpg
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from hypothesis import settings as hypothesis_settings
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +52,12 @@ if engine.url.database != TEST_DATABASE_URL.database:
         f"{TEST_DATABASE_URL.database!r}: app.db was imported before tests/conftest.py set DATABASE_URL"
     )
 
+
+# Property tests (tests/test_reconcile_properties.py) draw the same examples on
+# every run, so a failure reproduces on CI and a green run is repeatable; no
+# deadline, because a slow shared runner is not a bug.
+hypothesis_settings.register_profile("doc-pilot", derandomize=True, deadline=None)
+hypothesis_settings.load_profile("doc-pilot")
 
 # Serializes parallel pytest runs against one server: only one creates and
 # migrates the database at a time.

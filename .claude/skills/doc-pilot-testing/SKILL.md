@@ -21,6 +21,9 @@ Gate commands live in `AGENTS.md`; the Rust and Playwright subsections of the gl
 - Embeddings use `HashingEmbedder` (deterministic, lexical, no download); its numbers are plumbing checks, never quality.
 - `tests/test_live_smoke.py` is marked `live` and skips unless `RUN_LIVE_SMOKE=1`; it bills real calls under a cost cap.
 - Randomness is patched, not ranged: `_backoff_delay` tests patch `random.uniform` and assert exact values.
+- Property tests use `hypothesis` (`dev` extra): `tests/conftest.py` registers and loads the `doc-pilot` profile with `derandomize=True, deadline=None`, so every run draws the same examples and a failure reproduces anywhere.
+  The `.hypothesis/` example database stays gitignored; pin a found regression as an ordinary example test, not as a database entry.
+  `tests/test_reconcile_properties.py` is the model: generate a consistent record, break one number, assert what the engine says.
 
 ## Evals as tests
 
@@ -33,4 +36,4 @@ Gate commands live in `AGENTS.md`; the Rust and Playwright subsections of the gl
 
 - Pure-unit runs still need Postgres: the session-start database setup runs for every `pytest` invocation under `backend/`.
 - No frontend test runner and no browser E2E; Batch 0 adds Python Playwright as a `demo` extra for recordings, not tests.
-- No `hypothesis` yet; Batch A5 brings the first property tests.
+- Only the reconciliation engine has property tests; the money module's tests are still examples.
