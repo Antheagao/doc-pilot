@@ -25,6 +25,14 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-10 (batch-loop on macOS: T0.3 review, T0.3b, T0.4; stopped at T0.5)
+- First session on the Mac: Homebrew Python 3.12 and ffmpeg, a fresh `backend/.venv` with the `dev` and `demo` extras plus Playwright Chromium, `npm ci`, and a gitignored `backend/.env` with an empty key (zero-spend work only). All gates pass here: 506 backend tests, 60 demo-script tests, eslint, tsc, `next build`.
+- T0.3 deep review (`6797823`): the 840 px ladder rung that `check` rejects is gone (fps and palette steps at 960 px, and `record` checks before copying); concat frame times were rounded to 40 ms (25 fps image default), now `option framerate 1000`; a second `rec.open()` no longer cuts the earlier recording.
+- T0.3b (`21b35e2`): the browser check at 360 px caught the brand running into the nav, plus a `--` em-dash stand-in on the dashboard; both fixed.
+- T0.4 (`fe5bb1c`): `search-hybrid.gif` and `review-correction.gif` committed under `screenshots/features/`, both within limits.
+- Stopped: T0.5 needs Anthony's approval of the live demo spend (expected $0.50-1.00, cap $1.50) and the Anthropic key in `backend/.env` and root `.env` on this machine. T0.6 records today's live runs alongside the replay, so it follows T0.5.
+- The user-level agents (`planner`, `coder`, `deep-reviewer`) are not installed on this Mac; the review ran as a general-purpose subagent.
+
 ### 2026-10-10 (agent docs adopt the claude-brain overlay convention)
 - `AGENTS.md` now holds the project rules (scope, orientation, running, gates, guides table, commits); `CLAUDE.md` is a two-line import of it, replacing the stale untracked project-memory file.
 - Twelve `doc-pilot-<topic>` overlay skills under `.claude/skills/` record what exists here, known gaps, and local exceptions for each claude-brain global guide.
