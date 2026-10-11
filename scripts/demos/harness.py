@@ -243,6 +243,12 @@ class Recording:
         self.click(locator)
         self.page.keyboard.type(text, delay=TYPE_DELAY_MS)
 
+    def retype(self, locator: Locator, text: str) -> None:
+        """Click the field, select what it holds, and type over it."""
+        self.click(locator)
+        self.page.keyboard.press("ControlOrMeta+a")
+        self.page.keyboard.type(text, delay=TYPE_DELAY_MS)
+
     def scroll(self, pixels: int) -> None:
         """Wheel-scroll the page by `pixels` (negative scrolls up) in small
         ticks, so the motion is smooth on a 12 fps GIF."""
