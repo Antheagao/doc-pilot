@@ -33,7 +33,11 @@ services:
   # success so the schema is always current before either starts serving
   # or claiming jobs.
   migrate:
+    # migrate, api and worker run the same backend image under one name.
+    # Built per service, `docker compose build api worker` left migrate on
+    # a stale image, and `up` then skipped the new migrations silently.
     build: ./backend
+    image: doc-pilot-backend
     command: alembic upgrade head
     depends_on:
       db:
@@ -49,6 +53,7 @@ services:
 
   api:
     build: ./backend
+    image: doc-pilot-backend
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -111,6 +116,7 @@ services:
     # A second concurrent worker would have that sweep steal its
     # in-flight job.
     build: ./backend
+    image: doc-pilot-backend
     command: python -m app.worker
     depends_on:
       migrate:

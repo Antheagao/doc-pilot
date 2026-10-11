@@ -23,11 +23,15 @@ services:
   # The demo stack is short-lived (up for a recording session, then
   # down), so nothing restarts with the Docker daemon.
   migrate:
+    # Its own backend image name, so a demo rebuild never retags the dev
+    # stack's doc-pilot-backend (shared by migrate, api, worker and seed).
+    image: doc-pilot-demo-backend
     environment:
       DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
     restart: "no"
 
   api:
+    image: doc-pilot-demo-backend
     # 8100/3100 sit beside the dev stack's 8000/3000, so both can run at once.
     ports: !override
       - "127.0.0.1:8100:8000"
@@ -49,6 +53,7 @@ services:
     restart: "no"
 
   worker:
+    image: doc-pilot-demo-backend
     environment:
       DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
       # Langfuse and tracing off: see the api service.
@@ -74,6 +79,7 @@ services:
   # (scripts/demos/demo.py seed) loads the deterministic demo dataset.
   seed:
     build: ./backend
+    image: doc-pilot-demo-backend
     profiles: ["seed"]
     command: python scripts/seed_demo.py
     depends_on:
