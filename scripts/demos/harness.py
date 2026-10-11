@@ -75,6 +75,11 @@ OVERLAY_SCRIPT = """
     } catch {}
   };
 
+  // Defined before the overlay installs, so fast_forward can set the label
+  // while a full page load is still parsing; the overlay shows it on install.
+  let showChip = () => {};
+  window.__recSetChip = (label) => { write(KEY_CHIP, label); showChip(label); };
+
   const install = () => {
     const root = document.documentElement;
     const host = document.createElement('div');
@@ -99,11 +104,10 @@ OVERLAY_SCRIPT = """
       cursor.style.display = 'block';
       cursor.style.transform = `translate(${x - 3.5}px, ${y - 2.3}px)`;
     };
-    const showChip = (label) => {
+    showChip = (label) => {
       chip.textContent = label || '';
       chip.style.display = label ? 'block' : 'none';
     };
-    window.__recSetChip = (label) => { write(KEY_CHIP, label); showChip(label); };
 
     const saved = read(KEY_POS);
     if (saved) { const [x, y] = saved.split(',').map(Number); place(x, y); }
@@ -187,14 +191,17 @@ class Recording:
     def open(self, url: str, *ready: Locator) -> None:
         """Load url, wait until every `ready` locator is visible and the
         network is idle (no content left to pop in and shift the layout).
-        Everything before that moment is the blank lead-in the encode trims."""
+        Everything before the first open's ready moment is the blank lead-in
+        the encode trims; a later open keeps what was recorded before it."""
         self.page.goto(url)
         for locator in ready:
             locator.wait_for(state="visible")
         self.page.wait_for_load_state("networkidle")
         self.page.mouse.move(*START_POINTER)
+        self._pointer = START_POINTER
         self.page.wait_for_timeout(100)
-        self._lead_in = self.now() + LEAD_IN_PAD
+        if self._lead_in is None:
+            self._lead_in = self.now() + LEAD_IN_PAD
 
     def beat(self, count: float = 1) -> None:
         """Stand still for `count` beats."""
@@ -326,5 +333,8 @@ def recording(slug: str, base_url: str, out_dir: Path = OUT_DIR) -> Iterator[Rec
                 context.close()
         finally:
             browser.close()
-    (frames_dir / "frames.txt").write_text(rec.frame_list(), encoding="utf-8")
-    (out_dir / f"{slug}.json").write_text(rec.sidecar().to_json(), encoding="utf-8")
+    # Both are built before either is written, so a sidecar that fails to
+    # validate leaves no new frame list next to an older sidecar.
+    frames_text, sidecar_text = rec.frame_list(), rec.sidecar().to_json()
+    (frames_dir / "frames.txt").write_text(frames_text, encoding="utf-8")
+    (out_dir / f"{slug}.json").write_text(sidecar_text, encoding="utf-8")

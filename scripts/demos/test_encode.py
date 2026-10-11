@@ -102,10 +102,10 @@ def test_empty_timeline_is_refused() -> None:
 def test_frame_list_holds_each_frame_until_the_next_and_the_last_to_the_end() -> None:
     text = encode.frame_list([(0.0, "a.jpg"), (0.5, "b.jpg"), (2.0, "c.jpg")], 3.0)
     assert text == (
-        "file 'a.jpg'\nduration 0.500\n"
-        "file 'b.jpg'\nduration 1.500\n"
-        "file 'c.jpg'\nduration 1.000\n"
-        "file 'c.jpg'\n"
+        "file 'a.jpg'\noption framerate 1000\nduration 0.500\n"
+        "file 'b.jpg'\noption framerate 1000\nduration 1.500\n"
+        "file 'c.jpg'\noption framerate 1000\nduration 1.000\n"
+        "file 'c.jpg'\noption framerate 1000\n"
     )
 
 
@@ -117,19 +117,22 @@ def test_frame_list_needs_frames() -> None:
 SLICES = [Piece(1.0, 9.0)]
 
 
-def test_palette_pass_uses_diff_stats() -> None:
-    cmd = encode.palette_command(Path("f.txt"), SLICES, Path("p.png"), 12, 960)
+def test_palette_pass_uses_diff_stats_and_the_rung_colors() -> None:
+    cmd = encode.palette_command(Path("f.txt"), SLICES, Path("p.png"), 12, 128)
     graph = cmd[cmd.index("-filter_complex") + 1]
-    assert "fps=12,scale=960:-1:flags=lanczos,palettegen=stats_mode=diff" in graph
+    assert (
+        "fps=12,scale=960:-1:flags=lanczos,palettegen=max_colors=128:stats_mode=diff"
+        in graph
+    )
     assert cmd[-1] == "p.png"
 
 
 def test_gif_pass_uses_the_palette_with_bayer_dither() -> None:
     cmd = encode.gif_command(
-        Path("f.txt"), SLICES, Path("p.png"), Path("o.gif"), 10, 840
+        Path("f.txt"), SLICES, Path("p.png"), Path("o.gif"), 10
     )
     graph = cmd[cmd.index("-filter_complex") + 1]
-    assert "fps=10,scale=840:-1:flags=lanczos" in graph
+    assert "fps=10,scale=960:-1:flags=lanczos" in graph
     assert "paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" in graph
     assert cmd.count("-i") == 2
     assert cmd[-1] == "o.gif"
@@ -166,16 +169,21 @@ def test_gif_limits(duration: float, size: int, width: int, ok: bool) -> None:
 def fake_encoder(
     monkeypatch: pytest.MonkeyPatch, sizes: dict[tuple[int, int], int]
 ) -> list[tuple[int, int]]:
-    """Replace ffmpeg: a GIF pass writes `sizes[(fps, width)]` bytes."""
+    """Replace ffmpeg: a GIF pass writes `sizes[(fps, colors)]` bytes, where
+    colors comes from the palette pass just before it."""
     attempts: list[tuple[int, int]] = []
+    palette_colors: list[int] = []
 
     def run_tool(cmd: list[str]) -> None:
         graph = cmd[cmd.index("-filter_complex") + 1]
-        fps, width = map(int, re.search(r"fps=(\d+),scale=(\d+):", graph).groups())
+        assert f"scale={encode.GIF_WIDTH}:" in graph
+        fps = int(re.search(r"fps=(\d+),scale=", graph).group(1))
         if cmd[-1].endswith(".gif"):
-            attempts.append((fps, width))
-            Path(cmd[-1]).write_bytes(b"x" * sizes[(fps, width)])
+            rung = (fps, palette_colors[-1])
+            attempts.append(rung)
+            Path(cmd[-1]).write_bytes(b"x" * sizes[rung])
         else:
+            palette_colors.append(int(re.search(r"max_colors=(\d+)", graph).group(1)))
             Path(cmd[-1]).write_bytes(b"palette")
 
     monkeypatch.setattr(encode, "run_tool", run_tool)
@@ -186,11 +194,11 @@ def test_gif_ladder_stops_at_the_first_size_that_fits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     attempts = fake_encoder(
-        monkeypatch, {(12, 960): 1_400_000, (10, 960): 900_000, (10, 840): 1}
+        monkeypatch, {(12, 256): 1_400_000, (10, 128): 900_000, (8, 64): 1}
     )
     chosen = encode.encode_gif(Path("f.txt"), SLICES, tmp_path / "a.gif", tmp_path)
-    assert chosen == (10, 960)
-    assert attempts == [(12, 960), (10, 960)]
+    assert chosen == (10, 128)
+    assert attempts == [(12, 256), (10, 128)]
     assert list(tmp_path.glob("*.palette.png")) == []
 
 
@@ -198,17 +206,17 @@ def test_gif_ladder_falls_to_the_smallest_rung(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_encoder(
-        monkeypatch, {(12, 960): 2_000_000, (10, 960): 1_500_000, (10, 840): 999_000}
+        monkeypatch, {(12, 256): 2_000_000, (10, 128): 1_500_000, (8, 64): 999_000}
     )
     chosen = encode.encode_gif(Path("f.txt"), SLICES, tmp_path / "a.gif", tmp_path)
-    assert chosen == (10, 840)
+    assert chosen == (8, 64)
 
 
 def test_gif_ladder_fails_when_nothing_fits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_encoder(
-        monkeypatch, {(12, 960): 3_000_000, (10, 960): 2_000_000, (10, 840): 1_200_000}
+        monkeypatch, {(12, 256): 3_000_000, (10, 128): 2_000_000, (8, 64): 1_200_000}
     )
     with pytest.raises(encode.EncodeError, match="still 1200000 bytes"):
         encode.encode_gif(Path("f.txt"), SLICES, tmp_path / "a.gif", tmp_path)

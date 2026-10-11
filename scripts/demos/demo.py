@@ -346,6 +346,9 @@ def record(args: argparse.Namespace) -> int:
         paths = encode.encode_all(
             OUT_DIR / f"{slug}.frames" / "frames.txt", OUT_DIR / f"{slug}.json", OUT_DIR
         )
+        problems = encode.gif_problems(encode.probe(paths["gif"]))
+        if problems:
+            raise CliError(f"{slug}.gif breaks the limits: " + "; ".join(problems))
         destination = gif_destination(slug)
         if destination is not None:
             destination.parent.mkdir(parents=True, exist_ok=True)

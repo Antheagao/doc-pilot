@@ -25,6 +25,21 @@ class FakePage:
     def wait_for_timeout(self, ms: float) -> None:
         self.clock.now += ms / 1000
 
+    def goto(self, url: str) -> None:
+        self.clock.now += 1
+
+    def wait_for_load_state(self, state: str) -> None:
+        pass
+
+    @property
+    def mouse(self) -> FakeMouse:
+        return FakeMouse()
+
+
+class FakeMouse:
+    def move(self, x: float, y: float) -> None:
+        pass
+
 
 class FakeClock:
     def __init__(self) -> None:
@@ -88,8 +103,9 @@ def test_frame_list_uses_the_same_zero_as_the_sidecar(tmp_path: Path) -> None:
     clock.now += 3.25
     rec._end = rec.now()
     assert rec.frame_list() == (
-        "file '000000.jpg'\nduration 1.000\nfile '000001.jpg'\nduration 2.000\n"
-        "file '000001.jpg'\n"
+        "file '000000.jpg'\noption framerate 1000\nduration 1.000\n"
+        "file '000001.jpg'\noption framerate 1000\nduration 2.000\n"
+        "file '000001.jpg'\noption framerate 1000\n"
     )
     assert (tmp_path / "000001.jpg").read_bytes() == b"jpeg"
 
@@ -106,3 +122,16 @@ def test_the_overlay_pins_the_look_of_every_recording() -> None:
     assert harness.VIEWPORT == {"width": 1280, "height": 800}
     assert "pointer-events:none" in harness.OVERLAY_SCRIPT
     assert "2147483647" in harness.OVERLAY_SCRIPT
+
+
+def test_a_second_open_keeps_the_first_lead_in_and_resets_the_pointer(
+    tmp_path: Path,
+) -> None:
+    rec, _page, clock = make(tmp_path)
+    rec.open("http://x/")
+    first_lead_in = rec._lead_in
+    rec._pointer = (10, 10)
+    clock.now += 5
+    rec.open("http://x/review")
+    assert rec._lead_in == first_lead_in
+    assert rec._pointer == harness.START_POINTER

@@ -26,8 +26,10 @@ GIF_WIDTH = 960
 MAX_GIF_SECONDS = 15.0
 MAX_GIF_BYTES = 1_000_000
 
-# (fps, width) tried in order until the GIF is under MAX_GIF_BYTES.
-GIF_LADDER = ((12, GIF_WIDTH), (10, GIF_WIDTH), (10, 840))
+# (fps, palette colors) tried in order until the GIF is under MAX_GIF_BYTES.
+# The width stays at GIF_WIDTH on every rung, because `demo.py check` holds
+# committed GIFs to it; frame rate and palette size are the levers instead.
+GIF_LADDER = ((12, 256), (10, 128), (8, 64))
 VIDEO_FPS = 30
 # The frame list holds a frame only when the page changed; the timeline
 # graph first resamples it to this constant rate (a multiple of the GIF and
@@ -166,17 +168,17 @@ def timeline_graph(slices: list[Piece], out_label: str = "tl") -> str:
     return ";".join(parts)
 
 
-def gif_scale(fps: int, width: int) -> str:
-    return f"fps={fps},scale={width}:-1:flags=lanczos"
+def gif_scale(fps: int) -> str:
+    return f"fps={fps},scale={GIF_WIDTH}:-1:flags=lanczos"
 
 
 def palette_command(
-    frames: Path, slices: list[Piece], palette: Path, fps: int, width: int
+    frames: Path, slices: list[Piece], palette: Path, fps: int, colors: int
 ) -> list[str]:
     """Pass 1 of the GIF: a palette built from the frames that change."""
     graph = (
         f"{timeline_graph(slices)};"
-        f"[tl]{gif_scale(fps, width)},palettegen=stats_mode=diff[pal]"
+        f"[tl]{gif_scale(fps)},palettegen=max_colors={colors}:stats_mode=diff[pal]"
     )
     return [
         FFMPEG,
@@ -198,12 +200,12 @@ def palette_command(
 
 
 def gif_command(
-    frames: Path, slices: list[Piece], palette: Path, gif: Path, fps: int, width: int
+    frames: Path, slices: list[Piece], palette: Path, gif: Path, fps: int
 ) -> list[str]:
     """Pass 2 of the GIF: map the frames onto the palette."""
     graph = (
         f"{timeline_graph(slices)};"
-        f"[tl]{gif_scale(fps, width)}[x];"
+        f"[tl]{gif_scale(fps)}[x];"
         "[x][1:v]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle[out]"
     )
     return [
@@ -305,15 +307,20 @@ def frame_list(frames: list[tuple[float, str]], end: float) -> str:
     frames is (seconds from the first frame, file name) in order; each frame
     stays on screen until the next, the last until `end`. The final file is
     listed again without a duration, because the concat demuxer ignores the
-    duration of the last entry."""
+    duration of the last entry. Every entry declares a 1000 fps source: the
+    image demuxer otherwise opens each JPEG at 25 fps, and the concat
+    demuxer rounds every frame time to that 40 ms grid and drops frames
+    that land on the same tick."""
     if not frames:
         raise EncodeError("the recording has no frames")
     lines = []
     for index, (start, name) in enumerate(frames):
         following = frames[index + 1][0] if index + 1 < len(frames) else end
         lines.append(f"file '{name}'")
+        lines.append("option framerate 1000")
         lines.append(f"duration {max(following - start, 0.001):.3f}")
     lines.append(f"file '{frames[-1][1]}'")
+    lines.append("option framerate 1000")
     return "\n".join(lines) + "\n"
 
 
@@ -333,7 +340,9 @@ def require_tools() -> None:
 
 
 def run_tool(cmd: list[str]) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        cmd, capture_output=True, encoding="utf-8", errors="replace", check=False
+    )
     if result.returncode != 0:
         tail = result.stderr.strip().splitlines()[-5:]
         raise EncodeError(f"{cmd[0]} failed: " + " | ".join(tail))
@@ -362,7 +371,8 @@ def probe(path: Path) -> MediaInfo:
             str(path),
         ],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:
@@ -391,18 +401,18 @@ def encode_gif(
     frames: Path, slices: list[Piece], gif: Path, work_dir: Path
 ) -> tuple[int, int]:
     """Write the GIF, retrying down GIF_LADDER until it is under
-    MAX_GIF_BYTES; returns the (fps, width) that fit."""
+    MAX_GIF_BYTES; returns the (fps, colors) that fit."""
     palette = work_dir / f"{gif.stem}.palette.png"
     try:
-        for fps, width in GIF_LADDER:
-            run_tool(palette_command(frames, slices, palette, fps, width))
-            run_tool(gif_command(frames, slices, palette, gif, fps, width))
+        for fps, colors in GIF_LADDER:
+            run_tool(palette_command(frames, slices, palette, fps, colors))
+            run_tool(gif_command(frames, slices, palette, gif, fps))
             if gif.stat().st_size < MAX_GIF_BYTES:
-                return fps, width
+                return fps, colors
     finally:
         palette.unlink(missing_ok=True)
     raise EncodeError(
-        f"{gif.name} is still {gif.stat().st_size} bytes at {fps} fps and {width}px; "
+        f"{gif.name} is still {gif.stat().st_size} bytes at {fps} fps and {colors} colors; "
         "shorten the scenario or speed up more of it"
     )
 
@@ -412,6 +422,12 @@ def encode_all(frames: Path, sidecar_path: Path, out_dir: Path) -> dict[str, Pat
     require_tools()
     sidecar = Sidecar.from_json(sidecar_path.read_text(encoding="utf-8"))
     slices = pieces(sidecar)
+    duration = output_duration(slices)
+    if duration > MAX_GIF_SECONDS:
+        raise EncodeError(
+            f"{sidecar.slug} plays for {duration:.1f}s, over the "
+            f"{MAX_GIF_SECONDS:g}s limit; shorten the scenario or speed up more of it"
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = {
         kind: out_dir / f"{sidecar.slug}.{kind}"
@@ -420,6 +436,6 @@ def encode_all(frames: Path, sidecar_path: Path, out_dir: Path) -> dict[str, Pat
     encode_gif(frames, slices, paths["gif"], out_dir)
     run_tool(webm_command(frames, slices, paths["webm"]))
     run_tool(mp4_command(frames, slices, paths["mp4"]))
-    poster_at = min(POSTER_SECONDS, output_duration(slices) / 2)
+    poster_at = min(POSTER_SECONDS, duration / 2)
     run_tool(poster_command(frames, slices, paths["jpg"], poster_at))
     return paths
