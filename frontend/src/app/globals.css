@@ -704,6 +704,17 @@ textarea:focus-visible,
   gap: 0.6rem;
 }
 
+/* On phones the value always gets its own line. Left to flex-wrap, it
+   stayed beside the field name only when the file name happened to be
+   short, so cards in the same queue laid out differently. */
+@media (max-width: 480px) {
+  .review-row-main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+}
+
 .review-correct-form {
   margin-top: 0.75rem;
 }
