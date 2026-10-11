@@ -5,11 +5,12 @@ import type {
   ReviewAction,
 } from "@/lib/api";
 import ConfidenceBadge from "@/components/ConfidenceBadge";
+import { EMPTY_VALUE, formatAmount, formatDuration } from "@/lib/format";
 
 // Display order for the scalar fields; line_items is rendered separately
 // as a table. Any field not listed here (there shouldn't be any today, but
 // a future prompt version could add one) still renders, just after these
-// — see the extraFields computation below.
+// (see the extraFields computation below).
 const SCALAR_FIELD_ORDER = [
   "vendor",
   "document_date",
@@ -18,6 +19,9 @@ const SCALAR_FIELD_ORDER = [
   "total",
   "currency",
 ];
+
+// Scalar fields that hold an amount of money in the document currency.
+const MONEY_FIELDS: ReadonlySet<string> = new Set(["subtotal", "tax", "total"]);
 
 const NO_HIGHLIGHT: ReadonlySet<string> = new Set();
 
@@ -38,20 +42,34 @@ function isLeaf(value: unknown): value is FieldLeaf {
 }
 
 function formatScalar(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
+  if (value === null || value === undefined || value === "") return EMPTY_VALUE;
   return String(value);
 }
 
+/** A money value as an amount; any non-number falls back to formatScalar. */
+function formatMoney(value: unknown, currency: string | null): string {
+  return typeof value === "number"
+    ? formatAmount(value, currency)
+    : formatScalar(value);
+}
+
 function formatNumber(value: unknown): string {
-  return typeof value === "number" ? String(value) : "—";
+  return typeof value === "number" ? String(value) : EMPTY_VALUE;
 }
 
 function formatCost(value: unknown): string {
-  return typeof value === "number" ? `$${value.toFixed(4)}` : "—";
+  return typeof value === "number" ? `$${value.toFixed(4)}` : EMPTY_VALUE;
 }
 
 function formatLatency(value: unknown): string {
-  return typeof value === "number" ? `${value}ms` : "—";
+  return typeof value === "number" ? formatDuration(value) : EMPTY_VALUE;
+}
+
+/** The value a field currently shows: the human correction when there is
+ * one, else the model's extraction. */
+function displayedValue(field: ExtractedField): unknown {
+  if (field.review_action === "corrected") return field.corrected_value;
+  return isLeaf(field.value) ? field.value.value : null;
 }
 
 // This project explicitly expects partially-malformed extraction payloads
@@ -59,26 +77,42 @@ function formatLatency(value: unknown): string {
 // than crash the viewer, so every line-item entry and sub-field is treated
 // as `unknown` and validated at render time instead of trusted via the
 // static LineItem type.
-function LineItemCell({ leaf }: { leaf: unknown }) {
+function LineItemCell({
+  leaf,
+  currency,
+  numeric = false,
+}: {
+  leaf: unknown;
+  /** Set for money columns; quantities and descriptions leave it out. */
+  currency?: string | null;
+  /** Right-aligns the cell, for the quantity and money columns. */
+  numeric?: boolean;
+}) {
+  const format = (value: unknown) =>
+    currency === undefined ? formatScalar(value) : formatMoney(value, currency);
   // Corrected line-item rows (review_action === "corrected") hold plain
-  // scalar values, not {value, confidence} leaves — a human correction
-  // has no confidence score. Render those directly, with no low styling.
+  // scalar values, not {value, confidence} leaves (a human correction
+  // has no confidence score). Render those directly, with no low styling.
   if (!isLeaf(leaf)) {
     const scalar =
       leaf === null || typeof leaf === "string" || typeof leaf === "number";
-    return <td>{scalar ? formatScalar(leaf) : "—"}</td>;
+    return <td className={numeric ? "num" : undefined}>{scalar ? format(leaf) : EMPTY_VALUE}</td>;
   }
   const low = leaf.confidence < 0.8;
   return (
-    <td className={low ? "cell-low" : undefined}>{formatScalar(leaf.value)}</td>
+    <td className={[numeric && "num", low && "cell-low"].filter(Boolean).join(" ") || undefined}>
+      {format(leaf.value)}
+    </td>
   );
 }
 
 function LineItemsTable({
   items,
+  currency,
   highlight,
 }: {
   items: unknown[];
+  currency: string | null;
   highlight: ReadonlySet<string>;
 }) {
   if (items.length === 0) {
@@ -89,9 +123,9 @@ function LineItemsTable({
       <thead>
         <tr>
           <th>Description</th>
-          <th>Qty</th>
-          <th>Unit price</th>
-          <th>Total</th>
+          <th className="num">Qty</th>
+          <th className="num">Unit price</th>
+          <th className="num">Total</th>
         </tr>
       </thead>
       <tbody>
@@ -107,9 +141,9 @@ function LineItemsTable({
               className={highlight.has(`line_items[${i}]`) ? "cited" : undefined}
             >
               <LineItemCell leaf={row.description} />
-              <LineItemCell leaf={row.quantity} />
-              <LineItemCell leaf={row.unit_price} />
-              <LineItemCell leaf={row.total} />
+              <LineItemCell leaf={row.quantity} numeric />
+              <LineItemCell leaf={row.unit_price} currency={currency} numeric />
+              <LineItemCell leaf={row.total} currency={currency} numeric />
             </tr>
           );
         })}
@@ -122,19 +156,30 @@ function ReviewBadge({ action }: { action: ReviewAction }) {
   return <span className={`review-badge ${action}`}>{action}</span>;
 }
 
-function ScalarFieldRow({ field, cited }: { field: ExtractedField; cited: boolean }) {
+function ScalarFieldRow({
+  field,
+  currency,
+  cited,
+}: {
+  field: ExtractedField;
+  currency: string | null;
+  cited: boolean;
+}) {
   const leaf = isLeaf(field.value) ? field.value : null;
   const corrected = field.review_action === "corrected";
-  const display = formatScalar(corrected ? field.corrected_value : leaf?.value);
+  const format = MONEY_FIELDS.has(field.field_name)
+    ? (value: unknown) => formatMoney(value, currency)
+    : formatScalar;
+  const display = format(displayedValue(field));
   return (
     <div id={fieldElementId(field.field_name)} className={`field-row${cited ? " cited" : ""}`}>
       <span className="field-name">{field.field_name.replace(/_/g, " ")}</span>
       <span className="field-value-wrap">
-        <span className={`field-value${display === "—" ? " null-value" : ""}`}>
+        <span className={`field-value${display === EMPTY_VALUE ? " null-value" : ""}`}>
           {display}
         </span>
         {corrected && (
-          <span className="field-original">was {formatScalar(leaf?.value)}</span>
+          <span className="field-original">was {format(leaf?.value)}</span>
         )}
         <span className="badge-row">
           <ConfidenceBadge
@@ -163,16 +208,24 @@ export default function ExtractionPanel({
   const orderedFields = SCALAR_FIELD_ORDER.map((name) => byName.get(name)).filter(
     (f): f is ExtractedField => f !== undefined
   );
-  // Anything not in the known scalar order and not line_items — e.g. a
-  // field a future prompt version adds — still gets shown, after the
+  // Anything not in the known scalar order and not line_items, e.g. a
+  // field a future prompt version adds, still gets shown, after the
   // ordered ones, so a needs_review field never silently disappears.
   const knownNames = new Set([...SCALAR_FIELD_ORDER, "line_items"]);
   const extraFields = extraction.fields.filter((f) => !knownNames.has(f.field_name));
   const scalarFields = [...orderedFields, ...extraFields];
 
+  // Money is formatted to the minor units of the document's own currency.
+  const currencyField = byName.get("currency");
+  const currencyValue = currencyField ? displayedValue(currencyField) : null;
+  const currency =
+    typeof currencyValue === "string" && currencyValue !== ""
+      ? currencyValue
+      : null;
+
   const lineItemsField = byName.get("line_items");
   // A corrected line_items field displays the human-supplied rows (plain
-  // values — see LineItemCell) instead of the model's extraction.
+  // values, see LineItemCell) instead of the model's extraction.
   const lineItemsCorrected =
     lineItemsField?.review_action === "corrected" &&
     Array.isArray(lineItemsField.corrected_value);
@@ -189,6 +242,7 @@ export default function ExtractionPanel({
           <ScalarFieldRow
             key={field.field_name}
             field={field}
+            currency={currency}
             cited={highlight.has(field.field_name)}
           />
         ))}
@@ -211,7 +265,11 @@ export default function ExtractionPanel({
               )}
             </span>
           </div>
-          <LineItemsTable items={lineItems} highlight={highlight} />
+          <LineItemsTable
+            items={lineItems}
+            currency={currency}
+            highlight={highlight}
+          />
         </div>
       )}
 

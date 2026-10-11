@@ -42,7 +42,7 @@ export default function DocumentPage() {
 
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Bumped after every fetch attempt, success or failure — see the same
+  // Bumped after every fetch attempt, success or failure; see the same
   // pattern (and rationale) in app/page.tsx.
   const [tick, setTick] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -93,7 +93,7 @@ export default function DocumentPage() {
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     // `doc === null` covers both "hasn't loaded yet" and "every attempt so
-    // far has failed" — including the upload-then-navigate race, where the
+    // far has failed", including the upload-then-navigate race, where the
     // first GET can 404/fail before the document row is visible yet. A
     // failed attempt never touches `doc`, so this keeps retrying instead
     // of the chain dying on the first failure. `tick` forces this effect
@@ -162,7 +162,7 @@ export default function DocumentPage() {
                 <div className="failed-state">
                   <div>Extraction refused</div>
                   <div className="hint">
-                    The model declined to extract this document — nothing was
+                    The model declined to extract this document. Nothing was
                     stored. This isn&apos;t retried automatically.
                   </div>
                 </div>

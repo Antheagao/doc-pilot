@@ -12,6 +12,7 @@ import {
   type AskResponse,
   type AskRunSummary,
 } from "@/lib/api";
+import { formatDuration, formatTimestamp } from "@/lib/format";
 import {
   AnswerText,
   FeedbackButtons,
@@ -230,7 +231,7 @@ export default function AskPage() {
 
           <p className="answer-meta">
             {response.model} · {response.steps} step{response.steps === 1 ? "" : "s"} · $
-            {response.cost_usd.toFixed(4)} · {(response.latency_ms / 1000).toFixed(1)}s ·{" "}
+            {response.cost_usd.toFixed(4)} · {formatDuration(response.latency_ms)} ·{" "}
             {response.input_tokens + response.cache_read_input_tokens} in /{" "}
             {response.output_tokens} out tokens
             {response.trace_id && <> · trace {response.trace_id.slice(0, 12)}</>}
@@ -249,7 +250,7 @@ export default function AskPage() {
                 </button>
                 <RunChips run={item} />
                 <span className="hit-page">
-                  {new Date(item.created_at).toLocaleString()} · ${item.cost_usd.toFixed(4)}
+                  {formatTimestamp(item.created_at)} · ${item.cost_usd.toFixed(4)}
                 </span>
               </li>
             ))}

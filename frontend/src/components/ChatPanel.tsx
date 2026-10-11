@@ -11,6 +11,7 @@ import {
   type AskResponse,
   type Citation,
 } from "@/lib/api";
+import { formatDuration } from "@/lib/format";
 import {
   AnswerText,
   FeedbackButtons,
@@ -113,7 +114,7 @@ function Turn({
         <Judgment response={turn} />
         <p className="chat-meta">
           {turn.steps} step{turn.steps === 1 ? "" : "s"} · ${turn.cost_usd.toFixed(4)} ·{" "}
-          {(turn.latency_ms / 1000).toFixed(1)}s
+          {formatDuration(turn.latency_ms)}
         </p>
       </div>
     </li>

@@ -52,7 +52,7 @@ export interface ExtractedField {
   reviewed_at: string | null;
   review_action: ReviewAction | null;
   // The human-supplied *semantic* value (scalar for scalar fields, the
-  // plain-value line-item array for line_items) — only set when
+  // plain-value line-item array for line_items). Only set when
   // review_action === "corrected". The original `value` is never
   // overwritten by a correction.
   corrected_value: unknown;

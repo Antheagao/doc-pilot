@@ -10,6 +10,7 @@ import {
   type ReviewQueueItem,
 } from "@/lib/api";
 import ConfidenceBadge from "@/components/ConfidenceBadge";
+import { EMPTY_VALUE, formatAmount } from "@/lib/format";
 
 // Fields whose corrections should be parsed as numbers rather than kept
 // as strings. Mirrors the backend extraction schema (app/extraction.py).
@@ -86,7 +87,9 @@ function formatDisplayValue(item: ReviewQueueItem): string {
     return `${items.length} line item${items.length === 1 ? "" : "s"}`;
   }
   const value = leafValue(item.value);
-  if (value === null || value === undefined || value === "") return "—";
+  if (value === null || value === undefined || value === "") return EMPTY_VALUE;
+  // The queue carries no currency, so amounts get the default 2 digits.
+  if (NUMERIC_FIELDS.has(item.field_name)) return formatAmount(value, null);
   return String(value);
 }
 
@@ -247,7 +250,7 @@ export default function ReviewPage() {
   }, []);
 
   useEffect(() => {
-    // Initial load only — no polling here: the queue only changes when an
+    // Initial load only, no polling here: the queue only changes when an
     // extraction lands or a reviewer acts, and a stale entry resolves to a
     // clean 409 + refresh rather than corrupting anything.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -265,7 +268,7 @@ export default function ReviewPage() {
       <div className="section-heading">Review queue</div>
       <p className="review-intro">
         Fields the model extracted with low confidence. Approve the value if
-        it matches the document, or correct it — the original extraction is
+        it matches the document, or correct it. The original extraction is
         kept alongside your correction either way.
       </p>
 
@@ -275,7 +278,7 @@ export default function ReviewPage() {
 
       {items !== null && items.length === 0 && (
         <div className="empty-state">
-          Nothing to review — every extracted field cleared the confidence
+          Nothing to review: every extracted field cleared the confidence
           threshold.
         </div>
       )}

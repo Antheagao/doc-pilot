@@ -7,12 +7,13 @@ import { listDocuments, ApiError, type DocumentListItem } from "@/lib/api";
 import StatusChip from "@/components/StatusChip";
 import UploadZone from "@/components/UploadZone";
 import StatsStrip from "@/components/StatsStrip";
+import { formatTimestamp } from "@/lib/format";
 
 const POLL_INTERVAL_MS = 3000;
 const IN_FLIGHT_STATUSES = new Set(["uploaded", "processing"]);
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString();
+  return formatTimestamp(iso);
 }
 
 export default function HomePage() {
@@ -22,7 +23,7 @@ export default function HomePage() {
   // Bumped after every fetch attempt, success or failure, purely to force
   // the scheduling effect below to re-run and queue the next poll even
   // when the attempt failed (a failure only changes `error`, which isn't
-  // a dependency of that effect on purpose — see its comment).
+  // a dependency of that effect on purpose, see its comment).
   const [tick, setTick] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -55,8 +56,8 @@ export default function HomePage() {
     if (timerRef.current) clearTimeout(timerRef.current);
     // `documents === null` covers both "hasn't loaded yet" and "every
     // attempt so far has failed" (a failed attempt never touches
-    // `documents`), so a backend that's down at mount — or one that goes
-    // down mid-session — keeps getting retried instead of the polling
+    // `documents`), so a backend that's down at mount, or one that goes
+    // down mid-session, keeps getting retried instead of the polling
     // chain dying after a single failure. `tick` forces this effect to
     // re-run after a failed attempt even though `documents` didn't change.
     const shouldContinue =
@@ -87,7 +88,7 @@ export default function HomePage() {
 
       {documents !== null && documents.length === 0 && (
         <div className="empty-state">
-          No documents yet — upload one above to get started.
+          No documents yet. Upload one above to get started.
         </div>
       )}
 

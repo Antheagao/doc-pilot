@@ -17,6 +17,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
+import { EMPTY_VALUE } from "@/lib/format";
 
 export interface Series {
   key: string;
@@ -446,7 +447,7 @@ export function LineChart({
               kind: "line",
               value:
                 s.values[hover.active as number] === null
-                  ? "—"
+                  ? EMPTY_VALUE
                   : format(s.values[hover.active as number] as number),
             }))}
         />

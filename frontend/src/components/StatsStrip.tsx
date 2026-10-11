@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { getStats, type Stats } from "@/lib/api";
+import { EMPTY_VALUE, formatDuration } from "@/lib/format";
 
 function formatCost(value: number | null): string {
-  return typeof value === "number" ? `$${value.toFixed(4)}` : "—";
+  return typeof value === "number" ? `$${value.toFixed(4)}` : EMPTY_VALUE;
 }
 
 function formatLatency(value: number | null): string {
-  return typeof value === "number" ? `${Math.round(value)}ms` : "—";
+  return typeof value === "number" ? formatDuration(value) : EMPTY_VALUE;
 }
 
 /** Home-page stats strip: documents processed, cost per document
@@ -17,7 +18,7 @@ function formatLatency(value: number | null): string {
  *
  * These numbers don't move second-to-second the way the document list
  * does, so this fetches once on mount (the ReviewQueueLink pattern)
- * rather than polling. A fetch failure renders nothing — the page
+ * rather than polling. A fetch failure renders nothing; the page
  * already has its own error banner for a down backend, and this strip
  * isn't essential enough to duplicate it. */
 export default function StatsStrip() {
@@ -80,7 +81,7 @@ export default function StatsStrip() {
           <div className="stats-strip__value">
             {typeof stats.last_eval.overall_accuracy === "number"
               ? `${(stats.last_eval.overall_accuracy * 100).toFixed(1)}%`
-              : "—"}
+              : EMPTY_VALUE}
           </div>
           <div className="stats-strip__sub">
             {stats.last_eval.model ?? "n/a"} / {stats.last_eval.prompt_version ?? "n/a"}

@@ -21,6 +21,7 @@ import {
   type Series,
   decimalsFor,
 } from "@/components/charts";
+import { EMPTY_VALUE, formatDuration } from "@/lib/format";
 
 // ---- formatting ---------------------------------------------------------------
 
@@ -35,14 +36,12 @@ function usdAxis(value: number, domain: Domain): string {
   return `$${value.toFixed(decimalsFor(domain.step))}`;
 }
 
-function ms(value: number): string {
-  return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
-}
+const ms = formatDuration;
 
 /** One unit for every tick: seconds once the scale reaches a second. */
 function msAxis(value: number, domain: Domain): string {
-  if (domain.max < 1000) return `${Math.round(value)}ms`;
-  return `${(value / 1000).toFixed(decimalsFor(domain.step / 1000))}s`;
+  if (domain.max < 1000) return `${Math.round(value)} ms`;
+  return `${(value / 1000).toFixed(decimalsFor(domain.step / 1000))} s`;
 }
 
 function pct(value: number): string {
@@ -75,7 +74,7 @@ function runLabel(run: EvalRun): string {
 }
 
 function dash(value: number | null, format: (v: number) => string): string {
-  return value === null ? "—" : format(value);
+  return value === null ? EMPTY_VALUE : format(value);
 }
 
 // ---- eval runs ----------------------------------------------------------------
@@ -502,7 +501,11 @@ function ProductionSection() {
                 format={ms}
                 axisFormat={msAxis}
                 domain={niceDomain(
-                  view.latencySeries.flatMap((s) => s.values.flatMap((v) => (v === null ? [] : [v])))
+                  // With no answers yet, draw a 0 to 1 s scale rather than ticks
+                  // that all round to the same millisecond.
+                  view.latencySeries.every((s) => s.values.every((v) => v === null))
+                    ? [1000]
+                    : view.latencySeries.flatMap((s) => s.values.flatMap((v) => (v === null ? [] : [v])))
                 )}
                 ariaLabel="p50 and p95 answer latency per day"
               />

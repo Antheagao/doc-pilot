@@ -62,8 +62,8 @@ export default function UploadZone({
         }}
       >
         <div>{uploading ? "Uploading…" : "Drop a document here, or click to choose a file"}</div>
-        <div className="hint">JPEG, PNG, WEBP, GIF, or PDF — up to 20MB</div>
-        {/* Visually hidden rather than display:none — some browsers won't
+        <div className="hint">JPEG, PNG, WEBP, GIF, or PDF, up to 20 MB</div>
+        {/* Visually hidden rather than display:none: some browsers won't
             honor a synthetic .click() on a display:none input, and this
             keeps it out of the tab order (tabIndex -1) since the zone
             itself is the keyboard-operable control above. */}
