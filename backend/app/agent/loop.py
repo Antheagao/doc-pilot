@@ -29,11 +29,13 @@ import anthropic
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from app.agent.tools import (
+    SUMMARY_SOURCE,
     TOOL_DEFINITIONS,
     TOOL_HANDLERS,
     Source,
     ToolContext,
     ToolError,
+    assert_tool_result_content,
 )
 from app.config import Settings
 from app.extraction import (
@@ -150,6 +152,7 @@ class AgentResult:
     traceparent: str | None = None
     # Citations whose source this run never registered -- should never
     # happen with API-generated citations; counted rather than trusted.
+    # (A citation of a query's match summary is skipped, not counted.)
     unresolved_citations: int = 0
     messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
@@ -249,6 +252,11 @@ def _assemble_answer(
         text_parts.append(block.text)
         markers = []
         for raw in getattr(block, "citations", None) or []:
+            if getattr(raw, "source", None) == SUMMARY_SOURCE:
+                # A computed summary, not evidence: nothing to link to, and
+                # not an error. Its citations are on because the API needs
+                # them on for every search_result in the request.
+                continue
             resolved = _resolve_citation(raw, sources)
             if resolved is None:
                 unresolved += 1
@@ -283,11 +291,17 @@ def _echoable(content: list[Any]) -> list[Any]:
 
 def _summarize_result(content: list[dict[str, Any]]) -> str:
     """A short, content-free description of a tool result for the API
-    response and logs (the result itself is document text)."""
-    results = sum(1 for block in content if block.get("type") == "search_result")
-    texts = [block["text"] for block in content if block.get("type") == "text"]
-    summary = f"{results} source(s)"
-    return f"{summary}; {texts[0]}" if texts else summary
+    response and logs (the result itself is document text). A
+    query_extractions result carries its match summary (counts and sums,
+    not document text) as a search_result of its own, found by source."""
+    results = [block for block in content if block.get("type") == "search_result"]
+    summaries = [block for block in results if block["source"] == SUMMARY_SOURCE]
+    if summaries:
+        lead = " ".join(line["text"] for line in summaries[0]["content"])
+    else:
+        lead = next((block["text"] for block in content if block.get("type") == "text"), None)
+    summary = f"{len(results) - len(summaries)} source(s)"
+    return f"{summary}; {lead}" if lead else summary
 
 
 async def _run_tool(ctx: ToolContext, block: Any) -> tuple[dict[str, Any], ToolCall]:
@@ -311,6 +325,9 @@ async def _run_tool(ctx: ToolContext, block: Any) -> tuple[dict[str, Any], ToolC
             # INSERT that stores the (already paid-for) answer.
             async with ctx.session.begin_nested():
                 content = await handler(ctx, dict(block.input or {}))
+            # A malformed result would 400 the next (billed) request and end
+            # the run; here it is only this call's failure.
+            assert_tool_result_content(content)
             is_error = False
         except ToolError as exc:
             content = [{"type": "text", "text": f"Error: {exc}"}]

@@ -118,7 +118,10 @@ class Settings(BaseSettings):
     # and its API default is "medium" -- set explicitly so a default change
     # upstream can't silently change cost or quality.
     agent_effort: str = "medium"
-    agent_max_tokens: int = 16000
+    # At most 21,000: the SDK refuses a non-streaming request that could run
+    # longer than ten minutes, and a larger value raises a plain ValueError
+    # that escapes `except anthropic.AnthropicError` in the agent loop.
+    agent_max_tokens: int = Field(16000, le=21_000)
     # Hard stops per question: model calls, and dollars across all of them.
     # Hitting either returns what the agent has so far, marked as such.
     agent_max_steps: int = 8

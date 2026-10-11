@@ -2,6 +2,7 @@
 a scripted fake client (no network)."""
 
 import uuid
+from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import loop as loop_module
+from app.agent import tools as tools_module
 from app.agent.loop import (
     AGENT_PROMPT_TEXT,
     FALLBACK_BETA,
@@ -20,9 +22,13 @@ from app.agent.loop import (
     call_cost_usd,
 )
 from app.agent.tools import (
+    SUMMARY_SOURCE,
     TOOL_DEFINITIONS,
+    TOOL_HANDLERS,
+    MalformedToolResult,
     ToolContext,
     ToolError,
+    assert_tool_result_content,
     get_page,
     query_extractions,
     search_documents,
@@ -58,7 +64,19 @@ def _texts(content) -> list[str]:
 
 
 def _results(content) -> list[dict]:
-    return [block for block in content if block["type"] == "search_result"]
+    """The document search_results, without a query's match summary."""
+    return [
+        block
+        for block in content
+        if block["type"] == "search_result" and block["source"] != SUMMARY_SOURCE
+    ]
+
+
+def _summary(content) -> str:
+    """A query_extractions match summary; it is a search_result because the
+    API takes a tool result as all search_results or none."""
+    (block,) = [b for b in content if b["type"] == "search_result" and b["source"] == SUMMARY_SOURCE]
+    return block["content"][0]["text"]
 
 
 # --- tools ------------------------------------------------------------------
@@ -75,7 +93,8 @@ async def test_query_extractions_sums_per_currency_in_code(db_session: AsyncSess
 
     content = await query_extractions(ctx, {"vendor": "northgate"})
 
-    assert _texts(content)[0] == "2 matching document(s). Sum of totals: 488.23 USD."
+    assert _summary(content) == "2 matching document(s). Sum of totals: 488.23 USD."
+    assert all(block["type"] == "search_result" for block in content)
     results = _results(content)
     assert len(results) == 2
     assert all(result["citations"] == {"enabled": True} for result in results)
@@ -90,10 +109,10 @@ async def test_query_extractions_filters_combine(db_session: AsyncSession) -> No
     ctx, _ = await _seed(db_session)
 
     eur = await query_extractions(ctx, {"currency": "eur"})
-    assert _texts(eur)[0] == "1 matching document(s). Sum of totals: 27.82 EUR."
+    assert _summary(eur) == "1 matching document(s). Sum of totals: 27.82 EUR."
 
     item = await query_extractions(ctx, {"item": "led desk lamp", "max_total": 500})
-    assert _texts(item)[0].startswith("1 matching document(s).")
+    assert _summary(item).startswith("1 matching document(s).")
 
     none = await query_extractions(ctx, {"vendor": "Target"})
     assert _texts(none) == ["0 matching document(s)."]
@@ -103,7 +122,7 @@ async def test_query_extractions_date_range_and_bad_dates(db_session: AsyncSessi
     ctx, _ = await _seed(db_session)
 
     content = await query_extractions(ctx, {"date_from": "2026-05-01", "date_to": "2026-05-31"})
-    assert "27.82 EUR" in _texts(content)[0]
+    assert "27.82 EUR" in _summary(content)
 
     with pytest.raises(ToolError, match="YYYY-MM-DD"):
         await query_extractions(ctx, {"date_from": "May 2026"})
@@ -187,8 +206,51 @@ def _text(text, citations=None):
     return SimpleNamespace(type="text", text=text, citations=citations)
 
 
+def validate_request(kwargs: dict) -> None:
+    """The request rules the real API enforces and a fake would not: roles
+    alternate starting with the user, and the user message after a tool_use
+    turn opens with exactly one tool_result per tool_use id, in order, each
+    with a valid body (assert_tool_result_content)."""
+    messages = kwargs["messages"]
+    assert messages and messages[0]["role"] == "user"
+    for before, after in pairwise(messages):
+        assert before["role"] != after["role"], "roles must alternate"
+    for index, message in enumerate(messages):
+        content = message["content"]
+        if message["role"] == "assistant" and not isinstance(content, str):
+            tool_ids = [b.id for b in content if getattr(b, "type", None) == "tool_use"]
+            if not tool_ids:
+                continue
+            assert index + 1 < len(messages), "a tool_use turn needs its tool_results"
+            results = messages[index + 1]["content"]
+            assert isinstance(results, list)
+            head = results[: len(tool_ids)]
+            assert [r["type"] for r in head] == ["tool_result"] * len(tool_ids)
+            assert [r["tool_use_id"] for r in head] == tool_ids
+    for message in messages:
+        if message["role"] == "user" and isinstance(message["content"], list):
+            for block in message["content"]:
+                if block.get("type") == "tool_result":
+                    assert_tool_result_content(block["content"])
+
+
+def _scripted_create(scripted: list):
+    """A fake `messages.create`: validates each request, then plays the next
+    scripted step (an exception to raise, a callable given the request, or a
+    response)."""
+
+    async def create(**kwargs):
+        validate_request(kwargs)
+        step = scripted.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step(**kwargs) if callable(step) else step
+
+    return create
+
+
 def _client(responses) -> SimpleNamespace:
-    create = AsyncMock(side_effect=responses)
+    create = AsyncMock(side_effect=_scripted_create(list(responses or [])))
     return SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
 
 
@@ -237,12 +299,7 @@ async def test_agent_answers_with_verified_citations(db_session: AsyncSession) -
     )
     scripted = [first, _cite_first_record(None, "total: 425.58")]
 
-    async def create(**kwargs):
-        step = scripted.pop(0)
-        return step(**kwargs) if callable(step) else step
-
-    client = _client(None)
-    client.beta.messages.create = AsyncMock(side_effect=create)
+    client = _client(scripted)
 
     result = await answer_question(ctx, "How much was my Northgate order?", SETTINGS, client)
 
@@ -394,6 +451,12 @@ def test_models_without_effort_get_plain_requests() -> None:
     assert "fallbacks" not in no_fallback and no_fallback["output_config"] == {"effort": "medium"}
 
 
+def test_agent_max_tokens_stays_under_the_sdks_non_streaming_ceiling() -> None:
+    assert Settings(agent_max_tokens=21_000).agent_max_tokens == 21_000
+    with pytest.raises(ValueError, match="agent_max_tokens"):
+        Settings(agent_max_tokens=21_001)
+
+
 def test_unresolvable_citations_are_counted_not_trusted() -> None:
     stray = SimpleNamespace(
         source="https://elsewhere", cited_text="x", start_block_index=0, end_block_index=1
@@ -403,6 +466,143 @@ def test_unresolvable_citations_are_counted_not_trusted() -> None:
 
     assert answer == "Claim."
     assert citations == [] and unresolved == 1
+
+
+def test_a_match_summary_citation_is_skipped_not_counted() -> None:
+    summary = SimpleNamespace(
+        source=SUMMARY_SOURCE, cited_text="1 matching document(s).", start_block_index=0, end_block_index=1
+    )
+
+    answer, citations, unresolved = _assemble_answer([_text("One match.", [summary])], {})
+
+    assert answer == "One match."
+    assert citations == [] and unresolved == 0
+
+
+# --- tool results the API accepts -----------------------------------------------
+
+
+def _line(text="x"):
+    return {"type": "text", "text": text}
+
+
+def _result(**overrides):
+    block = {
+        "type": "search_result",
+        "source": "doc-pilot://documents/1",
+        "title": "t",
+        "content": [_line()],
+        "citations": {"enabled": True},
+    }
+    return {**block, **overrides}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [],
+        None,
+        [_line("")],
+        [_line("   ")],
+        [{"type": "image"}],
+        [_line(), _result()],
+        [_result(source="")],
+        [_result(title=None)],
+        [_result(content=[])],
+        [_result(content=[_line("")])],
+        [_result(citations={})],
+        [_result(citations={"enabled": "yes"})],
+        [_result(citations=None)],
+    ],
+)
+def test_malformed_tool_results_are_rejected(content) -> None:
+    with pytest.raises(MalformedToolResult):
+        assert_tool_result_content(content)
+
+
+def test_well_formed_tool_results_pass() -> None:
+    assert_tool_result_content([_line()])
+    assert_tool_result_content([_result(), _result(citations={"enabled": False})])
+
+
+# Every tool, through the loop's own _run_tool, with inputs that give each
+# kind of result: found, nothing found, a tool error, a truncated listing.
+# A new tool without a row here fails test_every_tool_has_a_result_case.
+RESULT_CASES = [
+    ("query_extractions", "found", lambda ids: {"vendor": "northgate"}, False),
+    ("query_extractions", "none", lambda ids: {"vendor": "Target"}, False),
+    ("query_extractions", "bad-date", lambda ids: {"date_from": "May 2026"}, True),
+    ("query_extractions", "truncated", lambda ids: {}, False),
+    ("search_documents", "found", lambda ids: {"query": "desk lamp"}, False),
+    ("search_documents", "empty-query", lambda ids: {"query": " "}, True),
+    ("get_page", "found", lambda ids: {"document_id": str(ids[DOCS[1]]), "page_number": 1}, False),
+    ("get_page", "no-such-page", lambda ids: {"document_id": str(ids[DOCS[1]]), "page_number": 99}, True),
+    ("get_page", "bad-id", lambda ids: {"document_id": "nope", "page_number": 1}, True),
+]
+
+
+def test_every_tool_has_a_result_case() -> None:
+    assert {tool for tool, *_ in RESULT_CASES} == set(TOOL_HANDLERS)
+
+
+@pytest.mark.parametrize(
+    ("tool", "case", "build_input", "is_error"),
+    RESULT_CASES,
+    ids=[f"{tool}-{case}" for tool, case, *_ in RESULT_CASES],
+)
+async def test_every_tool_result_is_valid_for_the_api(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, tool, case, build_input, is_error
+) -> None:
+    if case == "truncated":
+        monkeypatch.setattr(tools_module, "RECORDS_MAX", 1)
+    ctx, ids = await _seed(db_session)
+    block = _tool_use(tool, build_input(ids))
+
+    result, call = await loop_module._run_tool(ctx, block)
+
+    content = result["content"]
+    assert_tool_result_content(content)
+    assert len({b["type"] for b in content}) == 1
+    assert bool(result.get("is_error")) is is_error and call.is_error is is_error
+    if case == "truncated":
+        assert len(_results(content)) == 1
+        assert "Listing the first 1" in _summary(content)
+
+
+async def test_an_unknown_tool_is_an_error_result(db_session: AsyncSession) -> None:
+    ctx, _ = await _seed(db_session)
+
+    result, call = await loop_module._run_tool(ctx, _tool_use("nope", {}))
+
+    assert result["is_error"] is True and call.is_error
+    assert_tool_result_content(result["content"])
+
+
+async def test_a_tool_that_builds_a_bad_result_fails_its_call_not_the_run(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def mixed(ctx, tool_input):
+        return [_line(), _result()]
+
+    monkeypatch.setitem(TOOL_HANDLERS, "mixed", mixed)
+    ctx, _ = await _seed(db_session)
+
+    result, call = await loop_module._run_tool(ctx, _tool_use("mixed", {}))
+
+    assert result["is_error"] is True and call.is_error
+    assert_tool_result_content(result["content"])
+    assert "mixes text and search_result" in caplog.text
+
+
+async def test_search_with_every_hit_skipped_says_nothing_matched(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tools_module, "_line_blocks", lambda text, start: ([], []))
+    ctx, _ = await _seed(db_session)
+
+    content = await search_documents(ctx, {"query": "desk lamp"})
+
+    assert _texts(content) == ["No matching passages found."]
 
 
 # --- API --------------------------------------------------------------------
@@ -431,11 +631,7 @@ async def test_ask_endpoint_returns_answer_citations_and_cost(
         _cite_first_record(None, "total: 425.58"),
     ]
 
-    async def create(**kwargs):
-        step = scripted.pop(0)
-        return step(**kwargs) if callable(step) else step
-
-    fake = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
+    fake = _client(scripted)
     app.dependency_overrides[get_anthropic_client] = lambda: fake
 
     response = await client.post("/ask", json={"question": "How much was my Northgate order?"})
@@ -455,11 +651,7 @@ def _northgate_client() -> SimpleNamespace:
         _cite_first_record(None, "total: 425.58"),
     ]
 
-    async def create(**kwargs):
-        step = scripted.pop(0)
-        return step(**kwargs) if callable(step) else step
-
-    return SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
+    return _client(scripted)
 
 
 async def _ask(client: AsyncClient, db_session: AsyncSession, settings: Settings, fake) -> dict:

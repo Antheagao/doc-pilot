@@ -30,11 +30,58 @@ from app.retrieval.embeddings import Embedder
 from app.retrieval.search import search
 
 SOURCE_SCHEME = "doc-pilot://documents"
+# The match summary of a query_extractions result. The API takes a tool
+# result either all search_result blocks or none, so the summary rides in
+# one. Its citations must stay on like every other search_result's (the API
+# rejects a request that mixes enabled and disabled; verified live), so the
+# model may cite it: that citation is skipped, not counted as unresolved
+# (loop._assemble_answer), and the summary is never in ToolContext.sources.
+SUMMARY_SOURCE = "doc-pilot://query-summary"
 SEARCH_K_DEFAULT = 5
 SEARCH_K_MAX = 10
 # Records listed in full per query_extractions call; the summary line's
 # counts and sums always cover every match.
 RECORDS_MAX = 20
+
+
+class MalformedToolResult(Exception):
+    """A tool built a result the API would reject: a bug in the tool, caught
+    before the (billed) request that would 400 and end the run."""
+
+
+def assert_tool_result_content(content: Any) -> None:
+    """Raise MalformedToolResult unless `content` is a valid tool_result
+    body: a non-empty list of text blocks or of search_result blocks, never
+    both (the API rejects the mix), each with the fields it requires."""
+    if not isinstance(content, list) or not content:
+        raise MalformedToolResult("tool result content must be a non-empty list")
+    types = {block.get("type") if isinstance(block, dict) else None for block in content}
+    if not types <= {"text", "search_result"}:
+        raise MalformedToolResult(f"unsupported block types {sorted(map(str, types))}")
+    if len(types) > 1:
+        raise MalformedToolResult("tool result mixes text and search_result blocks")
+    for block in content:
+        if block["type"] == "text":
+            _require_text(block.get("text"), "text block")
+            continue
+        for key in ("source", "title"):
+            if not isinstance(block.get(key), str) or not block[key]:
+                raise MalformedToolResult(f"search_result has no {key}")
+        lines = block.get("content")
+        if not isinstance(lines, list) or not lines:
+            raise MalformedToolResult("search_result has no content")
+        for line in lines:
+            if not isinstance(line, dict) or line.get("type") != "text":
+                raise MalformedToolResult("search_result content must be text blocks")
+            _require_text(line.get("text"), "search_result line")
+        citations = block.get("citations")
+        if not isinstance(citations, dict) or not isinstance(citations.get("enabled"), bool):
+            raise MalformedToolResult("search_result needs citations: {enabled: bool}")
+
+
+def _require_text(text: Any, what: str) -> None:
+    if not isinstance(text, str) or not text.strip():
+        raise MalformedToolResult(f"{what} has empty text")
 
 
 class ToolError(Exception):
@@ -224,6 +271,9 @@ def _parse_document_id(value: str, ctx: ToolContext) -> uuid.UUID:
 # --- tools ------------------------------------------------------------------
 
 
+_NO_PASSAGES = {"type": "text", "text": "No matching passages found."}
+
+
 async def search_documents(ctx: ToolContext, tool_input: dict[str, Any]) -> list[dict[str, Any]]:
     query = str(tool_input.get("query") or "").strip()
     if not query:
@@ -234,7 +284,7 @@ async def search_documents(ctx: ToolContext, tool_input: dict[str, Any]) -> list
         ctx.session, query, embedder=ctx.embedder, k=k, mode="hybrid", document_ids=ctx.document_ids
     )
     if not hits:
-        return [{"type": "text", "text": "No matching passages found."}]
+        return [_NO_PASSAGES]
 
     results = []
     for hit in hits:
@@ -255,7 +305,7 @@ async def search_documents(ctx: ToolContext, tool_input: dict[str, Any]) -> list
                 source, f"{hit.filename}, page {hit.page_number} (document_id {hit.document_id})", content
             )
         )
-    return results
+    return results or [_NO_PASSAGES]
 
 
 async def get_page(ctx: ToolContext, tool_input: dict[str, Any]) -> list[dict[str, Any]]:
@@ -358,7 +408,18 @@ async def query_extractions(ctx: ToolContext, tool_input: dict[str, Any]) -> lis
     records = await load_records(ctx.session, ctx.document_ids)
     matches = [r for r in records if _matches(r, tool_input, date_from, date_to)]
 
-    content: list[dict[str, Any]] = [{"type": "text", "text": extraction_summary(matches)}]
+    summary = extraction_summary(matches)
+    if not matches:
+        return [{"type": "text", "text": summary}]
+    content: list[dict[str, Any]] = [
+        {
+            "type": "search_result",
+            "source": SUMMARY_SOURCE,
+            "title": "Summary of the matches",
+            "content": [{"type": "text", "text": summary}],
+            "citations": {"enabled": True},
+        }
+    ]
     for record in matches[:RECORDS_MAX]:
         lines = record_lines(record)
         source = Source(
