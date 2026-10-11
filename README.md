@@ -2,19 +2,70 @@
 
 [![CI](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Antheagao/doc-pilot/actions/workflows/ci.yml)
 
-AI document intelligence: upload messy real-world documents (receipts, invoices, IDs, forms) → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking. Every document is also transcribed, chunked, and embedded into pgvector, so it's searchable in plain language with **page-level citations** -- and retrieval quality is measured by its own eval, not assumed ([Retrieval](#retrieval-search-with-page-citations)). On top of both, an agent answers questions ("how much have I spent at Northgate?") by choosing between search and the structured extraction data, citing the exact lines and fields it used ([Ask](#ask-an-agent-over-search-and-the-extracted-data)) -- and every extracted document has its own chat, whose answers point at the field they came from ([Chat](#chat-about-one-document)). A [monitoring dashboard](#monitoring-dashboard) charts accuracy, cost and latency for every eval run and for live traffic.
-
-<!-- LIVE_DEMO: hosted demo link goes here once a host is picked -->
+AI document intelligence: upload messy real-world receipts and invoices → a vision-language model extracts structured data → low-confidence fields route to a human review queue → clean data lands in Postgres with a full audit trail and per-document cost tracking. Every document is also transcribed, chunked, and embedded into pgvector, so it's searchable in plain language with **page-level citations** -- and retrieval quality is measured by its own eval, not assumed ([Retrieval](#retrieval-search-with-page-citations)). On top of both, an agent answers questions ("how much have I spent at Northgate?") by choosing between search and the structured extraction data, citing the exact lines and fields it used ([Ask](#ask-an-agent-over-search-and-the-extracted-data)) -- and every extracted document has its own chat, whose answers point at the field they came from ([Chat](#chat-about-one-document)). A [monitoring dashboard](#monitoring-dashboard) charts accuracy, cost and latency for every eval run and for live traffic.
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-481 mocked backend tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+535 mocked backend tests and 69 demo-tooling tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+
+## Features
+
+Each GIF below is recorded by a script against a separate demo stack, and each caption says what on screen is real.
+The demo data replays a committed eval run of Claude Sonnet: the values, confidence scores, costs, and latencies are what the model actually produced, and the page text is the documents' known-correct transcript.
+Where a slow live step is sped up, a speed chip is shown on screen for as long as it lasts.
+
+**Hybrid search.**
+Plain-language search finds the LED desk lamp from "a light for my workspace", which shares no words with it, and keyword mode finds a receipt printed as `27,82 EUR` from a typed "27.82 euros".
+No model call: retrieval runs on local embeddings and Postgres full-text search.
+
+![Hybrid search: "a light for my workspace" returns the LED Desk Lamp lines first, then keyword mode finds the Berlin receipt from "27.82 euros"](screenshots/features/search-hybrid.gif)
+
+**Human review.**
+A low-confidence field goes to the review queue on its own, is corrected inline, and the document keeps the model's original value struck through beside the correction.
+The misread subtotal in this take is staged for the demo, and the seed records it as staged in the extraction's provenance; the queue's other three items are the model's own low-confidence fields.
+
+![Review correction: the flagged subtotal is corrected in the queue, and the document shows the original struck through](screenshots/features/review-correction.gif)
+
+**Ask an agent.**
+The agent on Claude Opus 5.5 picks a tool, here a query over the extracted records, and every number in its answer links to the field it came from.
+Recorded live against the real API; the wait for the answer is sped up 3x, and the chip on screen shows it.
+
+![Ask: "Which store's receipt came to $425.58?" is answered from the extracted records with a citation for every number](screenshots/features/ask-agent.gif)
+
+**Chat about one document.**
+Each document has its own chat whose answers cite the extracted field they used; selecting a citation highlights that field beside the document.
+Recorded live, with the wait sped up 3x.
+
+![Document chat: "What's the total?" is answered with a citation, and selecting it highlights the Total field](screenshots/features/document-chat.gif)
+
+**Monitoring.**
+The dashboard charts accuracy, cost, and latency for every committed eval run, then live spend per day by stage.
+The two weeks of extraction spend come from the replayed run, and the answer spend on the last day is the real cost of the live takes above.
+
+![Monitoring dashboard: eval accuracy, cost and latency per run, then production spend per day with a tooltip on the live answer runs](screenshots/features/monitoring-dashboard.gif)
+
+### Recording the demos
+
+`scripts/demos/demo.py` records every GIF above against a separate compose project, `doc-pilot-demo` (API on port 8100, frontend on 3100, its own database and volumes), so recording never touches the development database.
+It needs Docker, ffmpeg, and the backend virtual environment with the demo extra: `pip install -e ".[dev,demo]"`, then `python -m playwright install chromium`.
+
+```sh
+# from the repository root, with the backend virtual environment's python
+python scripts/demos/demo.py stack up
+python scripts/demos/demo.py seed --reset   # replay the committed eval run; no model calls
+python scripts/demos/demo.py record all     # ask-agent and document-chat call the real agent
+python scripts/demos/demo.py check          # every GIF at most 15 s, under 1 MB, 960 px wide
+python scripts/demos/demo.py stack down
+```
+
+The live scenarios refuse to start unless the demo API has a key and its daily budget is on and at most $1.50, and they print the spend after every take.
+A clean take of both live GIFs costs about two cents.
 
 ## Screenshots
 
 <img src="screenshots/document-detail.png" width="900" alt="A handwritten bakery receipt beside its extracted fields, with per-field confidence badges, a human-corrected subtotal, and per-document cost, latency, and token counts">
 
-*The split view: the original document beside what the model extracted. Every field carries its own confidence score, and the footer shows exactly what this document cost (model, prompt version, $, latency, tokens). A low-confidence subtotal was routed to review and corrected by a human — the model's original answer stays visible, struck through, beside the correction; the vendor field is still awaiting review at 74%.*
+*The split view: the original document beside what the model extracted. Every field carries its own confidence score, and the footer shows exactly what this document cost (model, prompt version, $, latency, tokens). A low-confidence subtotal was routed to review and corrected by a human: the model's original answer stays visible, struck through, beside the correction; the vendor field is still awaiting review at 74%.*
 
 <img src="screenshots/review-correct.png" width="900" alt="The review queue with two low-confidence fields from a handwritten receipt, one with the inline correction editor open">
 
@@ -22,7 +73,7 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 
 <img src="screenshots/home.png" width="900" alt="Home page with upload zone, live stats strip, and per-document extraction status">
 
-*Upload via drag-and-drop, with a live stats strip — documents processed, average cost per document, p50/p95 latency, pending review count — and documents polled live through `uploaded` → `processing` → `extracted`.*
+*Upload via drag-and-drop, with a live stats strip (documents processed, average cost per document, p50/p95 latency, pending review count) and documents polled live through `uploaded` → `processing` → `extracted`.*
 
 <img src="screenshots/search-hybrid.png" width="900" alt="The Search page: the query 'a light for my workspace' in hybrid mode returns the LED Desk Lamp lines from two receipts first, each result showing its document, page, and the rank each retriever gave it">
 
@@ -35,12 +86,12 @@ AI document intelligence: upload messy real-world documents (receipts, invoices,
 ## Stack
 
 - **Backend:** FastAPI (Python)
-- **VLM:** Claude via the Anthropic API — image input with structured outputs (JSON schema), never regex-parsing free text
+- **VLM:** Claude via the Anthropic API: image input with structured outputs (JSON schema), never regex-parsing free text
 - **Queue:** Postgres `SKIP LOCKED` job queue
 - **Agent:** a tool-use loop on Claude Opus 5.5 over three tools (hybrid search, the human-verified extraction records, whole pages), with API-verified citations, step and dollar budgets, and server-side refusal fallback
 - **Tracing:** OpenTelemetry with the GenAI semantic conventions -- one trace per document, from upload through extraction and indexing, exported over OTLP to Jaeger (opt-in)
 - **Retrieval:** pgvector (HNSW) + Postgres full-text search, fused with Reciprocal Rank Fusion; embeddings from `BAAI/bge-small-en-v1.5` run locally via fastembed (ONNX, CPU), pinned to checksummed files at a fixed commit of the model's own repository -- no second API key, no per-query cost
-- **Frontend:** Next.js — upload, extraction results side-by-side with the document image, review/correct UI, search with per-retriever ranks, and an Ask page with linked citations
+- **Frontend:** Next.js: upload, extraction results side-by-side with the document image, review/correct UI, search with per-retriever ranks, and an Ask page with linked citations
 
 ## Quickstart
 

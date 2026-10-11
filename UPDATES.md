@@ -25,6 +25,13 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-11 (Windows: T0.5-T0.7, Batch 0 complete)
+- Pulled the macOS session (T0.3 review, T0.3b, T0.4); its frames and GIFs checked here.
+- Anthony approved the T0.5 live spend (cap $1.50) and chose real data only for the dashboard.
+- T0.5 exposed and fixed a production bug: every `query_extractions` question failed with an API 400 (`59e80e3`); GIFs `86c8756`, about $0.14 spent.
+- T0.6 dashboard GIF (`87cca15`); T0.7 README gallery, stale test count, `LIVE_DEMO` slot removed, pitch narrowed to receipts and invoices, em dashes removed.
+- Batch 0 moved to PREVIOUS.md; Batch A (deterministic reconciliation) is next.
+
 ### 2026-10-10 (batch-loop on macOS: T0.3 review, T0.3b, T0.4; stopped at T0.5)
 - First session on the Mac: Homebrew Python 3.12 and ffmpeg, a fresh `backend/.venv` with the `dev` and `demo` extras plus Playwright Chromium, `npm ci`, and a gitignored `backend/.env` with an empty key (zero-spend work only). All gates pass here: 506 backend tests, 60 demo-script tests, eslint, tsc, `next build`.
 - T0.3 deep review (`6797823`): the 840 px ladder rung that `check` rejects is gone (fps and palette steps at 960 px, and `record` checks before copying); concat frame times were rounded to 40 ms (25 fps image default), now `option framerate 1000`; a second `rec.open()` no longer cuts the earlier recording.

@@ -2,6 +2,21 @@
 
 > Append-only log of finished batches/tasks, newest first. `/batch-loop` moves completed tasks here from [PRESENT.md](PRESENT.md) with the date and commit hash. Keep entries short — detail lives in git history.
 
+## Batch 0 - Demo GIF pipeline (COMPLETE 2026-10-11)
+
+Worked on Windows and one macOS session; five feature GIFs in `screenshots/features/`, all at most 15 s, under 1 MB, 960 px.
+- [x] T0.0 Restart policies for every long-running service (verified live after a reboot) - `9badd30`
+- [x] T0.0b Worker stuck-job fix after a post-rollback `MissingGreenlet`, tests on their own `docpilot_test` database, worker heartbeat healthcheck, trixie Postgres pin, tzdata, whole-backend lint - `95e5500`
+- [x] T0.1 Isolated `doc-pilot-demo` compose project with a config-derived volume guard - `939fbea`
+- [x] T0.2 Demo seed replaying the committed Sonnet run; reset and seed refuse any database but `docpilot_demo` - `dd0963f`
+- [x] T0.3 Recording harness on screencast frames (WebM flickered past the size budget) - `6247d75`; review fixes (960 px ladder, millisecond frame times) - `6797823`
+- [x] T0.3b Shared amount, duration, and timestamp formatting; no em dash in UI copy - `216dbf1`; header gap on phones - `21b35e2`
+- [x] T0.4 Search and review GIFs - `fe5bb1c`
+- [x] T0.5 Live ask and chat GIFs (about $0.14 of the $1.50 cap) - `86c8756`; the first live take exposed every `query_extractions` question failing with an API 400, fixed with a tool-result invariant - `59e80e3`
+- [x] T0.6 Monitoring dashboard GIF, real data only - `87cca15`
+- [x] T0.7 README Features gallery with what-is-real captions and recording docs - this batch's closing commit
+- Also landed during the batch: agent rules and `doc-pilot-<topic>` overlays (`fcafbaf`), CI actions on their Node 24 majors (`6fde1d0`).
+
 ## Batch 5 — Ship signals, deploy deferred (COMPLETE 2026-08-01)
 
 ### 2026-08-01 — batch-loop invocation 7 (S1–S4) — BATCH 5 COMPLETE (deploy deferred to FUTURE.md by Anthony)
