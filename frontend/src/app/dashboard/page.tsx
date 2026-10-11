@@ -533,8 +533,8 @@ export default function DashboardPage() {
     <div>
       <h1 className="page-title">Monitoring</h1>
       <p className="review-intro">
-        How good, how expensive, and how slow the AI parts of doc-pilot are -- measured offline by
-        the eval suites, and in production from every stored answer and extraction.
+        How good, how expensive, and how slow the AI parts of doc-pilot are, measured offline by
+        the eval suites and in production from every stored answer and extraction.
       </p>
       {error && <div className="error-banner">{error}</div>}
       {history ? (
