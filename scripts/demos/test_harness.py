@@ -18,6 +18,7 @@ class FakePage:
     def __init__(self, clock: FakeClock) -> None:
         self.clock = clock
         self.evaluated: list[tuple[str, object]] = []
+        self.moves: list[tuple[float, float]] = []
 
     def evaluate(self, script: str, arg: object = None) -> None:
         self.evaluated.append((script, arg))
@@ -33,12 +34,15 @@ class FakePage:
 
     @property
     def mouse(self) -> FakeMouse:
-        return FakeMouse()
+        return FakeMouse(self.moves)
 
 
 class FakeMouse:
+    def __init__(self, moves: list[tuple[float, float]]) -> None:
+        self.moves = moves
+
     def move(self, x: float, y: float) -> None:
-        pass
+        self.moves.append((x, y))
 
 
 class FakeClock:
@@ -134,4 +138,13 @@ def test_a_second_open_keeps_the_first_lead_in_and_resets_the_pointer(
     clock.now += 5
     rec.open("http://x/review")
     assert rec._lead_in == first_lead_in
+    assert rec._pointer == harness.START_POINTER
+
+
+def test_park_glides_the_pointer_back_to_its_resting_spot(tmp_path: Path) -> None:
+    rec, page, _ = make(tmp_path)
+    rec._pointer = (100.0, 200.0)
+    rec.park()
+    assert len(page.moves) == harness.MOVE_STEPS
+    assert page.moves[-1] == pytest.approx(harness.START_POINTER)
     assert rec._pointer == harness.START_POINTER

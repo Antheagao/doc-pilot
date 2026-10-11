@@ -219,9 +219,16 @@ class Recording:
         box = locator.bounding_box()
         if box is None:
             raise RuntimeError(f"{locator} has no bounding box to glide to")
+        self._glide_to(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+    def park(self) -> None:
+        """Glide the cursor back to its resting spot in the right gutter,
+        off the content, for a stretch where it would cover text that
+        changes under it (a live wait)."""
+        self._glide_to(*START_POINTER)
+
+    def _glide_to(self, end_x: float, end_y: float) -> None:
         start_x, start_y = self._pointer
-        end_x = box["x"] + box["width"] / 2
-        end_y = box["y"] + box["height"] / 2
         for step in range(1, MOVE_STEPS + 1):
             progress = step / MOVE_STEPS
             eased = progress * progress * (3 - 2 * progress)

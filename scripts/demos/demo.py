@@ -36,7 +36,7 @@ import urllib.request
 from pathlib import Path
 
 import encode
-from scenarios import SCENARIOS, SMOKE_SLUG
+from scenarios import LIVE_SLUGS, SCENARIOS, SMOKE_SLUG, ScenarioError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT = "doc-pilot-demo"
@@ -45,6 +45,9 @@ PROJECT_LABEL = "com.docker.compose.project"
 API_URL = "http://localhost:8100"
 FRONTEND_URL = "http://localhost:3100"
 FRONTEND_WAIT_SECONDS = 60
+# The most a set of live takes may spend: the demo overlay's default for
+# DAILY_BUDGET_USD. A stack running with more is refused, not trusted.
+MAX_LIVE_BUDGET_USD = 1.50
 FEATURES_DIR = REPO_ROOT / "screenshots" / "features"
 OUT_DIR = Path(__file__).resolve().parent / "out"
 
@@ -302,6 +305,71 @@ def ensure_stack_ready() -> None:
         raise CliError("; ".join(problems))
 
 
+def api_has_key() -> bool:
+    """Whether the demo API container holds an Anthropic key. Only a yes or
+    no leaves the container: the key itself is never printed."""
+    out = docker_output(
+        compose_args(
+            "exec",
+            "-T",
+            "api",
+            "python",
+            "-c",
+            "import os; print(bool(os.environ.get('ANTHROPIC_API_KEY')))",
+        )
+    )
+    return out.strip() == "True"
+
+
+def budget_state() -> tuple[float | None, float]:
+    """(daily budget, spent today) in USD from the demo API's /stats; the
+    budget is None when the cap is off."""
+    body = http_get(f"{API_URL}/stats")
+    if body is None:
+        raise CliError(f"could not read {API_URL}/stats")
+    budget = json.loads(body)["budget"]
+    return budget["daily_budget_usd"], budget["spent_today_usd"]
+
+
+def live_problems(has_key: bool, budget: float | None, spent: float) -> list[str]:
+    """What stands between a live take and a safe spend, each with its fix;
+    empty when the key is there, the budget is capped at MAX_LIVE_BUDGET_USD
+    or less, and some of it is left."""
+    problems = []
+    if not has_key:
+        problems.append("the demo API has no ANTHROPIC_API_KEY (it would answer 503)")
+    if budget is None or budget > MAX_LIVE_BUDGET_USD:
+        shown = "off" if budget is None else f"${budget:.2f}"
+        problems.append(
+            f"the demo's daily budget is {shown}, over the ${MAX_LIVE_BUDGET_USD:.2f} "
+            "cap for live takes: restart the stack without DEMO_DAILY_BUDGET_USD"
+        )
+    elif spent >= budget:
+        problems.append(
+            f"today's spend ${spent:.4f} has reached the ${budget:.2f} daily budget "
+            "(the API would answer 429)"
+        )
+    return problems
+
+
+def ensure_live_ready() -> float:
+    """Refuse a live take unless live_problems is empty; returns the spend
+    so far today, the baseline for the take's cost."""
+    budget, spent = budget_state()
+    problems = live_problems(api_has_key(), budget, spent)
+    if problems:
+        raise CliError("; ".join(problems))
+    print(f"  live take: ${spent:.4f} of ${budget:.2f} spent today")
+    return spent
+
+
+def report_spend(before: float) -> None:
+    """Print what the take cost and today's total, from /stats."""
+    budget, spent = budget_state()
+    limit = "no cap" if budget is None else f"${budget:.2f}"
+    print(f"  spend: this take ${spent - before:.4f}, today ${spent:.4f} of {limit}")
+
+
 def resolve_slugs(requested: list[str]) -> list[str]:
     """The scenarios to record. `all` is every feature scenario: smoke only
     proves the harness and is recorded by name."""
@@ -331,6 +399,9 @@ def record(args: argparse.Namespace) -> int:
     ensure_stack_ready()
     for slug in slugs:
         print(f"Recording {slug} ...")
+        # A live take is checked before it spends, and its spend reported
+        # after it whether or not it came out (a failed take still billed).
+        spent_before = ensure_live_ready() if slug in LIVE_SLUGS else None
         try:
             from harness import recording
 
@@ -343,6 +414,15 @@ def record(args: argparse.Namespace) -> int:
                 'playwright is not installed: run `pip install -e ".[dev,demo]"` '
                 "in backend/ and `python -m playwright install chromium`"
             ) from exc
+        except ScenarioError as exc:
+            raise CliError(f"{slug} take failed: {exc}") from exc
+        finally:
+            if spent_before is not None:
+                # Never let a failed spend report replace the take's error.
+                try:
+                    report_spend(spent_before)
+                except CliError as exc:
+                    print(f"warning: could not report the spend: {exc}", file=sys.stderr)
         paths = encode.encode_all(
             OUT_DIR / f"{slug}.frames" / "frames.txt", OUT_DIR / f"{slug}.json", OUT_DIR
         )

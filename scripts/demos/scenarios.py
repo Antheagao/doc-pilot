@@ -8,6 +8,15 @@ for recordings to depend on.
 
 Scenarios run against `demo.py seed --reset` data and may change it (a
 review correction resolves its field), so record after a fresh reset.
+
+LIVE_SLUGS call the real model (the agent behind /ask and the document
+chat) and spend money against the stack's DAILY_BUDGET_USD. demo.py checks
+the key and the budget before such a take and reports the spend after it.
+Their runs are stored, and the app shows them again (the Ask page's recent
+questions, the document page's restored conversation), so a take needs a
+fresh `demo.py seed --reset` and records `ask-agent` before `document-chat`
+(`record all` keeps that order); a scenario that finds an earlier run on
+the page fails before it spends anything.
 """
 
 from __future__ import annotations
@@ -18,9 +27,15 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from harness import Recording
-    from playwright.sync_api import Page
+    from playwright.sync_api import Locator, Page
 
 Scenario = Callable[["Page", "Recording"], None]
+
+
+class ScenarioError(Exception):
+    """A take that cannot be used (for a live run: the app refused it, or
+    the answer lacks what the GIF needs); the message says why."""
+
 
 # Not a feature demo: proves the harness and encoder end to end. Its output
 # stays in scripts/demos/out/ and never reaches screenshots/features/.
@@ -99,8 +114,96 @@ def review_correction(page: Page, rec: Recording) -> None:
     rec.end_hold()
 
 
+# The agent answers live, so a wait is anywhere from a few seconds to
+# half a minute; the GIF shows it sped up, with the speed chip on screen.
+LIVE_TIMEOUT_MS = 90_000
+LIVE_SPEED = 3
+
+
+def wait_for_live_answer(page: Page, rec: Recording, answer: Locator) -> None:
+    """Fast-forward through the live wait until `answer` shows, and fail the
+    take if the app shows an error banner instead (or beside it: a refused
+    or truncated answer is not a take worth keeping). The 429 of an
+    exhausted daily budget lands here: the page says `Not right now: ...`."""
+    banner = page.locator(".error-banner")
+    with rec.fast_forward(LIVE_SPEED):
+        answer.or_(banner).first.wait_for(state="visible", timeout=LIVE_TIMEOUT_MS)
+    if banner.count():
+        raise ScenarioError(
+            f"the live run did not answer cleanly: {banner.first.inner_text()}"
+        )
+
+
+# One answer, one document: the only receipt that came to $425.58.
+ASK_QUESTION = "Which store's receipt came to $425.58?"
+ASK_SOURCE = "018-dense-office-outfitters.png"
+
+
+def ask_agent(page: Page, rec: Recording) -> None:
+    """A live /ask run: the agent's steps as they stream (sped up), the
+    cited answer, then the cited document."""
+    rec.open(f"{rec.base_url}/ask", page.get_by_label("Question"))
+    if page.locator(".history-row").count():
+        raise ScenarioError(
+            "the Ask page lists earlier questions: run `demo.py seed --reset` first"
+        )
+    rec.beat()
+    # The class, not the role: a retake finds the earlier takes under
+    # "Recent questions", whose entries are buttons with the same name.
+    rec.click(page.locator("button.example-chip").filter(has_text=ASK_QUESTION))
+    wait_for_live_answer(page, rec, page.locator(".answer-card .answer-text"))
+    source = page.get_by_role("link", name=ASK_SOURCE).first
+    if source.count() == 0:
+        raise ScenarioError(f"the answer does not cite {ASK_SOURCE}")
+    rec.beat(2)
+    rec.click(source)
+    page.locator(".field-row").first.wait_for(state="visible")
+    rec.beat(2)
+    rec.end_hold()
+
+
+# The same document as the search demo's meaning hit (018), looked up by
+# its stable uuid5 id; the suggestion chip is the first the panel offers.
+CHAT_DOCUMENT_ID = "9a1df399-c746-56e8-b4bf-490ca9aa9be4"
+CHAT_SUGGESTION = "What's the total?"
+
+
+def document_chat(page: Page, rec: Recording) -> None:
+    """A live per-document chat turn: a suggested question, then the
+    answer's extracted-field citation selected so its row lights up."""
+    suggestion = page.get_by_role("button", name=CHAT_SUGGESTION)
+    rec.open(
+        f"{rec.base_url}/documents/{CHAT_DOCUMENT_ID}",
+        page.get_by_role("heading", name="Ask about this document"),
+    )
+    if suggestion.count() == 0:
+        raise ScenarioError(
+            "an earlier conversation about this document is shown: "
+            "run `demo.py seed --reset` first"
+        )
+    rec.beat()
+    rec.click(suggestion)
+    # The suggestions give way to the live steps right under the cursor.
+    rec.park()
+    wait_for_live_answer(page, rec, page.locator(".chat-assistant .answer-text"))
+    # The source chips, not the answer's numbered markers (same names).
+    field_sources = page.locator("button.chat-source").filter(has_text="extracted field")
+    if field_sources.count() == 0:
+        raise ScenarioError("the answer cites no extracted field")
+    rec.beat(2)
+    rec.click(field_sources.first)
+    page.locator(".field-row.cited, .line-items-table tr.cited").first.wait_for(
+        state="visible"
+    )
+    rec.beat(2)
+    rec.end_hold()
+
+
 SCENARIOS: dict[str, Scenario] = {
     SMOKE_SLUG: smoke,
     "search-hybrid": search_hybrid,
     "review-correction": review_correction,
+    "ask-agent": ask_agent,
+    "document-chat": document_chat,
 }
+LIVE_SLUGS = frozenset({"ask-agent", "document-chat"})

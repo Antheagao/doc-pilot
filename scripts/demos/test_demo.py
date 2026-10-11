@@ -193,3 +193,30 @@ def test_check_with_no_gifs_passes(
 ) -> None:
     feature_gifs(tmp_path, monkeypatch, {})
     assert demo.check(argparse.Namespace()) == 0
+
+
+def test_a_keyed_capped_budget_with_room_has_no_live_problems() -> None:
+    assert demo.live_problems(True, 1.5, 0.0) == []
+    assert demo.live_problems(True, 1.0, 0.9) == []
+
+
+def test_a_live_take_needs_the_key() -> None:
+    (problem,) = demo.live_problems(False, 1.5, 0.0)
+    assert "ANTHROPIC_API_KEY" in problem
+
+
+def test_a_live_take_refuses_a_budget_over_the_cap_or_off() -> None:
+    (raised,) = demo.live_problems(True, 5.0, 0.0)
+    assert "$5.00" in raised
+    (off,) = demo.live_problems(True, None, 0.0)
+    assert "off" in off
+
+
+def test_a_live_take_refuses_once_the_budget_is_spent() -> None:
+    (problem,) = demo.live_problems(True, 1.5, 1.5)
+    assert "429" in problem
+
+
+def test_only_the_model_scenarios_are_live() -> None:
+    assert demo.LIVE_SLUGS == {"ask-agent", "document-chat"}
+    assert demo.LIVE_SLUGS <= set(demo.SCENARIOS)
