@@ -12,9 +12,15 @@ import {
 import ConfidenceBadge from "@/components/ConfidenceBadge";
 import { EMPTY_VALUE, formatAmount } from "@/lib/format";
 
-// Fields whose corrections should be parsed as numbers rather than kept
-// as strings. Mirrors the backend extraction schema (app/extraction.py).
+// Fields that hold an amount of money. Mirrors MONEY_FIELDS in the backend
+// (app/extraction.py).
 const NUMERIC_FIELDS = new Set(["subtotal", "tax", "total"]);
+
+// A plain decimal exactly as the API takes it: optional minus, digits,
+// optional fraction. Commas and spaces are refused, never stripped: "45,25"
+// would silently become 4525. Whether it fits the currency's digits is the
+// backend's call (a 422 with a sentence, shown in the banner).
+const PLAIN_DECIMAL = /^-?\d+(\.\d+)?$/;
 
 function isLeaf(value: unknown): value is FieldLeaf {
   return (
@@ -37,10 +43,11 @@ function lineItemsToSemantic(items: unknown[]): unknown[] {
     if (typeof item !== "object" || item === null) return item;
     const row = item as Record<string, unknown>;
     return {
-      description: leafValue(row.description),
-      quantity: leafValue(row.quantity),
-      unit_price: leafValue(row.unit_price),
-      total: leafValue(row.total),
+      // `?? null` keeps all four keys, so an untouched draft is submittable.
+      description: leafValue(row.description) ?? null,
+      quantity: leafValue(row.quantity) ?? null,
+      unit_price: leafValue(row.unit_price) ?? null,
+      total: leafValue(row.total) ?? null,
     };
   });
 }
@@ -55,6 +62,8 @@ function initialDraft(item: ReviewQueueItem): string {
 }
 
 /** Parse the correction input into the semantic value the backend stores.
+ * An amount stays a string, never a Number, so no digit is rounded on the
+ * way.
  * Throws with a user-facing message when the input can't be parsed. */
 function parseDraft(fieldName: string, raw: string): unknown {
   if (fieldName === "line_items") {
@@ -72,11 +81,13 @@ function parseDraft(fieldName: string, raw: string): unknown {
   const trimmed = raw.trim();
   if (trimmed === "") return null; // empty input asserts "field is absent"
   if (NUMERIC_FIELDS.has(fieldName)) {
-    const n = Number(trimmed);
-    if (Number.isNaN(n)) {
-      throw new Error(`"${fieldName}" must be a number (or empty for none).`);
+    if (!PLAIN_DECIMAL.test(trimmed)) {
+      throw new Error(
+        "Enter a plain number such as 45.25, with a dot for decimals and no " +
+          "thousands separators (or leave it empty for none)."
+      );
     }
-    return n;
+    return trimmed;
   }
   return trimmed;
 }
@@ -88,8 +99,13 @@ function formatDisplayValue(item: ReviewQueueItem): string {
   }
   const value = leafValue(item.value);
   if (value === null || value === undefined || value === "") return EMPTY_VALUE;
-  // The queue carries no currency, so amounts get the default 2 digits.
-  if (NUMERIC_FIELDS.has(item.field_name)) return formatAmount(value, null);
+  // The API pads amounts to the document currency's digits; the currency is
+  // shown beside the amount so a misread one is as visible as a misread digit.
+  if (NUMERIC_FIELDS.has(item.field_name)) {
+    return item.currency
+      ? `${formatAmount(value)} ${item.currency}`
+      : formatAmount(value);
+  }
   return String(value);
 }
 

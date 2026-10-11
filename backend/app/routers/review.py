@@ -10,7 +10,8 @@ app/extraction.py). This router exposes that set as a work queue:
 - GET  /review/queue/count  -- pending total, cheap enough to poll for a
                                nav badge
 - POST /review/fields/{id}/resolve -- approve the extracted value or
-                               supply a correction
+                               supply a correction (validated: a bad amount
+                               is a 422 with a sentence)
 
 Resolution is field-level on purpose (see README "Key decisions"): a
 document with one shaky field shouldn't cost a human a whole-document
@@ -29,6 +30,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.models import Document, ExtractedField, Extraction
+from app.money import MoneyError
+from app.records import (
+    api_field_value,
+    currency_code,
+    currency_fields,
+    field_to_out,
+    minor_units_for,
+    normalize_correction,
+    precision_for,
+)
 from app.schemas import (
     ExtractedFieldOut,
     ReviewQueueCount,
@@ -64,11 +75,17 @@ async def list_review_queue(
         .offset(offset)
     )
     rows = (await session.execute(stmt)).all()
+    currencies = await currency_fields(session, [extraction.id for _, extraction, _ in rows])
     return [
         ReviewQueueItem(
             field_id=field.id,
             field_name=field.field_name,
-            value=field.value,
+            value=api_field_value(
+                field.field_name,
+                field.value,
+                minor_units_for(currencies.get(extraction.id)),
+            ),
+            currency=currency_code(currencies.get(extraction.id)),
             confidence=field.confidence,
             document_id=document.id,
             filename=document.filename,
@@ -94,7 +111,7 @@ async def resolve_field(
     field_id: uuid.UUID,
     payload: ReviewResolveRequest,
     session: AsyncSession = Depends(get_session),
-) -> ExtractedField:
+) -> ExtractedFieldOut:
     field = await session.get(ExtractedField, field_id)
     if field is None:
         raise HTTPException(status_code=404, detail="Field not found")
@@ -117,13 +134,30 @@ async def resolve_field(
             detail="action 'correct' requires a corrected_value (null is allowed)",
         )
 
+    corrected_value = None
+    if payload.action == "correct":
+        currency = (await currency_fields(session, [field.extraction_id])).get(
+            field.extraction_id
+        )
+        try:
+            corrected_value = normalize_correction(
+                field.field_name, payload.corrected_value, precision_for(currency)
+            )
+        except MoneyError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     field.reviewed_at = datetime.now(UTC)
     if payload.action == "approve":
         field.review_action = "approved"
     else:
         field.review_action = "corrected"
-        field.corrected_value = payload.corrected_value
+        field.corrected_value = corrected_value
 
     await session.commit()
     await session.refresh(field)
-    return field
+    # Serve the field with the currency as it is now: correcting the
+    # currency itself changes the digits its siblings are padded to.
+    currency = (await currency_fields(session, [field.extraction_id])).get(
+        field.extraction_id
+    )
+    return field_to_out(field, minor_units_for(currency))

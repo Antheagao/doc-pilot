@@ -31,5 +31,6 @@ The Tailwind and theme-toggle rules of the global guide do not apply: there is n
 
 - No `error.tsx`, `not-found.tsx`, `global-error.tsx`, or `loading.tsx`; errors render as `<div className="error-banner">` without `role="alert"`.
 - No script measures contrast, so the AA claim in `globals.css` is not checked by tooling.
-- Money and costs are formatted ad hoc with `toFixed` (`ask/page.tsx`, `dashboard/page.tsx`); the review form parses corrections with `Number()` until Batch A1.
+- Costs are formatted ad hoc with `toFixed` (`ask/page.tsx`, `dashboard/page.tsx`).
+- Document amounts arrive as decimal strings and are never parsed to `Number`: `formatAmount` in `src/lib/format.ts` groups the integer part (BigInt) and shows the fraction exactly as given, a missing value as `EMPTY_VALUE`, and a non-numeric stored value as stored; the review form validates the trimmed input against `^-?\d+(\.\d+)?$` (a comma or space is refused, never stripped) and sends the string, and the queue shows the document's currency code beside each amount, and a backend `422` sentence lands in the `error-banner`.
 - Batch C replaces the `<iframe>` preview with `pdfjs-dist` canvas rendering under an SVG overlay.

@@ -10,6 +10,7 @@ from app.money import (
     currency_precision,
     fits_minor_unit,
     parse_amount_input,
+    parse_quantity_input,
     to_api_string,
     to_decimal,
     to_label_number,
@@ -182,6 +183,51 @@ def test_parse_amount_input_explains_too_many_decimals() -> None:
         parse_amount_input("1500.5", 0)
     with pytest.raises(MoneyError, match=r"at most 1 decimal place\."):
         parse_amount_input("1.25", 1)
+
+
+def test_parse_amount_input_names_the_currency_when_given() -> None:
+    jpy = currency_precision("jpy")
+    with pytest.raises(MoneyError, match=r"JPY allows no decimal places\."):
+        parse_amount_input("1500.5", jpy.minor_units, jpy)
+    unstated = currency_precision(None)
+    with pytest.raises(MoneyError, match="no currency is stated, so amounts allow at most 2"):
+        parse_amount_input("1.255", unstated.minor_units, unstated)
+    unlisted = currency_precision("zzz")
+    with pytest.raises(MoneyError, match="'ZZZ' is not an ISO 4217 currency, so amounts allow"):
+        parse_amount_input("1.255", unlisted.minor_units, unlisted)
+
+
+def test_error_messages_cut_a_long_echoed_value() -> None:
+    with pytest.raises(MoneyError) as caught:
+        to_decimal("x" * 500)
+    assert len(str(caught.value)) < 250
+    assert "..." in str(caught.value)
+
+
+def test_parse_quantity_input_accepts_fractions_and_returns() -> None:
+    assert parse_quantity_input("2") == Decimal(2)
+    assert parse_quantity_input(" 2.5 ") == Decimal("2.5")
+    assert parse_quantity_input(0.125) == Decimal("0.125")
+    assert parse_quantity_input("-3") == Decimal(-3)
+    assert parse_quantity_input("0.000001") == Decimal("0.000001")
+    assert parse_quantity_input("999999999999.5") == Decimal("999999999999.5")
+
+
+def test_parse_quantity_input_bounds_precision_and_magnitude() -> None:
+    with pytest.raises(MoneyError, match="quantities allow at most 6"):
+        parse_quantity_input("0.0000001")
+    with pytest.raises(MoneyError, match="quantities must be below"):
+        parse_quantity_input("1000000000000")
+    with pytest.raises(MoneyError, match="quantities must be below"):
+        parse_quantity_input("-1" + "0" * 12)
+    with pytest.raises(MoneyError, match="quantities must be below"):
+        parse_quantity_input("9" * 50)
+
+
+@pytest.mark.parametrize("raw", ["1e308", "2,5", "2 5", "", "abc", True, None, float("inf")])
+def test_parse_quantity_input_rejects_what_to_decimal_rejects(raw) -> None:
+    with pytest.raises(MoneyError):
+        parse_quantity_input(raw)
 
 
 def test_parse_amount_input_bounds_the_magnitude() -> None:

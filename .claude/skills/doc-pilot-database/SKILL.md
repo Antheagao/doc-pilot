@@ -24,7 +24,8 @@ The sqlx subsections of the global guide map to SQLAlchemy and Alembic here.
 - A new embedding width is a migration plus `backend/scripts/reindex.py`; migrations copy constants as literals (`EMBEDDING_DIM = 384` in `e3f19a7c2d40`), never import them.
 - `CHECK` constraints today: `ck_jobs_has_target`, `ck_ask_runs_feedback`, `ck_ask_runs_chat_scope`.
 - Money: `cost_usd` columns are `Numeric(10, 6)` typed `Mapped[float]`; extracted amounts are JSON numbers inside `extracted_fields.value` leaves (`{"value", "confidence"}`), and corrections sit in `corrected_value`.
-  The eval scorer compares integer cents; Batch A (`FUTURE.md`) moves money to `Decimal` (`app/money.py`) and decimal strings.
+  Stored leaves stay the model's JSON numbers (no data migration); new corrections are stored as canonical decimal strings (`records.normalize_correction`), and older numeric corrections are read through the same path.
+  The API serves every document amount as a decimal string, parsed with `Decimal` in `app/money.py`; the eval scorer compares integer cents.
 - Day boundaries are UTC in code: `budget.day_start`, and `routers/monitoring.py` groups with `func.timezone("UTC", ...)`.
 
 ## Session rules

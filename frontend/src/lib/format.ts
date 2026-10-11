@@ -3,44 +3,31 @@
 /** What a missing value renders as. */
 export const EMPTY_VALUE = "-";
 
-const DEFAULT_FRACTION_DIGITS = 2;
+const integerFormatter = new Intl.NumberFormat("en-US");
 
-const amountFormatters = new Map<number, Intl.NumberFormat>();
+// What the API serves for a document amount or quantity: an optional minus
+// sign, digits, an optional fraction (backend/app/money.py to_api_string).
+const DECIMAL_STRING = /^(-?)(\d+)(\.\d+)?$/;
 
-/** The minor-unit digits of an ISO 4217 code (2 for USD, 0 for JPY, 3 for
- * KWD); 2 when the code is missing or not a valid currency code. */
-function fractionDigits(currency: string | null | undefined): number {
-  if (!currency) return DEFAULT_FRACTION_DIGITS;
-  try {
-    const resolved = new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency,
-    }).resolvedOptions();
-    return resolved.maximumFractionDigits ?? DEFAULT_FRACTION_DIGITS;
-  } catch (err) {
-    if (err instanceof RangeError) return DEFAULT_FRACTION_DIGITS;
-    throw err;
-  }
-}
-
-/** A document amount with grouping and exactly the currency's minor-unit
- * digits ("1,234.50"), and no currency symbol: the currency is shown as its
- * own field. Anything that is not a finite number renders as EMPTY_VALUE. */
-export function formatAmount(
-  value: unknown,
-  currency: string | null | undefined
-): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return EMPTY_VALUE;
-  const digits = fractionDigits(currency);
-  let formatter = amountFormatters.get(digits);
-  if (!formatter) {
-    formatter = new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: digits,
-      maximumFractionDigits: digits,
-    });
-    amountFormatters.set(digits, formatter);
-  }
-  return formatter.format(value);
+/** A document amount with grouping on the integer part ("1,234.50") and no
+ * currency symbol: the currency is shown as its own field. The API already
+ * pads the fraction to the currency's minor unit and keeps extra digits, so
+ * the fraction is shown exactly as given and nothing is rounded; the integer
+ * part goes through BigInt so a huge amount keeps every digit.
+ *
+ * A missing value (null, undefined, "") renders as EMPTY_VALUE. A value that
+ * is not a decimal string (garbage the model stored, which the API passes
+ * through) renders as stored, so a bad read stays visible instead of
+ * turning into a plausible number; anything that is not text or a number
+ * renders as EMPTY_VALUE. */
+export function formatAmount(value: unknown): string {
+  if (value === null || value === undefined || value === "") return EMPTY_VALUE;
+  if (typeof value === "number") return String(value);
+  if (typeof value !== "string") return EMPTY_VALUE;
+  const match = DECIMAL_STRING.exec(value);
+  if (!match) return value;
+  const [, sign, integer, fraction = ""] = match;
+  return `${sign}${integerFormatter.format(BigInt(integer))}${fraction}`;
 }
 
 /** A duration given in milliseconds: "850 ms" below a second, "5.2 s" from

@@ -25,6 +25,12 @@ class DocumentListItem(BaseModel):
 
 
 class ExtractedFieldOut(BaseModel):
+    """One extracted field. Every number read from the document (subtotal,
+    tax, total, and each line item's quantity, unit_price, and total) is a
+    decimal string such as "46.20", padded to the document currency's minor
+    unit with extra digits kept (see app/records.py); confidence stays a
+    number. A stored value that is not a number is passed through as-is."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -69,6 +75,11 @@ class ReviewQueueItem(BaseModel):
     field_id: uuid.UUID
     field_name: str
     value: Any
+    # The document's currency as stated (a correction wins), trimmed and
+    # upper-cased; null when it states none. A code that is not ISO 4217
+    # passes through as stated. `value` is already padded to this currency's
+    # minor unit (2 when the code is missing or unlisted).
+    currency: str | None
     confidence: float
     document_id: uuid.UUID
     filename: str
@@ -167,6 +178,10 @@ class ReviewResolveRequest(BaseModel):
     null corrected_value is legal (it asserts the field is truly absent
     from the document); the router distinguishes "correct to null" from
     "corrected_value omitted" via model_fields_set.
+
+    Amounts in a correction may be a decimal string or a number; the router
+    checks them against the document's currency (422 with a sentence when
+    they do not fit) and stores the canonical string.
     """
 
     action: Literal["approve", "correct"]

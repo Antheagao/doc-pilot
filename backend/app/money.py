@@ -58,6 +58,14 @@ DEFAULT_MINOR_UNITS = 2
 # receipt or invoice, far below where a typo becomes a different number.
 MAX_AMOUNT = Decimal(10) ** 12
 
+# Most decimal places a quantity may carry: far finer than any receipt
+# (weights and volumes sold by the gram or milliliter) and coarse enough that
+# a line's quantity times its unit price stays exact in `Decimal`.
+MAX_QUANTITY_DECIMALS = 6
+
+# Longest stretch of a rejected value echoed back in an error message.
+_ECHO_LIMIT = 80
+
 # Optional minus, digits, optional fraction. No plus sign, exponent, grouping
 # commas, non-ASCII digits, or bare ".5" and "5.": every accepted string means
 # exactly one number.
@@ -67,6 +75,13 @@ _PLAIN_DECIMAL_RE = re.compile(r"-?\d+(\.\d+)?", re.ASCII)
 class MoneyError(ValueError):
     """A value that is not a plain decimal amount. The message is a full
     sentence that a caller can show to a person unchanged."""
+
+
+def shown_value(raw: object) -> str:
+    """`repr(raw)` for an error message, cut to _ECHO_LIMIT characters with
+    an ellipsis so a huge input is not echoed back in full."""
+    text = repr(raw)
+    return text if len(text) <= _ECHO_LIMIT else f"{text[: _ECHO_LIMIT - 3]}..."
 
 
 @dataclass(frozen=True)
@@ -117,7 +132,7 @@ def to_decimal(value: object) -> Decimal:
     caller's call, so None is not silently turned into anything here.
     """
     if isinstance(value, bool):
-        raise MoneyError(f"{value!r} is not an amount.")
+        raise MoneyError(f"{shown_value(value)} is not an amount.")
     if isinstance(value, Decimal):
         parsed = value
     elif isinstance(value, int):
@@ -128,14 +143,14 @@ def to_decimal(value: object) -> Decimal:
         text = value.strip()
         if not _PLAIN_DECIMAL_RE.fullmatch(text):
             raise MoneyError(
-                f"{value!r} is not a plain number; use digits with an optional minus sign "
-                "and decimal point, such as 45.25."
+                f"{shown_value(value)} is not a plain number; use digits with an optional "
+                "minus sign and a dot for decimals, such as 45.25 (no commas or spaces)."
             )
         parsed = Decimal(text)
     else:
-        raise MoneyError(f"{value!r} is not an amount.")
+        raise MoneyError(f"{shown_value(value)} is not an amount.")
     if not parsed.is_finite():
-        raise MoneyError(f"{value!r} is not a finite number.")
+        raise MoneyError(f"{shown_value(value)} is not a finite number.")
     return parsed
 
 
@@ -173,25 +188,66 @@ def to_plain_string(d: Decimal) -> str:
     return to_api_string(d, 0)
 
 
-def parse_amount_input(raw: str | float, minor_units: int) -> Decimal:
+def _places_rule(minor_units: int, currency: CurrencyPrecision | None) -> str:
+    """The clause of a too-many-decimals sentence that says what is allowed,
+    naming the currency when it is known."""
+    allowed = (
+        "no decimal places"
+        if minor_units == 0
+        else f"at most {minor_units} decimal place{'s' if minor_units != 1 else ''}"
+    )
+    if currency is None:
+        return f"this currency allows {allowed}"
+    if currency.assumption is None:
+        return f"{currency.code} allows {allowed}"
+    if currency.code is None:
+        return f"no currency is stated, so amounts allow {allowed}"
+    return f"{currency.code!r} is not an ISO 4217 currency, so amounts allow {allowed}"
+
+
+def parse_amount_input(
+    raw: str | float, minor_units: int, currency: CurrencyPrecision | None = None
+) -> Decimal:
     """Parse an amount a person typed, or a client sent as a correction.
 
     Stricter than `to_decimal`: the value must also fit the currency's minor
     unit (a person who types `45.255` for a two-digit currency is shown the
     mistake, not given a rounded guess) and stay under MAX_AMOUNT. Every
-    failure is a MoneyError whose message is a sentence fit for a 422.
+    failure is a MoneyError whose message is a sentence fit for a 422;
+    passing the document's `currency` makes it name the currency.
     """
     amount = to_decimal(raw)
     if not fits_minor_unit(amount, minor_units):
-        allowed = (
-            "no decimal places"
-            if minor_units == 0
-            else f"at most {minor_units} decimal place{'s' if minor_units != 1 else ''}"
+        raise MoneyError(
+            f"{shown_value(raw)} has too many decimal places; "
+            f"{_places_rule(minor_units, currency)}."
         )
-        raise MoneyError(f"{raw!r} has too many decimal places; this currency allows {allowed}.")
     if abs(amount) >= MAX_AMOUNT:
-        raise MoneyError(f"{raw!r} is too large; amounts must be below {MAX_AMOUNT:,}.")
+        raise MoneyError(
+            f"{shown_value(raw)} is too large; amounts must be below {MAX_AMOUNT:,}."
+        )
     return amount
+
+
+def parse_quantity_input(raw: str | float) -> Decimal:
+    """Parse a line-item quantity a person typed, or a client sent.
+
+    Like `parse_amount_input` but not tied to a currency: at most
+    MAX_QUANTITY_DECIMALS decimal places and under MAX_AMOUNT, so a later
+    quantity times unit price cannot be made unbounded. Negative quantities
+    are allowed (a return).
+    """
+    quantity = to_decimal(raw)
+    if not fits_minor_unit(quantity, MAX_QUANTITY_DECIMALS):
+        raise MoneyError(
+            f"{shown_value(raw)} has too many decimal places; "
+            f"quantities allow at most {MAX_QUANTITY_DECIMALS}."
+        )
+    if abs(quantity) >= MAX_AMOUNT:
+        raise MoneyError(
+            f"{shown_value(raw)} is too large; quantities must be below {MAX_AMOUNT:,}."
+        )
+    return quantity
 
 
 def to_label_number(d: Decimal) -> int | float:

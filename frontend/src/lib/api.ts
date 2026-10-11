@@ -28,16 +28,26 @@ export interface FieldLeaf<T = unknown> {
   confidence: number;
 }
 
+// Every number read from a document is a canonical decimal string in the API
+// ("46.20", "2.5"): money padded to the currency's minor unit with any extra
+// digits kept ("46.255"), quantities without trailing zeros. Never run
+// arithmetic on it with Number(). A value the model stored that is not a
+// number is passed through as-is, so a DecimalString field can hold garbage
+// text; formatAmount (lib/format.ts) shows it as stored. Machine metrics
+// (confidence, cost_usd, tokens) stay numbers.
+export type DecimalString = string;
+
 export interface LineItem {
   description: FieldLeaf<string | null> | null;
-  quantity: FieldLeaf<number | null> | null;
-  unit_price: FieldLeaf<number | null> | null;
-  total: FieldLeaf<number | null> | null;
+  quantity: FieldLeaf<DecimalString | null> | null;
+  unit_price: FieldLeaf<DecimalString | null> | null;
+  total: FieldLeaf<DecimalString | null> | null;
 }
 
 // ExtractedFieldOut.value shape depends on field_name: line_items stores the
 // array directly (its own confidence lives in the `confidence` column below),
-// every other field stores the {value, confidence} leaf as-is.
+// every other field stores the {value, confidence} leaf as-is. For subtotal,
+// tax, and total the leaf's value is DecimalString | null.
 export type ExtractedFieldValue = FieldLeaf | LineItem[] | null;
 
 // Set once a human has resolved the field from the review queue.
@@ -52,7 +62,8 @@ export interface ExtractedField {
   reviewed_at: string | null;
   review_action: ReviewAction | null;
   // The human-supplied *semantic* value (scalar for scalar fields, the
-  // plain-value line-item array for line_items). Only set when
+  // plain-value line-item array for line_items; amounts are DecimalString).
+  // Only set when
   // review_action === "corrected". The original `value` is never
   // overwritten by a correction.
   corrected_value: unknown;
@@ -136,6 +147,11 @@ export interface ReviewQueueItem {
   field_id: string;
   field_name: string;
   value: ExtractedFieldValue;
+  // The document's currency as stated (a correction wins), trimmed and
+  // upper-cased; null when it states none. A code that is not ISO 4217
+  // passes through as stated. `value` is already padded to this currency's
+  // minor unit (2 when the code is missing or unlisted).
+  currency: string | null;
   confidence: number;
   document_id: string;
   filename: string;

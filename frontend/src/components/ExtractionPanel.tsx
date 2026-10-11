@@ -46,13 +46,6 @@ function formatScalar(value: unknown): string {
   return String(value);
 }
 
-/** A money value as an amount; any non-number falls back to formatScalar. */
-function formatMoney(value: unknown, currency: string | null): string {
-  return typeof value === "number"
-    ? formatAmount(value, currency)
-    : formatScalar(value);
-}
-
 function formatNumber(value: unknown): string {
   return typeof value === "number" ? String(value) : EMPTY_VALUE;
 }
@@ -79,17 +72,16 @@ function displayedValue(field: ExtractedField): unknown {
 // static LineItem type.
 function LineItemCell({
   leaf,
-  currency,
+  money = false,
   numeric = false,
 }: {
   leaf: unknown;
-  /** Set for money columns; quantities and descriptions leave it out. */
-  currency?: string | null;
+  /** Set for money columns, which group the integer part (formatAmount). */
+  money?: boolean;
   /** Right-aligns the cell, for the quantity and money columns. */
   numeric?: boolean;
 }) {
-  const format = (value: unknown) =>
-    currency === undefined ? formatScalar(value) : formatMoney(value, currency);
+  const format = money ? formatAmount : formatScalar;
   // Corrected line-item rows (review_action === "corrected") hold plain
   // scalar values, not {value, confidence} leaves (a human correction
   // has no confidence score). Render those directly, with no low styling.
@@ -108,11 +100,9 @@ function LineItemCell({
 
 function LineItemsTable({
   items,
-  currency,
   highlight,
 }: {
   items: unknown[];
-  currency: string | null;
   highlight: ReadonlySet<string>;
 }) {
   if (items.length === 0) {
@@ -142,8 +132,8 @@ function LineItemsTable({
             >
               <LineItemCell leaf={row.description} />
               <LineItemCell leaf={row.quantity} numeric />
-              <LineItemCell leaf={row.unit_price} currency={currency} numeric />
-              <LineItemCell leaf={row.total} currency={currency} numeric />
+              <LineItemCell leaf={row.unit_price} money numeric />
+              <LineItemCell leaf={row.total} money numeric />
             </tr>
           );
         })}
@@ -158,18 +148,14 @@ function ReviewBadge({ action }: { action: ReviewAction }) {
 
 function ScalarFieldRow({
   field,
-  currency,
   cited,
 }: {
   field: ExtractedField;
-  currency: string | null;
   cited: boolean;
 }) {
   const leaf = isLeaf(field.value) ? field.value : null;
   const corrected = field.review_action === "corrected";
-  const format = MONEY_FIELDS.has(field.field_name)
-    ? (value: unknown) => formatMoney(value, currency)
-    : formatScalar;
+  const format = MONEY_FIELDS.has(field.field_name) ? formatAmount : formatScalar;
   const display = format(displayedValue(field));
   return (
     <div id={fieldElementId(field.field_name)} className={`field-row${cited ? " cited" : ""}`}>
@@ -215,14 +201,6 @@ export default function ExtractionPanel({
   const extraFields = extraction.fields.filter((f) => !knownNames.has(f.field_name));
   const scalarFields = [...orderedFields, ...extraFields];
 
-  // Money is formatted to the minor units of the document's own currency.
-  const currencyField = byName.get("currency");
-  const currencyValue = currencyField ? displayedValue(currencyField) : null;
-  const currency =
-    typeof currencyValue === "string" && currencyValue !== ""
-      ? currencyValue
-      : null;
-
   const lineItemsField = byName.get("line_items");
   // A corrected line_items field displays the human-supplied rows (plain
   // values, see LineItemCell) instead of the model's extraction.
@@ -242,7 +220,6 @@ export default function ExtractionPanel({
           <ScalarFieldRow
             key={field.field_name}
             field={field}
-            currency={currency}
             cited={highlight.has(field.field_name)}
           />
         ))}
@@ -265,11 +242,7 @@ export default function ExtractionPanel({
               )}
             </span>
           </div>
-          <LineItemsTable
-            items={lineItems}
-            currency={currency}
-            highlight={highlight}
-          />
+          <LineItemsTable items={lineItems} highlight={highlight} />
         </div>
       )}
 

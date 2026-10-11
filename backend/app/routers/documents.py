@@ -12,11 +12,11 @@ from app.config import Settings, get_settings, resolve_upload_dir
 from app.db import get_session
 from app.models import Document, ExtractedField, Extraction, Job
 from app.ratelimit import limit_upload
+from app.records import field_to_out, minor_units_for
 from app.schemas import (
     DocumentCreateResponse,
     DocumentDetail,
     DocumentListItem,
-    ExtractedFieldOut,
     ExtractionOut,
 )
 from app.telemetry import current_traceparent
@@ -191,6 +191,11 @@ async def get_document(
             ExtractedField.extraction_id == extraction.id
         )
         fields = (await session.execute(fields_stmt)).scalars().all()
+        # Amounts are served as decimal strings padded to the document
+        # currency's minor unit (records.field_to_out).
+        minor_units = minor_units_for(
+            next((f for f in fields if f.field_name == "currency"), None)
+        )
         extraction_out = ExtractionOut(
             id=extraction.id,
             prompt_version=extraction.prompt_version,
@@ -200,7 +205,7 @@ async def get_document(
             input_tokens=extraction.input_tokens,
             output_tokens=extraction.output_tokens,
             created_at=extraction.created_at,
-            fields=[ExtractedFieldOut.model_validate(f) for f in fields],
+            fields=[field_to_out(f, minor_units) for f in fields],
         )
 
     return DocumentDetail(

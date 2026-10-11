@@ -8,6 +8,7 @@ network-free, same as the rest of the suite.
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -228,3 +229,339 @@ async def test_resolve_invalid_action_rejected(
     )
 
     assert response.status_code == 422
+
+
+async def _seed_receipt(
+    db_session: AsyncSession,
+    *,
+    currency: str | None = "USD",
+    flagged: tuple[str, ...] = ("subtotal",),
+    subtotal: float = 46.25,
+    line_items: list | None = None,
+) -> dict[str, ExtractedField]:
+    """One extraction with currency, subtotal, and line_items fields; the
+    names in `flagged` are pending review. Returns the fields by name."""
+    document = Document(
+        filename="016-handwriting-bakery-note.png",
+        mime_type="image/png",
+        storage_path=f"/tmp/{uuid.uuid4()}.png",
+        status="extracted",
+    )
+    db_session.add(document)
+    await db_session.flush()
+    extraction = Extraction(
+        document_id=document.id,
+        prompt_version="extract_v1",
+        model="claude-sonnet-5",
+        raw_response={},
+        input_tokens=100,
+        output_tokens=50,
+        cost_usd=0.001,
+        latency_ms=1000,
+    )
+    db_session.add(extraction)
+    await db_session.flush()
+    stored = {
+        "subtotal": {"value": subtotal, "confidence": 0.5},
+        "line_items": line_items
+        if line_items is not None
+        else [
+            {
+                "description": {"value": "Sourdough", "confidence": 0.9},
+                "quantity": {"value": 5, "confidence": 0.9},
+                "unit_price": {"value": 9.15, "confidence": 0.5},
+                "total": {"value": 45.75, "confidence": 0.9},
+            }
+        ],
+    }
+    if currency is not None:
+        stored["currency"] = {"value": currency, "confidence": 0.99}
+    fields = {}
+    for name, value in stored.items():
+        fields[name] = ExtractedField(
+            extraction_id=extraction.id,
+            field_name=name,
+            value=value,
+            confidence=0.5 if name in flagged else 0.99,
+            needs_review=name in flagged,
+        )
+        db_session.add(fields[name])
+    await db_session.commit()
+    return fields
+
+
+async def _correct(client: AsyncClient, field: ExtractedField, corrected_value):
+    return await client.post(
+        f"/review/fields/{field.id}/resolve",
+        json={"action": "correct", "corrected_value": corrected_value},
+    )
+
+
+async def test_queue_serves_decimal_strings_and_the_document_currency(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("subtotal", "line_items"))
+
+    items = {i["field_name"]: i for i in (await client.get("/review/queue")).json()}
+
+    assert items["subtotal"]["currency"] == "USD"
+    assert items["subtotal"]["value"] == {"value": "46.25", "confidence": 0.5}
+    assert items["subtotal"]["field_id"] == str(fields["subtotal"].id)
+    row = items["line_items"]["value"][0]
+    assert row["unit_price"]["value"] == "9.15"
+    assert row["quantity"]["value"] == "5"
+
+
+async def test_queue_currency_is_upper_cased_and_null_when_unstated(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_receipt(db_session, currency="jpy", subtotal=1500)
+    await _seed_receipt(db_session, currency=None, subtotal=7)
+
+    items = (await client.get("/review/queue")).json()
+
+    by_currency = {i["currency"]: i["value"]["value"] for i in items}
+    assert by_currency == {"JPY": "1500", None: "7.00"}
+
+
+async def test_correct_money_stores_the_canonical_string(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session)
+
+    response = await _correct(client, fields["subtotal"], "45.25")
+
+    assert response.status_code == 200
+    assert response.json()["corrected_value"] == "45.25"
+    await db_session.refresh(fields["subtotal"])
+    assert fields["subtotal"].corrected_value == "45.25"
+
+
+async def test_correct_money_accepts_a_number_and_pads_it(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session)
+
+    response = await _correct(client, fields["subtotal"], 45.5)
+
+    assert response.status_code == 200
+    await db_session.refresh(fields["subtotal"])
+    assert fields["subtotal"].corrected_value == "45.50"
+
+
+async def test_correct_money_with_too_many_decimals_is_422_with_a_sentence(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session)
+
+    response = await _correct(client, fields["subtotal"], "45.255")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "'45.255' has too many decimal places; USD allows at most 2 decimal places."
+    )
+    await db_session.refresh(fields["subtotal"])
+    # A refused correction leaves the field pending.
+    assert fields["subtotal"].reviewed_at is None
+    assert fields["subtotal"].corrected_value is None
+
+
+async def test_correct_money_follows_the_document_currency(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    jpy = await _seed_receipt(db_session, currency="JPY", subtotal=1500)
+
+    refused = await _correct(client, jpy["subtotal"], "1500.5")
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == (
+        "'1500.5' has too many decimal places; JPY allows no decimal places."
+    )
+
+    accepted = await _correct(client, jpy["subtotal"], "1500")
+    assert accepted.status_code == 200
+    assert accepted.json()["corrected_value"] == "1500"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["abc", "1,234.50", "45,25", "45 25", "1e3", "", True, [1], "-1000000000000", "1000000000000"],
+)
+async def test_correct_money_rejects_non_amounts(
+    client: AsyncClient, db_session: AsyncSession, bad
+) -> None:
+    fields = await _seed_receipt(db_session)
+
+    response = await _correct(client, fields["subtotal"], bad)
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+
+
+async def test_correct_line_items_stores_canonical_strings(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("line_items",))
+    rows = [
+        {"description": "Sourdough", "quantity": 5, "unit_price": "9.1", "total": 45.5},
+        {"description": None, "quantity": "2.50", "unit_price": None, "total": None},
+    ]
+
+    response = await _correct(client, fields["line_items"], rows)
+
+    assert response.status_code == 200
+    assert response.json()["corrected_value"] == [
+        {"description": "Sourdough", "quantity": "5", "unit_price": "9.10", "total": "45.50"},
+        {"description": None, "quantity": "2.5", "unit_price": None, "total": None},
+    ]
+
+
+@pytest.mark.parametrize(
+    "rows, fragment",
+    [
+        ([{"description": "x", "quantity": 1, "unit_price": 1, "price": 1}], "exactly the keys"),
+        ([{"description": "x", "quantity": 1, "unit_price": 1}], "exactly the keys"),
+        (["not an object"], "must be an object"),
+        ({"description": "x"}, "must be a list"),
+        (
+            [{"description": 3, "quantity": 1, "unit_price": 1, "total": 1}],
+            "description must be text",
+        ),
+        (
+            [{"description": "x", "quantity": 1, "unit_price": "9.155", "total": 1}],
+            "Line item 1 unit_price: ",
+        ),
+    ],
+)
+async def test_correct_line_items_rejects_a_malformed_row(
+    client: AsyncClient, db_session: AsyncSession, rows, fragment: str
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("line_items",))
+
+    response = await _correct(client, fields["line_items"], rows)
+
+    assert response.status_code == 422
+    assert fragment in response.json()["detail"]
+
+
+async def test_correct_currency_is_upper_cased_and_validated(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("currency",))
+
+    refused = await _correct(client, fields["currency"], "dollars")
+    assert refused.status_code == 422
+    assert "three-letter currency code" in refused.json()["detail"]
+
+    accepted = await _correct(client, fields["currency"], " usd ")
+    assert accepted.status_code == 200
+    assert accepted.json()["corrected_value"] == "USD"
+
+
+async def test_correct_to_null_is_allowed_for_every_typed_field(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("subtotal", "line_items", "currency"))
+
+    for name in ("subtotal", "line_items", "currency"):
+        response = await _correct(client, fields[name], None)
+        assert response.status_code == 200, name
+        assert response.json()["corrected_value"] is None
+
+
+async def test_an_older_numeric_correction_is_served_as_a_padded_string(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("subtotal", "line_items"))
+    # Corrections stored before the string contract are JSON numbers.
+    subtotal, line_items = fields["subtotal"], fields["line_items"]
+    subtotal.review_action = "corrected"
+    subtotal.corrected_value = 45.2
+    line_items.review_action = "corrected"
+    line_items.corrected_value = [
+        {"description": "Sourdough", "quantity": 5, "unit_price": 9.1, "total": 45.5}
+    ]
+    await db_session.commit()
+    extraction = await db_session.get(Extraction, subtotal.extraction_id)
+    assert extraction is not None
+
+    body = (await client.get(f"/documents/{extraction.document_id}")).json()
+
+    served = {f["field_name"]: f for f in body["extraction"]["fields"]}
+    assert served["subtotal"]["corrected_value"] == "45.20"
+    assert served["line_items"]["corrected_value"] == [
+        {"description": "Sourdough", "quantity": "5", "unit_price": "9.10", "total": "45.50"}
+    ]
+
+
+async def test_correct_money_without_a_currency_says_the_assumption(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session, currency=None)
+
+    response = await _correct(client, fields["subtotal"], "45.255")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "'45.255' has too many decimal places; "
+        "no currency is stated, so amounts allow at most 2 decimal places."
+    )
+
+
+@pytest.mark.parametrize("raw", ["45,25", "45 25"])
+async def test_correct_money_refuses_a_european_decimal_comma(
+    client: AsyncClient, db_session: AsyncSession, raw: str
+) -> None:
+    fields = await _seed_receipt(db_session)
+
+    response = await _correct(client, fields["subtotal"], raw)
+
+    assert response.status_code == 422
+    assert "not a plain number" in response.json()["detail"]
+    await db_session.refresh(fields["subtotal"])
+    assert fields["subtotal"].reviewed_at is None
+
+
+async def test_the_422_sentence_cuts_a_long_echoed_value(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session)
+
+    response = await _correct(client, fields["subtotal"], "9" * 500 + "x")
+
+    assert response.status_code == 422
+    assert len(response.json()["detail"]) < 250
+    assert "..." in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "quantity, fragment",
+    [
+        ("9" * 50, "quantities must be below"),
+        ("0.0000001", "quantities allow at most 6"),
+        ("1e308", "not a plain number"),
+        ("2,5", "not a plain number"),
+    ],
+)
+async def test_correct_line_items_bounds_the_quantity(
+    client: AsyncClient, db_session: AsyncSession, quantity: str, fragment: str
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("line_items",))
+    rows = [{"description": "x", "quantity": quantity, "unit_price": "1.00", "total": "1.00"}]
+
+    response = await _correct(client, fields["line_items"], rows)
+
+    assert response.status_code == 422
+    assert fragment in response.json()["detail"]
+    assert response.json()["detail"].startswith("Line item 1 quantity: ")
+
+
+async def test_correct_line_items_allows_a_negative_fractional_quantity(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("line_items",))
+    rows = [{"description": "return", "quantity": "-0.125", "unit_price": "8.00", "total": "-1.00"}]
+
+    response = await _correct(client, fields["line_items"], rows)
+
+    assert response.status_code == 200
+    assert response.json()["corrected_value"][0]["quantity"] == "-0.125"

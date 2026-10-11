@@ -5,7 +5,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document, Job
+from app.models import Document, ExtractedField, Extraction, Job
 from app.routers.documents import MAX_UPLOAD_SIZE
 
 # A minimal valid 1x1 transparent PNG.
@@ -129,3 +129,122 @@ async def test_upload_document_extension_from_mime_type(
     document = await db_session.get(Document, document_id)
     assert document is not None
     assert document.storage_path.endswith(".png")
+
+
+def _leaf(value, confidence: float = 0.95) -> dict:
+    return {"value": value, "confidence": confidence}
+
+
+async def _seed_extracted_document(
+    db_session: AsyncSession, fields: dict[str, dict | list]
+) -> Document:
+    """A document with one extraction holding the given stored field values."""
+    document = Document(
+        filename="016-handwriting-bakery-note.png",
+        mime_type="image/png",
+        storage_path=f"/tmp/{uuid.uuid4()}.png",
+        status="extracted",
+    )
+    db_session.add(document)
+    await db_session.flush()
+    extraction = Extraction(
+        document_id=document.id,
+        prompt_version="extract_v1",
+        model="claude-sonnet-5",
+        raw_response={},
+        input_tokens=100,
+        output_tokens=50,
+        cost_usd=0.001,
+        latency_ms=1000,
+    )
+    db_session.add(extraction)
+    await db_session.flush()
+    for name, value in fields.items():
+        db_session.add(
+            ExtractedField(
+                extraction_id=extraction.id,
+                field_name=name,
+                value=value,
+                confidence=0.95,
+                needs_review=False,
+            )
+        )
+    await db_session.commit()
+    return document
+
+
+async def test_get_document_serves_amounts_as_decimal_strings(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document = await _seed_extracted_document(
+        db_session,
+        {
+            "currency": _leaf("USD"),
+            "subtotal": _leaf(46.25),
+            "tax": _leaf(None),
+            "total": _leaf(46.2, 0.4),
+            "line_items": [
+                {
+                    "description": _leaf("Sourdough loaf"),
+                    "quantity": _leaf(5),
+                    "unit_price": _leaf(9.15),
+                    "total": _leaf(45.75),
+                },
+                {
+                    "description": _leaf("Rye"),
+                    "quantity": _leaf(2.5),
+                    "unit_price": _leaf("abc"),
+                    "total": _leaf(None),
+                },
+            ],
+        },
+    )
+
+    response = await client.get(f"/documents/{document.id}")
+
+    assert response.status_code == 200
+    fields = {f["field_name"]: f for f in response.json()["extraction"]["fields"]}
+    assert fields["subtotal"]["value"] == {"value": "46.25", "confidence": 0.95}
+    assert fields["tax"]["value"] == {"value": None, "confidence": 0.95}
+    # Padded to the minor unit; the confidence next to it stays a number.
+    assert fields["total"]["value"] == {"value": "46.20", "confidence": 0.4}
+    first, second = fields["line_items"]["value"]
+    assert first["quantity"]["value"] == "5"
+    assert first["unit_price"] == {"value": "9.15", "confidence": 0.95}
+    assert first["total"]["value"] == "45.75"
+    assert first["description"]["value"] == "Sourdough loaf"
+    assert second["quantity"]["value"] == "2.5"
+    # Garbage the model stored passes through for a later format check.
+    assert second["unit_price"]["value"] == "abc"
+    assert second["total"]["value"] is None
+    # Machine metrics stay numbers.
+    assert response.json()["extraction"]["cost_usd"] == 0.001
+
+
+async def test_get_document_pads_to_the_document_currency(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    jpy = await _seed_extracted_document(
+        db_session, {"currency": _leaf("jpy"), "total": _leaf(1500)}
+    )
+    kwd = await _seed_extracted_document(
+        db_session, {"currency": _leaf("KWD"), "total": _leaf(1.5)}
+    )
+    no_currency = await _seed_extracted_document(db_session, {"total": _leaf(7)})
+    extra_digits = await _seed_extracted_document(
+        db_session, {"currency": _leaf("USD"), "total": _leaf(46.255)}
+    )
+
+    async def total_of(document: Document) -> str:
+        body = (await client.get(f"/documents/{document.id}")).json()
+        return next(
+            f["value"]["value"]
+            for f in body["extraction"]["fields"]
+            if f["field_name"] == "total"
+        )
+
+    assert await total_of(jpy) == "1500"
+    assert await total_of(kwd) == "1.500"
+    assert await total_of(no_currency) == "7.00"
+    # More digits than the currency allows are kept, so a misread shows.
+    assert await total_of(extra_digits) == "46.255"
