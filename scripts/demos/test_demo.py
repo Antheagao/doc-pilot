@@ -116,6 +116,13 @@ def test_record_all_skips_the_smoke_scenario(monkeypatch: pytest.MonkeyPatch) ->
     assert demo.resolve_slugs(["all"]) == ["search-hybrid"]
 
 
+def test_record_all_puts_the_dashboard_after_the_live_takes() -> None:
+    # The dashboard shows today's real runs, which the live takes create.
+    slugs = demo.resolve_slugs(["all"])
+    assert slugs.index("monitoring-dashboard") > slugs.index("document-chat")
+    assert "monitoring-dashboard" not in demo.LIVE_SLUGS
+
+
 def test_record_all_with_only_smoke_registered_says_so(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

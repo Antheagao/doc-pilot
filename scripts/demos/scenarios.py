@@ -199,11 +199,59 @@ def document_chat(page: Page, rec: Recording) -> None:
     rec.end_hold()
 
 
+# The spend chart's last column is today. The plot box includes the axis
+# margins, so the pointer's fraction of it (about 1077 of the 131 to 1148
+# px at 1280 wide) lands in the last of the 30 day slots, at mid height.
+TODAY_COLUMN = (0.93, 0.5)
+# How far the page scrolls from the eval half to the production half: the
+# Production heading ends up near the top of the 800 px viewport.
+PRODUCTION_SCROLL_PX = 690
+
+
+def monitoring_dashboard(page: Page, rec: Recording) -> None:
+    """Both halves of /dashboard: the eval history, a slow scroll to the
+    production half (the replayed extraction days and today's real runs),
+    and the spend chart's tooltip for today."""
+    eval_tab = page.get_by_role("group", name="Eval suite").get_by_role(
+        "button", name=re.compile(r"^Extraction")
+    )
+    spend = page.get_by_role("img", name="Model spend per day by stage")
+    rec.open(
+        f"{rec.base_url}/dashboard",
+        page.get_by_role("img", name="cost per document per eval run"),
+        spend,
+    )
+    # Real data only: nothing here is staged, so a missing half fails the
+    # take rather than recording an empty chart.
+    if eval_tab.inner_text().split()[-1] == "0":
+        raise ScenarioError("the dashboard shows no extraction eval runs")
+    extracted = page.get_by_text(re.compile(r"^\d+ documents extracted$"))
+    if extracted.inner_text().startswith("0 "):
+        raise ScenarioError(
+            "the dashboard shows no replayed documents: run `demo.py seed --reset`"
+        )
+    answers = page.locator(".stat-tile").filter(
+        has=page.get_by_text("Answers", exact=True)
+    )
+    if answers.locator(".stat-value").inner_text() == "0":
+        raise ScenarioError(
+            "the dashboard shows no answers from today: record `ask-agent` first"
+        )
+    rec.beat(3)
+    rec.scroll(PRODUCTION_SCROLL_PX)
+    rec.beat()
+    rec.glide(spend, at=TODAY_COLUMN)
+    page.locator(".chart-tooltip").first.wait_for(state="visible")
+    rec.beat(3)
+    rec.end_hold()
+
+
 SCENARIOS: dict[str, Scenario] = {
     SMOKE_SLUG: smoke,
     "search-hybrid": search_hybrid,
     "review-correction": review_correction,
     "ask-agent": ask_agent,
     "document-chat": document_chat,
+    "monitoring-dashboard": monitoring_dashboard,
 }
 LIVE_SLUGS = frozenset({"ask-agent", "document-chat"})

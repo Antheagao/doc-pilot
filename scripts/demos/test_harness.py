@@ -148,3 +148,30 @@ def test_park_glides_the_pointer_back_to_its_resting_spot(tmp_path: Path) -> Non
     assert len(page.moves) == harness.MOVE_STEPS
     assert page.moves[-1] == pytest.approx(harness.START_POINTER)
     assert rec._pointer == harness.START_POINTER
+
+
+class FakeLocator:
+    def __init__(self, box: dict[str, float] | None) -> None:
+        self.box = box
+
+    def scroll_into_view_if_needed(self) -> None:
+        pass
+
+    def bounding_box(self) -> dict[str, float] | None:
+        return self.box
+
+
+def test_glide_defaults_to_the_center_and_takes_another_point(tmp_path: Path) -> None:
+    rec, page, _ = make(tmp_path)
+    box = {"x": 100.0, "y": 200.0, "width": 400.0, "height": 100.0}
+    rec.glide(FakeLocator(box))  # type: ignore[arg-type]
+    assert page.moves[-1] == pytest.approx((300.0, 250.0))
+    rec.glide(FakeLocator(box), at=(0.9, 0.25))  # type: ignore[arg-type]
+    assert page.moves[-1] == pytest.approx((460.0, 225.0))
+    assert rec._pointer == pytest.approx((460.0, 225.0))
+
+
+def test_glide_to_an_element_without_a_box_fails(tmp_path: Path) -> None:
+    rec, _, _ = make(tmp_path)
+    with pytest.raises(RuntimeError, match="no bounding box"):
+        rec.glide(FakeLocator(None))  # type: ignore[arg-type]

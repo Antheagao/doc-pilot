@@ -211,15 +211,19 @@ class Recording:
         """Hold the final state so the loop does not cut off mid-thought."""
         self.page.wait_for_timeout(END_HOLD * 1000)
 
-    def glide(self, locator: Locator) -> None:
+    def glide(self, locator: Locator, at: tuple[float, float] = (0.5, 0.5)) -> None:
         """Scroll the element into view and move the cursor to its center
         along an eased path, so the motion reads on a 12 fps GIF (a plain
-        mouse.move(steps=N) jumps there in a few milliseconds)."""
+        mouse.move(steps=N) jumps there in a few milliseconds). `at` is
+        another point of the element as fractions of its width and height,
+        for hovering a spot of a chart rather than its middle."""
         locator.scroll_into_view_if_needed()
         box = locator.bounding_box()
         if box is None:
             raise RuntimeError(f"{locator} has no bounding box to glide to")
-        self._glide_to(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        self._glide_to(
+            box["x"] + box["width"] * at[0], box["y"] + box["height"] * at[1]
+        )
 
     def park(self) -> None:
         """Glide the cursor back to its resting spot in the right gutter,

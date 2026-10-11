@@ -42,8 +42,9 @@ The 2026-10-09 disk blocker is resolved (Anthony freed C: on 2026-10-10).
   Anthony approved the spend on 2026-10-11 (cap $1.50) and chose real data only for the dashboard.
   *Result:* `ask-agent.gif` (9.9 s) and `document-chat.gif` (9.8 s) pass `demo.py check`; about $0.14 spent in all, including retakes and one verification call. The first live take exposed a production bug: every `/ask` or chat question that called `query_extractions` failed with an API 400, because its summary was a text block beside `search_result` blocks; fixed, with a tool-result invariant enforced in the loop and a test that drives every tool through happy, empty, and error paths.
   Follow-up seen in a discarded take: answers can contain Markdown (`**Date:**`) that the UI renders as raw asterisks; render a safe Markdown subset or tell the prompts to answer in plain text.
-- [ ] **T0.6 Monitoring dashboard GIF** - both halves (eval history from committed artifacts, production spend from the replayed 14 days plus today's live runs), one tooltip, short slow scroll.
+- [x] **T0.6 Monitoring dashboard GIF** - both halves (eval history from committed artifacts, production spend from the replayed 14 days plus today's live runs), one tooltip, short slow scroll.
   *Verify:* `demo.py check` passes.
+  *Result:* `monitoring-dashboard.gif` (8.3 s, 747 KB): the eval half (Sonnet vs Haiku runs) then the production half, with the spend tooltip on today's real answer runs beside 14 replayed days; real data only, no model calls, no dashboard defects found.
 - [ ] **T0.7 README Features gallery and recording docs** - "## Features" section with one GIF and one sentence per feature, captions stating what is real (replayed Sonnet run, gold page text, live Opus for ask/chat, fast-forward disclosed); "Recording the demos" subsection.
   *Verify:* every `screenshots/features/*.gif` linked from README exists; `screenshots/features` totals < 5 MB; renders on GitHub.
 
