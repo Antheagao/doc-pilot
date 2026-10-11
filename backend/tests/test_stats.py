@@ -100,6 +100,7 @@ async def test_stats_reflects_seeded_document_and_extractions(
             value={"value": "Acme", "confidence": 0.5},
             confidence=0.5,
             needs_review=True,
+            review_reason="confidence",
         )
     )
     db_session.add(

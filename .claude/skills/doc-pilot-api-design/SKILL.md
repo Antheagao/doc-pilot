@@ -41,6 +41,8 @@ Load the global `api-design` guide for the rules; this file holds what exists he
 - A correction may send an amount as a string or a number; it is validated against the currency (`parse_amount_input`) and stored as the canonical string, so older numeric corrections and new string ones both serve as strings.
   `currency` corrections are three letters, upper-cased, not checked against the ISO table; `vendor` and `document_date` are stored as sent.
 - `ReviewQueueItem.currency` is the document's currency as stated (a correction wins), trimmed and upper-cased, null when unstated; a non-ISO code passes through, and the queue's `value` is already padded to its digits.
+- `ExtractedFieldOut.review_reason` and `ReviewQueueItem.review_reason` are `confidence` or `reconciliation:<check id>`.
+  `ExtractionOut.reconciliation` is the stored report validated by `ReconciliationOut` (null for an extraction nobody has reconciled), and a queue item adds the extraction's failing `checks` that involve its field and the `suggestion` when it targets that field; resolving a field recomputes the report in the same transaction.
 - A `422` sentence names the currency (`JPY allows no decimal places`, or `no currency is stated, so amounts allow at most 2 decimal places`), echoes a rejected value cut to 80 characters, and line-item quantities are limited to 6 decimal places and a magnitude below 10^12 (negatives allowed).
 - Limits are `Query(ge=1, le=...)`: documents and review queue 50 (max 200), ask runs and conversations 20 (max 100), search `k` 5 (max 50), `/monitoring/daily` `days` 30 (max 366).
 

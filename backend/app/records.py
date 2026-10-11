@@ -8,16 +8,18 @@ made one, otherwise the model's value. This module is that rule, in one
 place.
 """
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.extraction import LINE_ITEM_MONEY_KEYS, MONEY_FIELDS
-from app.models import Document, ExtractedField, Extraction
+from app.models import Document, ExtractedField, Extraction, Reconciliation
 from app.money import (
     CurrencyPrecision,
     MoneyError,
@@ -29,7 +31,9 @@ from app.money import (
     to_decimal,
     to_plain_string,
 )
-from app.schemas import ExtractedFieldOut
+from app.schemas import ExtractedFieldOut, ReconciliationOut
+
+logger = logging.getLogger(__name__)
 
 LINE_ITEM_KEYS = ("description", "quantity", *LINE_ITEM_MONEY_KEYS)
 
@@ -220,12 +224,25 @@ def field_to_out(field: ExtractedField, minor_units: int) -> ExtractedFieldOut:
         value=api_field_value(field.field_name, field.value, minor_units),
         confidence=field.confidence,
         needs_review=field.needs_review,
+        review_reason=field.review_reason,
         reviewed_at=field.reviewed_at,
         review_action=field.review_action,
         corrected_value=api_corrected_value(
             field.field_name, field.corrected_value, minor_units
         ),
     )
+
+
+def reconciliation_to_out(row: Reconciliation) -> ReconciliationOut | None:
+    """A stored reconciliation as the API serves it: the report JSON,
+    validated, plus when it was computed. A report that does not validate
+    (written by a rules version this code does not know) is logged and served
+    as no reconciliation, so one bad row never fails the whole document."""
+    try:
+        return ReconciliationOut.model_validate({**row.report, "computed_at": row.computed_at})
+    except ValidationError:
+        logger.exception("stored reconciliation %s does not validate; serving none", row.id)
+        return None
 
 
 def _normalize_line_item(

@@ -38,9 +38,90 @@ class ExtractedFieldOut(BaseModel):
     value: Any
     confidence: float
     needs_review: bool
+    # Why the field is flagged: "confidence" or "reconciliation:<check id>";
+    # null exactly when needs_review is false. A reviewed field keeps both.
+    review_reason: str | None = None
     reviewed_at: datetime | None = None
     review_action: Literal["approved", "corrected"] | None = None
     corrected_value: Any = None
+
+
+# The closed sets of rules_v1 (operand source: extracted, approved, corrected,
+# computed, assumed, included; check kind: equation, bound, presence, format;
+# status: pass, fail, skipped) are plain strings here, because the stored
+# report is read back by whatever rules version wrote it: a later version
+# that adds a value must not turn every read of an older or newer row into a
+# validation error. The frontend types keep the narrow unions.
+
+
+class OperandOut(BaseModel):
+    """A number a check used (`reconcile.report_to_json`). `value` is a
+    decimal string, or null when the field is missing or unusable."""
+
+    path: str
+    value: str | None
+    source: str
+    verified: bool
+
+
+class TermOut(BaseModel):
+    coef: str | None
+    operand: OperandOut
+
+
+class CheckOut(BaseModel):
+    """One rule's verdict. An equation reads `sum(coef * operand) = rhs`:
+    `expected` is the left side, `actual` the right, `delta = actual -
+    expected`, and it passes when `abs(delta) <= tolerance`. Amounts are
+    decimal strings padded to the currency's minor unit; the `tax_rate`
+    check's `actual` is the rate to four places."""
+
+    id: str
+    kind: str
+    formula: str
+    terms: list[TermOut]
+    rhs: OperandOut | None
+    expected: str | None
+    actual: str | None
+    delta: str | None
+    tolerance: str | None
+    status: str
+    detail: str | None
+    fields: list[str]
+    all_operands_verified: bool
+
+
+class DerivedOut(BaseModel):
+    path: str
+    value: str | None
+    formula: str
+
+
+class SuggestionOut(BaseModel):
+    """The one change that fixes every failing check without breaking a
+    passing one: set `path` (a field name, or `line_items[i].total`) to
+    `value`."""
+
+    path: str
+    value: str
+    current: str | None
+    check_ids: list[str]
+    detail: str
+
+
+class ReconciliationOut(BaseModel):
+    """Whether a document's amounts add up (app/reconcile.py), as stored in
+    `reconciliations.report`. Amounts stay strings."""
+
+    rules_version: str
+    status: str
+    currency: str | None
+    minor_units: int
+    assumptions: list[str]
+    derived: list[DerivedOut]
+    checks: list[CheckOut]
+    suggestion: SuggestionOut | None
+    computed_at: datetime
 
 
 class ExtractionOut(BaseModel):
@@ -55,6 +136,9 @@ class ExtractionOut(BaseModel):
     output_tokens: int
     created_at: datetime
     fields: list[ExtractedFieldOut]
+    # Null for an extraction nobody has reconciled yet (scripts/reconcile_all.py
+    # fills those in).
+    reconciliation: ReconciliationOut | None = None
 
 
 class DocumentDetail(BaseModel):
@@ -81,6 +165,13 @@ class ReviewQueueItem(BaseModel):
     # minor unit (2 when the code is missing or unlisted).
     currency: str | None
     confidence: float
+    # "confidence" or "reconciliation:<check id>" (see ExtractedFieldOut).
+    review_reason: str
+    # The failing checks of the extraction's reconciliation that involve this
+    # field, in report order; empty for a confidence flag nothing contradicts.
+    checks: list[CheckOut]
+    # The reconciliation's suggested fix, when it targets this field.
+    suggestion: SuggestionOut | None
     document_id: uuid.UUID
     filename: str
     extraction_id: uuid.UUID

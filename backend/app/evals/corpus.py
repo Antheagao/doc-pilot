@@ -12,12 +12,14 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings, get_settings
 from app.evals.dataset import EvalCase
 from app.evals.retrieval import GoldDoc
 from app.extraction import TOP_LEVEL_FIELDS
 from app.models import Document, ExtractedField, Extraction
 from app.retrieval.embeddings import Embedder
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
+from app.review_routing import refresh_reconciliation
 
 GOLD_MODEL = "gold-labels"
 
@@ -32,8 +34,13 @@ async def seed_labeled_corpus(
     corpus: list[GoldDoc],
     embedder: Embedder,
     chunking: ChunkingConfig,
+    *,
+    settings: Settings | None = None,
 ) -> dict[str, uuid.UUID]:
-    """Seed every case that has gold text; returns doc_id -> Document.id."""
+    """Seed every case that has gold text; returns doc_id -> Document.id.
+    Each extraction is reconciled like a worker's would be (the labels all
+    pass, so nothing is flagged)."""
+    settings = settings or get_settings()
     gold_text = {doc.doc_id: doc.text for doc in corpus}
     ids: dict[str, uuid.UUID] = {}
     for case in cases:
@@ -75,6 +82,8 @@ async def seed_labeled_corpus(
                     needs_review=False,
                 )
             )
+        await session.flush()
+        await refresh_reconciliation(session, extraction.id, settings)
         await index_document_pages(
             session,
             document.id,

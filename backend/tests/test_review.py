@@ -10,9 +10,20 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
-from app.models import Document, ExtractedField, Extraction
+from app.config import Settings
+from app.extraction import build_extracted_fields
+from app.models import (
+    REVIEW_REASON_CONFIDENCE,
+    Document,
+    ExtractedField,
+    Extraction,
+    Reconciliation,
+)
+from app.review_routing import refresh_reconciliation
 
 
 async def _seed_field(
@@ -54,6 +65,7 @@ async def _seed_field(
         value=value if value is not None else {"value": "Acme", "confidence": confidence},
         confidence=confidence,
         needs_review=needs_review,
+        review_reason=REVIEW_REASON_CONFIDENCE if needs_review else None,
     )
     db_session.add(field)
     await db_session.commit()
@@ -284,6 +296,7 @@ async def _seed_receipt(
             value=value,
             confidence=0.5 if name in flagged else 0.99,
             needs_review=name in flagged,
+            review_reason=REVIEW_REASON_CONFIDENCE if name in flagged else None,
         )
         db_session.add(fields[name])
     await db_session.commit()
@@ -565,3 +578,225 @@ async def test_correct_line_items_allows_a_negative_fractional_quantity(
 
     assert response.status_code == 200
     assert response.json()["corrected_value"][0]["quantity"] == "-0.125"
+
+
+# ---- Reconciliation routing --------------------------------------------------
+
+THRESHOLD_SETTINGS = Settings(review_threshold=0.8)
+
+
+def _leaf(value, confidence=0.99):
+    return {"value": value, "confidence": confidence}
+
+
+async def _seed_016(db_session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, dict[str, ExtractedField]]:
+    """The staged bakery receipt: lines 36.60 + 8.65 = 45.25, tax 3.05, total
+    48.30, and a subtotal misread as 46.25 with confidence 0.68. Stored and
+    routed the way the worker does it."""
+    tool_input = {
+        "vendor": _leaf("Bakery"),
+        "document_date": _leaf("2025-03-01"),
+        "line_items": _leaf(
+            [
+                {
+                    "description": _leaf("Sourdough"),
+                    "quantity": _leaf(4),
+                    "unit_price": _leaf(9.15),
+                    "total": _leaf(36.6),
+                },
+                {
+                    "description": _leaf("Rolls"),
+                    "quantity": _leaf(1),
+                    "unit_price": _leaf(8.65),
+                    "total": _leaf(8.65),
+                },
+            ]
+        ),
+        "subtotal": _leaf(46.25, 0.68),
+        "tax": _leaf(3.05),
+        "total": _leaf(48.3),
+        "currency": _leaf("USD"),
+    }
+    document = Document(
+        filename="016.png", mime_type="image/png", storage_path="/tmp/016.png", status="extracted"
+    )
+    db_session.add(document)
+    await db_session.flush()
+    extraction = Extraction(
+        document_id=document.id,
+        prompt_version="extract_v1",
+        model="claude-sonnet-5",
+        raw_response=tool_input,
+        input_tokens=1,
+        output_tokens=1,
+        cost_usd=0,
+        latency_ms=1,
+    )
+    db_session.add(extraction)
+    await db_session.flush()
+    fields = build_extracted_fields(extraction.id, tool_input, THRESHOLD_SETTINGS.review_threshold)
+    db_session.add_all(fields)
+    await db_session.flush()
+    await refresh_reconciliation(db_session, extraction.id, THRESHOLD_SETTINGS)
+    await db_session.commit()
+    return document.id, extraction.id, {f.field_name: f for f in fields}
+
+
+async def _queue_for(client: AsyncClient, extraction_id: uuid.UUID) -> dict[str, dict]:
+    items = (await client.get("/review/queue")).json()
+    return {i["field_name"]: i for i in items if i["extraction_id"] == str(extraction_id)}
+
+
+async def test_queue_item_carries_the_reason_the_failing_checks_and_the_suggestion(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    _, extraction_id, _ = await _seed_016(db_session)
+
+    queue = await _queue_for(client, extraction_id)
+
+    # Only the suggested field is flagged; the operands it would fix are not.
+    assert set(queue) == {"subtotal"}
+    item = queue["subtotal"]
+    assert item["review_reason"] == "reconciliation:lines_sum"
+    assert [c["id"] for c in item["checks"]] == ["lines_sum", "total_math"]
+    assert item["checks"][0]["status"] == "fail"
+    assert item["checks"][0]["delta"] == "1.00"
+    assert item["suggestion"]["path"] == "subtotal"
+    assert (item["suggestion"]["value"], item["suggestion"]["current"]) == ("45.25", "46.25")
+
+
+async def test_a_confidence_flag_has_no_checks_and_no_suggestion(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    field = await _seed_field(db_session)
+
+    item = {i["field_id"]: i for i in (await client.get("/review/queue")).json()}[str(field.id)]
+
+    assert item["review_reason"] == "confidence"
+    assert item["checks"] == []
+    assert item["suggestion"] is None
+
+
+async def test_correcting_the_culprit_recomputes_and_clears_the_queue(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document_id, extraction_id, fields = await _seed_016(db_session)
+
+    response = await _correct(client, fields["subtotal"], "45.25")
+
+    assert response.status_code == 200
+    assert response.json()["review_reason"] == "reconciliation:lines_sum"  # frozen once reviewed
+    assert await _queue_for(client, extraction_id) == {}
+    extraction = (await client.get(f"/documents/{document_id}")).json()["extraction"]
+    assert extraction["reconciliation"]["status"] == "pass"
+    assert [c for c in extraction["reconciliation"]["checks"] if c["status"] == "fail"] == []
+    assert extraction["reconciliation"]["suggestion"] is None
+    unreviewed = [f for f in extraction["fields"] if f["reviewed_at"] is None]
+    assert not any(f["needs_review"] for f in unreviewed)
+    assert all(f["review_reason"] is None for f in unreviewed)
+
+
+async def test_approving_the_wrong_value_flags_the_other_operands(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document_id, extraction_id, fields = await _seed_016(db_session)
+
+    response = await client.post(
+        f"/review/fields/{fields['subtotal'].id}/resolve", json={"action": "approve"}
+    )
+
+    assert response.status_code == 200
+    queue = await _queue_for(client, extraction_id)
+    assert {n: i["review_reason"] for n, i in queue.items()} == {
+        "line_items": "reconciliation:lines_sum",
+        "tax": "reconciliation:total_math",
+        "total": "reconciliation:total_math",
+    }
+    assert all(i["suggestion"] is None and i["checks"] for i in queue.values())
+    extraction = (await client.get(f"/documents/{document_id}")).json()["extraction"]
+    assert extraction["reconciliation"]["status"] == "fail"
+
+    # Correcting the real culprit afterwards clears the rest.
+    line_items = [
+        {"description": "Sourdough", "quantity": "4", "unit_price": "9.15", "total": "36.60"},
+        {"description": "Rolls", "quantity": "1", "unit_price": "9.65", "total": "9.65"},
+    ]
+    assert (await _correct(client, fields["line_items"], line_items)).status_code == 200
+    queue = await _queue_for(client, extraction_id)
+    # 36.60 + 9.65 = 46.25 now agrees with the approved subtotal; total_math remains.
+    assert {n: i["review_reason"] for n, i in queue.items()} == {
+        "tax": "reconciliation:total_math",
+        "total": "reconciliation:total_math",
+    }
+
+
+async def test_a_document_nobody_reconciled_serves_no_reconciliation(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    field = await _seed_field(db_session)
+    extraction = await db_session.get(Extraction, field.extraction_id)
+
+    body = (await client.get(f"/documents/{extraction.document_id}")).json()
+
+    assert body["extraction"]["reconciliation"] is None
+    assert body["extraction"]["fields"][0]["review_reason"] == "confidence"
+
+
+async def _stored_report(db_session: AsyncSession, extraction_id: uuid.UUID) -> Reconciliation:
+    return (
+        await db_session.execute(
+            select(Reconciliation).where(Reconciliation.extraction_id == extraction_id)
+        )
+    ).scalar_one()
+
+
+async def test_a_value_from_a_newer_rules_version_is_served_as_stored(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document_id, extraction_id, _ = await _seed_016(db_session)
+    row = await _stored_report(db_session, extraction_id)
+    report = row.report
+    lines_sum = next(c for c in report["checks"] if c["id"] == "lines_sum")
+    lines_sum["kind"] = "ratio"
+    lines_sum["terms"][0]["operand"]["source"] = "discount"
+    row.report = report
+    flag_modified(row, "report")
+    await db_session.commit()
+
+    queue = await _queue_for(client, extraction_id)
+    detail = (await client.get(f"/documents/{document_id}")).json()
+
+    assert queue["subtotal"]["checks"][0]["kind"] == "ratio"
+    assert queue["subtotal"]["suggestion"]["value"] == "45.25"
+    served = next(c for c in detail["extraction"]["reconciliation"]["checks"] if c["id"] == "lines_sum")
+    assert served["terms"][0]["operand"]["source"] == "discount"
+
+
+async def test_an_unreadable_stored_report_costs_only_its_own_context(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document_id, extraction_id, _ = await _seed_016(db_session)
+    other = await _seed_field(db_session)
+    row = await _stored_report(db_session, extraction_id)
+    report = row.report
+    del next(c for c in report["checks"] if c["id"] == "lines_sum")["status"]
+    row.report = report
+    flag_modified(row, "report")
+    await db_session.commit()
+
+    queue_response = await client.get("/review/queue")
+    detail_response = await client.get(f"/documents/{document_id}")
+
+    assert queue_response.status_code == 200
+    subtotal = next(
+        i for i in queue_response.json() if i["extraction_id"] == str(extraction_id)
+    )
+    # The item is still queued with its reason; only the checks and suggestion go.
+    assert subtotal["review_reason"] == "reconciliation:lines_sum"
+    assert subtotal["checks"] == []
+    assert subtotal["suggestion"] is None
+    assert str(other.id) in {i["field_id"] for i in queue_response.json()}
+    assert detail_response.status_code == 200
+    body = detail_response.json()["extraction"]
+    assert body["reconciliation"] is None
+    assert len(body["fields"]) == 7

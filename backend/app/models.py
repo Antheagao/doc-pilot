@@ -40,6 +40,19 @@ JOB_KIND_INDEX = "index"
 # path. See app/evals/online.py.
 JOB_KIND_JUDGE = "judge"
 
+# ExtractedField.review_reason values: why a field is flagged. 'confidence' is
+# the model's own doubt (confidence under Settings.review_threshold);
+# 'reconciliation:<check_id>' is a failed arithmetic check that names the field
+# (app/reconcile.py, routed by app/review_routing.py). NULL exactly when the
+# field is not flagged (ck_extracted_fields_review_reason_matches).
+REVIEW_REASON_CONFIDENCE = "confidence"
+REVIEW_REASON_RECONCILIATION_PREFIX = "reconciliation:"
+
+
+def reconciliation_reason(check_id: str) -> str:
+    """The review_reason for a field flagged by the failing check `check_id`."""
+    return f"{REVIEW_REASON_RECONCILIATION_PREFIX}{check_id}"
+
 
 class Document(Base):
     __tablename__ = "documents"
@@ -126,6 +139,16 @@ class ExtractedField(Base):
         # The review-queue scan: fields with needs_review=true and
         # reviewed_at IS NULL are the pending queue (see routers/review.py).
         Index("ix_extracted_fields_review_queue", "needs_review", "reviewed_at"),
+        CheckConstraint(
+            "review_reason ~ '^(confidence|reconciliation:.+)$'",
+            name="ck_extracted_fields_review_reason",
+        ),
+        # A reviewed field keeps needs_review (and its reason) as they were
+        # when a person resolved it; the queue filters on reviewed_at too.
+        CheckConstraint(
+            "needs_review = (review_reason IS NOT NULL)",
+            name="ck_extracted_fields_review_reason_matches",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -138,6 +161,10 @@ class ExtractedField(Base):
     value: Mapped[dict] = mapped_column(JSONB, nullable=False)
     confidence: Mapped[float] = mapped_column(nullable=False)
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Why needs_review is set (REVIEW_REASON_*); NULL when it is not. Kept in
+    # step with the reconciliation by app/review_routing.py until a person
+    # reviews the field, after which both are frozen.
+    review_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     # Human review resolution. All three stay NULL until a reviewer acts;
     # review_action is 'approved' (extracted value confirmed) or
     # 'corrected' (corrected_value holds the human-supplied replacement).
@@ -149,6 +176,41 @@ class ExtractedField(Base):
     )
     review_action: Mapped[str | None] = mapped_column(String, nullable=True)
     corrected_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class Reconciliation(Base):
+    """The arithmetic check of one extraction (app/reconcile.py): do the
+    subtotal, tax, total, and line items agree? One row per extraction,
+    recomputed on write by app/review_routing.refresh_reconciliation (the
+    worker, the seed, every review resolve, scripts/reconcile_all.py).
+
+    `report` is reconcile.report_to_json(...) verbatim, the audit record of
+    what each check used and said; `status` and `rules_version` repeat its
+    two keys so a query can filter without opening the JSON. `status` is
+    'pass', 'fail', or 'skipped' (nothing could be checked). There is no
+    index on status: three values over one row per extraction, and a report
+    query starts from the extraction or document and joins on the unique
+    extraction_id.
+    """
+
+    __tablename__ = "reconciliations"
+    __table_args__ = (
+        UniqueConstraint("extraction_id", name="uq_reconciliations_extraction_id"),
+        CheckConstraint("status IN ('pass', 'fail', 'skipped')", name="ck_reconciliations_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    extraction_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("extractions.id", ondelete="CASCADE"), nullable=False
+    )
+    rules_version: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class DocumentPage(Base):

@@ -13,7 +13,7 @@ Load the global `design-principles` guide for the rules; this file holds what ex
 - The browser calls the API directly at `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`, inlined at build time); `CORS_ORIGINS` admits the frontend; there is no proxy and no auth.
 - API: `backend/app/main.py` mounts `app/routers/` at the root behind `MaxBodySizeMiddleware` (20 MB) and `SecurityHeadersMiddleware`.
 - Worker: `python -m app.worker`, one process, one job at a time; `claim_job` takes the oldest `pending` row with `FOR UPDATE SKIP LOCKED`, and `dispatch_job` routes `jobs.kind` through `HANDLERS`.
-- `extract` (`extraction.process_document_job`): forced tool use (`tool_choice` names `record_extraction`), `{value, confidence}` leaves, one schema-repair reprompt, PDFs over `pdf_max_pages_per_call` split per page and merged; fields under `review_threshold` get `needs_review`.
+- `extract` (`extraction.process_document_job`): forced tool use (`tool_choice` names `record_extraction`), `{value, confidence}` leaves, one schema-repair reprompt, PDFs over `pdf_max_pages_per_call` split per page and merged; fields under `review_threshold` get `needs_review` with `review_reason` `confidence`, then `review_routing.refresh_reconciliation` (inside a savepoint, so a rules failure is logged and costs only the reconciliation, never the billed extraction) stores the `reconciliations` row and re-routes the flags.
 - `index` (`retrieval/index_job.process_index_job`), enqueued by the extract job in its own transaction: `transcription.py` (one page per call), `retrieval/chunking.py`, an `Embedder`, then pgvector plus full-text hybrid search fused by RRF (`retrieval/search.py`).
 - `judge` (`evals/online.process_judge_job`): grades a sampled `AskRun` for groundedness (`ASK_JUDGE_SAMPLE_RATE`).
 - `/ask` (`routers/ask.py`, `agent/loop.py`, `agent/tools.py`): a manual tool-use loop over `search_documents`, `query_extractions`, and `get_page`, capped by `agent_max_steps` and `agent_max_cost_usd`; every answer is stored as an `AskRun`.
@@ -29,7 +29,8 @@ Load the global `design-principles` guide for the rules; this file holds what ex
 - A model call reuses `_build_client`, `_classify_api_error`, `_ensure_model_priced`, and `PRICING_PER_MTOK` from `extraction.py`, loads a versioned file from `backend/prompts/`, opens a `model_call_span`, and stores its cost on a row that `budget.spent_today_usd` sums.
 - A model-touching feature ships with an eval before it ships to the demo.
 - Arithmetic over money never goes to a model ("the model reads, code computes", `FUTURE.md`).
-- Planned (`FUTURE.md`): `app/money.py` and `app/reconcile.py` (Batch A), `app/grounding.py` behind an `OcrProvider` (Batch C), `/reports/totals` (Batch D); Batch 0 adds `app/demo_seed.py` and `scripts/demos/`.
+- Reconciliation (Batch A): `app/money.py` (exact decimals), `app/reconcile.py` (pure rules and report), `app/review_routing.py` (`route` is the pure flag table; `refresh_reconciliation` is the only database writer and every path that creates or resolves fields calls it); `scripts/reconcile_all.py` backfills old extractions (`--dry-run` previews).
+- Planned (`FUTURE.md`): `app/grounding.py` behind an `OcrProvider` (Batch C), `/reports/totals` (Batch D); Batch 0 adds `app/demo_seed.py` and `scripts/demos/`.
 
 ## Environment variables
 

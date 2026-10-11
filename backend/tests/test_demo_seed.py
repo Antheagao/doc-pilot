@@ -35,7 +35,13 @@ from app.demo_seed import (
     seed_demo_data,
 )
 from app.extraction import TOP_LEVEL_FIELDS
-from app.models import Document, DocumentPage, ExtractedField, Extraction
+from app.models import (
+    Document,
+    DocumentPage,
+    ExtractedField,
+    Extraction,
+    Reconciliation,
+)
 from app.retrieval.embeddings import HashingEmbedder
 from app.routers.documents import ALLOWED_MIME_TYPES
 
@@ -340,3 +346,52 @@ async def test_cli_refuses_a_non_empty_database_without_reset_and_replaces_it_wi
     assert "Seeded 25 documents, 4 fields pending review" in capsys.readouterr().out
     assert (await db_session.execute(select(func.count()).select_from(Document))).scalar_one() == 25
     assert len(list(tmp_path.iterdir())) == 25
+
+
+async def test_seed_reconciles_every_extraction_and_only_the_staged_misread_fails(
+    db_session: AsyncSession, seeded: SeedSummary
+) -> None:
+    ids = list(seeded.document_ids.values())
+    rows = (
+        await db_session.execute(
+            select(Extraction.document_id, Reconciliation.status)
+            .join(Reconciliation, Reconciliation.extraction_id == Extraction.id)
+            .where(Extraction.document_id.in_(ids))
+        )
+    ).all()
+    statuses = {document_id: status for document_id, status in rows}
+    assert set(statuses) == set(ids)
+    assert {d for d, status in statuses.items() if status == "fail"} == {
+        seeded.document_ids[STAGED.doc_id]
+    }
+    assert set(statuses.values()) <= {"pass", "fail"}
+
+
+async def test_the_staged_subtotal_is_flagged_by_the_arithmetic_and_pending_stays_four(
+    db_session: AsyncSession, seeded: SeedSummary
+) -> None:
+    document_id = seeded.document_ids[STAGED.doc_id]
+    fields = (
+        await db_session.execute(
+            select(ExtractedField)
+            .join(Extraction, ExtractedField.extraction_id == Extraction.id)
+            .where(Extraction.document_id == document_id)
+        )
+    ).scalars()
+    flagged = {f.field_name: f.review_reason for f in fields if f.needs_review}
+    # Only the subtotal: the suggestion names it, so the line items, tax, and
+    # total that its misread contradicts are not queued.
+    assert flagged == {"subtotal": "reconciliation:lines_sum"}
+    assert seeded.pending_review == 4
+
+    every_field = (
+        await db_session.execute(
+            select(ExtractedField)
+            .join(Extraction, ExtractedField.extraction_id == Extraction.id)
+            .where(Extraction.document_id.in_(list(seeded.document_ids.values())))
+        )
+    ).scalars()
+    for field in every_field:
+        assert field.needs_review == (field.review_reason is not None)
+        if field.needs_review and field.field_name != "subtotal":
+            assert field.review_reason == "confidence"

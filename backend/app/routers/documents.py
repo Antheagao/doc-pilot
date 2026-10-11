@@ -10,9 +10,9 @@ from starlette.concurrency import run_in_threadpool
 from app.budget import enforce_daily_budget
 from app.config import Settings, get_settings, resolve_upload_dir
 from app.db import get_session
-from app.models import Document, ExtractedField, Extraction, Job
+from app.models import Document, ExtractedField, Extraction, Job, Reconciliation
 from app.ratelimit import limit_upload
-from app.records import field_to_out, minor_units_for
+from app.records import field_to_out, minor_units_for, reconciliation_to_out
 from app.schemas import (
     DocumentCreateResponse,
     DocumentDetail,
@@ -196,6 +196,11 @@ async def get_document(
         minor_units = minor_units_for(
             next((f for f in fields if f.field_name == "currency"), None)
         )
+        reconciliation = (
+            await session.execute(
+                select(Reconciliation).where(Reconciliation.extraction_id == extraction.id)
+            )
+        ).scalar_one_or_none()
         extraction_out = ExtractionOut(
             id=extraction.id,
             prompt_version=extraction.prompt_version,
@@ -206,6 +211,7 @@ async def get_document(
             output_tokens=extraction.output_tokens,
             created_at=extraction.created_at,
             fields=[field_to_out(f, minor_units) for f in fields],
+            reconciliation=None if reconciliation is None else reconciliation_to_out(reconciliation),
         )
 
     return DocumentDetail(

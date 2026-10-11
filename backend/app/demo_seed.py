@@ -39,9 +39,16 @@ from app.db import Base
 from app.evals.dataset import EVALS_DIR, EvalCase, load_cases
 from app.evals.retrieval import load_gold_corpus
 from app.extraction import TOP_LEVEL_FIELDS, build_extracted_fields
-from app.models import Document, DocumentPage, ExtractedField, Extraction
+from app.models import (
+    REVIEW_REASON_CONFIDENCE,
+    Document,
+    DocumentPage,
+    ExtractedField,
+    Extraction,
+)
 from app.retrieval.embeddings import Embedder, build_embedder
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
+from app.review_routing import refresh_reconciliation
 from app.routers.documents import ALLOWED_MIME_TYPES
 
 REPLAY_ARTIFACT = EVALS_DIR / "results" / "20260731T064853Z_claude-sonnet-5_extract_v1.json"
@@ -156,6 +163,7 @@ def _apply_staged_cases(
         field.value = {"value": case.value, "confidence": case.confidence}
         field.confidence = case.confidence
         field.needs_review = case.confidence < review_threshold
+        field.review_reason = REVIEW_REASON_CONFIDENCE if field.needs_review else None
         staged[case.field_name] = {
             "replayed": replayed,
             "staged": field.value,
@@ -252,6 +260,10 @@ async def seed_demo_data(
         await session.flush()
         session.add_all(fields)
         await session.flush()
+        # Route like the worker does: the staged 016 subtotal is flagged by
+        # the arithmetic as well as by its confidence, and the pending count
+        # is taken after that (refresh updates these same objects).
+        await refresh_reconciliation(session, extraction_id, settings)
         pending += sum(f.needs_review for f in fields)
         staged_count += len(staged)
         document_ids[doc_id] = document_id

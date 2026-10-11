@@ -369,6 +369,7 @@ async def run_agent_eval(
                 corpus,
                 embedder,
                 ChunkingConfig.from_settings(settings),
+                settings=settings,
             )
             doc_id_of = {str(document_id): doc_id for doc_id, document_id in ids.items()}
             scope = list(ids.values())

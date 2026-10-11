@@ -125,6 +125,7 @@ async def test_harvests_fully_reviewed_document(
                 "value": _leaf("Acme Hrdware", 0.5),
                 "confidence": 0.5,
                 "needs_review": True,
+                "review_reason": "confidence",
                 "reviewed_at": now,
                 "review_action": "corrected",
                 "corrected_value": "Acme Hardware Co.",
@@ -133,6 +134,7 @@ async def test_harvests_fully_reviewed_document(
             "tax": {
                 "confidence": 0.7,
                 "needs_review": True,
+                "review_reason": "confidence",
                 "reviewed_at": now,
                 "review_action": "approved",
             },
@@ -168,6 +170,7 @@ async def test_string_money_corrections_are_harvested_as_numbers(
     corrected = {
         "confidence": 0.5,
         "needs_review": True,
+        "review_reason": "confidence",
         "reviewed_at": now,
         "review_action": "corrected",
     }
@@ -215,6 +218,7 @@ async def test_a_non_numeric_money_correction_is_still_rejected(
             "total": {
                 "confidence": 0.5,
                 "needs_review": True,
+                "review_reason": "confidence",
                 "reviewed_at": datetime.now(UTC),
                 "review_action": "corrected",
                 "corrected_value": "1,234.50",
@@ -242,6 +246,7 @@ async def test_a_non_object_line_item_row_is_invalid_and_the_run_continues(
             "line_items": {
                 "confidence": 0.5,
                 "needs_review": True,
+                "review_reason": "confidence",
                 "reviewed_at": datetime.now(UTC),
                 "review_action": "corrected",
                 "corrected_value": [1, "a", None],
@@ -272,6 +277,7 @@ async def test_skips_document_with_pending_review(
                 "value": _leaf("Blurry Vendor", 0.4),
                 "confidence": 0.4,
                 "needs_review": True,
+                "review_reason": "confidence",
             },
         },
     )
@@ -315,6 +321,7 @@ async def test_invalid_human_correction_is_rejected_and_cleaned_up(
                 "value": _leaf("07/01/2026", 0.4),
                 "confidence": 0.4,
                 "needs_review": True,
+                "review_reason": "confidence",
                 "reviewed_at": datetime.now(UTC),
                 "review_action": "corrected",
                 "corrected_value": "07/01/2026",

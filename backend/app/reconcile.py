@@ -286,12 +286,15 @@ def _stored_source(field: "ExtractedField") -> str:
 class Operand:
     """A number a check used. `value` is None when the field is missing or
     unusable; `verified` is whether a person has reviewed where it came from
-    (a computed or assumed operand is verified when its inputs are)."""
+    (a computed or assumed operand is verified when its inputs are). A
+    computed operand has no row of its own to blame: `inputs` are the paths it
+    was computed from, and a check lists those in `fields` instead of `path`."""
 
     path: str
     value: Decimal | None
     source: str
     verified: bool
+    inputs: tuple[str, ...] = ()
 
 
 class Term(NamedTuple):
@@ -311,7 +314,9 @@ class Check:
     when `abs(delta) <= tolerance`. The other kinds put the operands they
     examined in `terms` with coefficient 1, leave `rhs`, `expected`, `delta`,
     and `tolerance` empty, and for a bound put the measured number in `actual`.
-    `fields` lists every path involved, quantity cells included.
+    `fields` lists every path involved, quantity cells included; an operand
+    that was computed (an unprinted subtotal or line total) contributes the paths
+    it was computed from, not its own.
     """
 
     id: str
@@ -546,7 +551,17 @@ def _parse(inp: ReconcileInput, minor_units: int) -> _Parsed:
 
 
 def _provenance(operands: Sequence[Operand]) -> tuple[tuple[str, ...], bool]:
-    paths = tuple(dict.fromkeys(op.path for op in operands))
+    """The paths a check involves and whether a person verified them all. A
+    computed operand (an unprinted subtotal or line total) stands for the
+    values it was computed from: the field that is absent never made a
+    contribution to the equation, so it is not named."""
+    paths = tuple(
+        dict.fromkeys(
+            path
+            for op in operands
+            for path in (op.inputs if op.source == SOURCE_COMPUTED and op.inputs else (op.path,))
+        )
+    )
     return paths, all(op.verified for op in operands)
 
 
@@ -642,7 +657,9 @@ def _line_checks(p: _Parsed, derived: list[Derived]) -> list[Check]:
         skip = None
         if t.value is None and t.path not in p.unreadable and line.product is not None:
             computed = _round_to(line.product, p.minor_units)
-            line.total = t = Operand(t.path, computed, SOURCE_COMPUTED, p.lines_verified)
+            line.total = t = Operand(
+                t.path, computed, SOURCE_COMPUTED, p.lines_verified, (q.path, u.path)
+            )
             derived.append(Derived(t.path, computed, "quantity x unit_price"))
             skip = f"{t.path} is not printed; it is computed as quantity x unit_price."
         checks.append(
@@ -702,7 +719,9 @@ def _lines_sum_check(p: _Parsed, derived: list[Derived]) -> tuple[Check, Operand
         missing = p.skip_reason(totals)
         if missing is None:
             total = sum((t.value for t in totals), Decimal(0))
-            subtotal = Operand("subtotal", total, SOURCE_COMPUTED, p.lines_verified)
+            subtotal = Operand(
+                "subtotal", total, SOURCE_COMPUTED, p.lines_verified, tuple(t.path for t in totals)
+            )
             derived.append(Derived("subtotal", total, "sum of line totals"))
             skip = "The subtotal is not printed; it is computed as the sum of the line totals."
             return (

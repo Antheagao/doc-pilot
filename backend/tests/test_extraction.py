@@ -6,7 +6,7 @@ import anthropic
 import httpx
 import pytest
 from pypdf import PdfWriter
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import extraction as extraction_module
@@ -27,7 +27,8 @@ from app.extraction import (
     extract_document,
     process_document_job,
 )
-from app.models import Document, ExtractedField, Extraction, Job
+from app.models import Document, ExtractedField, Extraction, Job, Reconciliation
+from app.review_routing import Routing
 
 # A minimal valid 1x1 transparent PNG (same fixture used in test_documents.py).
 TINY_PNG = base64.b64decode(
@@ -1257,3 +1258,239 @@ async def test_failed_extraction_enqueues_no_index_job(
     await db_session.rollback()
 
     assert [j.kind for j in await _jobs_for(db_session, document.id)] == ["extract"]
+
+
+# ---- Reconciliation at persistence ----------------------------------------------
+
+
+def _bakery_tool_input(subtotal: float) -> dict:
+    """Lines 36.60 + 8.65 = 45.25, tax 3.05, total 48.30; the subtotal is the variable."""
+
+    def cell(value, confidence=0.99):
+        return {"value": value, "confidence": confidence}
+
+    rows = [
+        {
+            "description": cell("Sourdough"),
+            "quantity": cell(4),
+            "unit_price": cell(9.15),
+            "total": cell(36.6),
+        },
+        {
+            "description": cell("Rolls"),
+            "quantity": cell(1),
+            "unit_price": cell(8.65),
+            "total": cell(8.65),
+        },
+    ]
+    return {
+        "vendor": cell("Bakery"),
+        "document_date": cell("2025-03-01"),
+        "line_items": {"value": rows, "confidence": 0.99},
+        "subtotal": cell(subtotal, 0.9),
+        "tax": cell(3.05),
+        "total": cell(48.3),
+        "currency": cell("USD"),
+    }
+
+
+async def _reconciliation_of(db_session: AsyncSession, document_id) -> Reconciliation | None:
+    return (
+        await db_session.execute(
+            select(Reconciliation)
+            .join(Extraction, Reconciliation.extraction_id == Extraction.id)
+            .where(Extraction.document_id == document_id)
+        )
+    ).scalar_one_or_none()
+
+
+async def test_a_consistent_extraction_is_stored_with_a_passing_reconciliation(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(100, 50)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    row = await _reconciliation_of(db_session, document.id)
+    assert row is not None
+    assert (row.status, row.rules_version) == ("pass", "rules_v1")
+    fields = (await db_session.execute(select(ExtractedField))).scalars()
+    reasons = {f.field_name: f.review_reason for f in fields if f.extraction_id == row.extraction_id}
+    # Only the model's own doubts are flagged: document_date (0.6) and total (0.79).
+    assert {n: r for n, r in reasons.items() if r} == {
+        "document_date": "confidence",
+        "total": "confidence",
+    }
+
+
+async def test_a_failing_reconciliation_flags_the_suspect_field_at_persistence(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(_bakery_tool_input(46.25))], _FakeUsage(100, 50)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    row = await _reconciliation_of(db_session, document.id)
+    assert row is not None and row.status == "fail"
+    assert row.report["suggestion"]["path"] == "subtotal"
+    fields = (
+        await db_session.execute(
+            select(ExtractedField).where(ExtractedField.extraction_id == row.extraction_id)
+        )
+    ).scalars()
+    flagged = {f.field_name: f.review_reason for f in fields if f.needs_review}
+    assert flagged == {"subtotal": "reconciliation:lines_sum"}
+
+
+async def test_a_reconciliation_failure_never_loses_the_billed_extraction(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    async def explode(*args, **kwargs):
+        raise RuntimeError("rules bug")
+
+    monkeypatch.setattr("app.review_routing.refresh_reconciliation", explode)
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(100, 50)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    with caplog.at_level("ERROR", logger="app.extraction"):
+        await process_document_job(db_session, job)
+    await db_session.flush()
+
+    # The extraction, its fields (with their confidence flags), and the index
+    # job are all there; only the reconciliation is missing, and it was logged.
+    assert await _extraction_count(db_session, document.id) == 1
+    assert await _reconciliation_of(db_session, document.id) is None
+    await db_session.refresh(document)
+    assert document.status == "extracted"
+    extraction = (
+        await db_session.execute(select(Extraction).where(Extraction.document_id == document.id))
+    ).scalar_one()
+    fields = (
+        await db_session.execute(
+            select(ExtractedField).where(ExtractedField.extraction_id == extraction.id)
+        )
+    ).scalars()
+    assert {f.field_name for f in fields if f.review_reason == "confidence"} == {
+        "document_date",
+        "total",
+    }
+    assert [j.kind for j in await _jobs_for(db_session, document.id)].count("index") == 1
+    assert "reconciliation failed" in caplog.text
+
+
+async def test_a_database_error_in_the_reconciliation_rolls_back_only_the_reconciliation(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def break_the_transaction(session, extraction_id, settings):
+        # A write the database refuses, inside the savepoint the job opened.
+        await session.execute(
+            update(ExtractedField)
+            .where(ExtractedField.extraction_id == extraction_id)
+            .values(needs_review=True, review_reason=None)
+        )
+
+    monkeypatch.setattr("app.review_routing.refresh_reconciliation", break_the_transaction)
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(100, 50)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    assert await _extraction_count(db_session, document.id) == 1
+    field_count = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(ExtractedField)
+            .join(Extraction, ExtractedField.extraction_id == Extraction.id)
+            .where(Extraction.document_id == document.id)
+        )
+    ).scalar_one()
+    assert field_count == len(TOP_LEVEL_FIELDS)
+    assert await _reconciliation_of(db_session, document.id) is None
+    await db_session.refresh(document)
+    assert document.status == "extracted"
+
+
+async def _assert_extraction_kept_with_confidence_flags(
+    db_session: AsyncSession, document: Document
+) -> None:
+    assert await _extraction_count(db_session, document.id) == 1
+    assert await _reconciliation_of(db_session, document.id) is None
+    await db_session.refresh(document)
+    assert document.status == "extracted"
+    extraction_id = (
+        await db_session.execute(select(Extraction.id).where(Extraction.document_id == document.id))
+    ).scalar_one()
+    fields = (
+        await db_session.execute(
+            select(ExtractedField).where(ExtractedField.extraction_id == extraction_id)
+        )
+    ).scalars().all()
+    assert len(fields) == len(TOP_LEVEL_FIELDS)
+    assert {f.field_name: f.review_reason for f in fields if f.needs_review} == {
+        "document_date": "confidence",
+        "total": "confidence",
+    }
+
+
+async def test_a_routing_error_after_fields_were_touched_keeps_the_extraction(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def route_then_fail(fields, report, review_threshold):
+        for field in fields:
+            field.needs_review = True
+            field.review_reason = "reconciliation:lines_sum"
+        raise RuntimeError("routing bug")
+
+    monkeypatch.setattr("app.review_routing.route", route_then_fail)
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(100, 50)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    await _assert_extraction_kept_with_confidence_flags(db_session, document)
+
+
+async def test_an_inconsistent_routing_trips_the_check_inside_the_savepoint(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def flag_without_a_reason(fields, report, review_threshold):
+        return {f.field_name: Routing(True, None) for f in fields}
+
+    monkeypatch.setattr("app.review_routing.route", flag_without_a_reason)
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(100, 50)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    await _assert_extraction_kept_with_confidence_flags(db_session, document)

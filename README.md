@@ -224,6 +224,14 @@ This is the data-flow shape (what happens to a document and a question), not the
 
 Fields extracted with confidence below `review_threshold` (default 0.8, see `backend/app/config.py`) are flagged `needs_review` and land in a field-level work queue -- `GET /review/queue` on the backend, the **Review** page (with a pending-count badge in the header) on the frontend. A reviewer either **approves** the extracted value or **corrects** it; either way the resolution is stamped with `reviewed_at` and `review_action`, and a correction is stored in `corrected_value` *beside* the model's original answer, never over it -- the audit trail keeps what the model actually said. Resolving the same field twice is a 409: the first human decision wins until someone deliberately revisits it.
 
+A second reason can flag a field: the arithmetic.
+Code, never the model, checks that the line items add up to the subtotal and that subtotal plus tax equals the total (`app/reconcile.py`).
+The result is stored once per extraction in `reconciliations`, and each flagged field carries a `review_reason`, either `confidence` or `reconciliation:<check id>`.
+When exactly one change would make every failing check pass, only that field is flagged and the queue shows the suggested value; otherwise every unreviewed operand of the failing checks is flagged.
+Every resolve recomputes the report in the same transaction, so correcting the culprit clears the flags it caused and approving a value that still fails flags the rest.
+A field a person has reviewed is frozen and never flagged again.
+`python scripts/reconcile_all.py --dry-run` (from `backend/`) previews the same recomputation for documents extracted before this existed.
+
 The loop closes with `python scripts/harvest_corrections.py` (from `backend/`): every document whose flagged fields have all been resolved is exported as a new eval case under `evals/` -- corrections become the label, approved and high-confidence values are kept as-is, and each exported label records its `source_document_id` so re-running only harvests new documents. Every harvested label passes the same loud validation the eval loader applies before it is kept, so a hand-typed correction in the wrong format is rejected at harvest time instead of poisoning the dataset.
 
 ## Retrieval: search with page citations

@@ -37,7 +37,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings
-from app.models import JOB_KIND_INDEX, Document, ExtractedField, Extraction, Job
+from app.models import (
+    JOB_KIND_INDEX,
+    REVIEW_REASON_CONFIDENCE,
+    Document,
+    ExtractedField,
+    Extraction,
+    Job,
+)
 from app.pdf import count_pdf_pages, split_pdf_pages
 from app.telemetry import current_traceparent, model_call_span, record_model_response
 
@@ -1154,7 +1161,8 @@ def build_extracted_fields(
 ) -> list[ExtractedField]:
     """One ExtractedField per TOP_LEVEL_FIELDS entry, read defensively out of
     the model's tool_input (see _coerce_leaf); fields under review_threshold
-    get needs_review. Shared by the worker and the demo seed so a replayed
+    get needs_review with the reason "confidence" (the reconciliation can flag
+    more afterwards, see app/review_routing.py). Shared by the worker and the demo seed so a replayed
     extraction is persisted exactly as a live one would be.
     """
     fields = []
@@ -1169,13 +1177,15 @@ def build_extracted_fields(
             field_value: Any = value if isinstance(value, list) else []
         else:
             field_value = {"value": value, "confidence": confidence}
+        low_confidence = confidence < review_threshold
         fields.append(
             ExtractedField(
                 extraction_id=extraction_id,
                 field_name=field_name,
                 value=field_value,
                 confidence=confidence,
-                needs_review=confidence < review_threshold,
+                needs_review=low_confidence,
+                review_reason=REVIEW_REASON_CONFIDENCE if low_confidence else None,
             )
         )
     return fields
@@ -1201,6 +1211,10 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
     rollback in app.worker.fail_job for the same "expire, then re-fetch
     by id" pattern this reuses.
     """
+    # Imported here: review_routing reaches back into this module through
+    # reconcile (which parses leaves with _coerce_leaf).
+    from app.review_routing import refresh_reconciliation
+
     document = await session.get(Document, job.document_id)
     if document is None:
         raise ExtractionError(f"document {job.document_id} not found")
@@ -1233,10 +1247,29 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
         session.add(extraction)
         await session.flush()  # assigns extraction.id without committing
 
+        extraction_id = extraction.id
         settings = get_settings()
         session.add_all(
-            build_extracted_fields(extraction.id, result.tool_input, settings.review_threshold)
+            build_extracted_fields(extraction_id, result.tool_input, settings.review_threshold)
         )
+        await session.flush()
+
+        # Check the arithmetic and flag the fields it doubts. The extraction
+        # was billed, so a failure here (a bug in the rules, say) must not cost
+        # it: the savepoint undoes only the reconciliation, the fields keep
+        # their confidence flags, the error is logged, and
+        # scripts/reconcile_all.py fills in the missing row later. A retry
+        # would re-bill the call for the same failure.
+        try:
+            async with session.begin_nested():
+                await refresh_reconciliation(session, extraction_id, settings)
+        except Exception:
+            logger.exception(
+                "reconciliation failed for extraction %s; kept the extraction without it",
+                extraction_id,
+            )
+            # The savepoint rollback expired every field it touched: do not read
+            # their attributes from here on (MissingGreenlet).
 
         document.status = "extracted"
 

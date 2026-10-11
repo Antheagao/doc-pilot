@@ -1,8 +1,9 @@
 """Human review queue endpoints.
 
-Fields whose extraction confidence fell below Settings.review_threshold
-were flagged needs_review=True at persistence time (see
-app/extraction.py). This router exposes that set as a work queue:
+Fields are flagged needs_review=True with a review_reason: the model's
+confidence fell below Settings.review_threshold, or a failing arithmetic
+check names them (app/review_routing.py). This router exposes that set as
+a work queue:
 
 - GET  /review/queue        -- pending fields (needs_review, not yet
                                reviewed), oldest extraction first, joined
@@ -11,7 +12,8 @@ app/extraction.py). This router exposes that set as a work queue:
                                nav badge
 - POST /review/fields/{id}/resolve -- approve the extracted value or
                                supply a correction (validated: a bad amount
-                               is a 422 with a sentence)
+                               is a 422 with a sentence), then recompute the
+                               extraction's reconciliation and routing
 
 Resolution is field-level on purpose (see README "Key decisions"): a
 document with one shaky field shouldn't cost a human a whole-document
@@ -21,15 +23,18 @@ of what the model actually said and giving future eval tooling a labeled
 (document, field, human answer) triple to harvest.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings, get_settings
 from app.db import get_session
-from app.models import Document, ExtractedField, Extraction
+from app.models import Document, ExtractedField, Extraction, Reconciliation
 from app.money import MoneyError
 from app.records import (
     api_field_value,
@@ -40,12 +45,22 @@ from app.records import (
     normalize_correction,
     precision_for,
 )
+from app.review_routing import (
+    failing_checks_for,
+    lock_extraction,
+    refresh_reconciliation,
+    suggestion_for,
+)
 from app.schemas import (
+    CheckOut,
     ExtractedFieldOut,
     ReviewQueueCount,
     ReviewQueueItem,
     ReviewResolveRequest,
+    SuggestionOut,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -57,6 +72,29 @@ _PENDING = (
 )
 
 
+def _reconciliation_context(
+    field: ExtractedField, report: dict | None
+) -> tuple[list[CheckOut], SuggestionOut | None]:
+    """The failing checks and suggestion a queue item shows. A stored report
+    this code cannot read costs the item its context, not the queue its
+    answer."""
+    try:
+        checks = [
+            CheckOut.model_validate(c)
+            for c in failing_checks_for(report or {}, field.field_name)
+        ]
+        suggestion = suggestion_for(report or {}, field.field_name)
+        return checks, None if suggestion is None else SuggestionOut.model_validate(
+            suggestion
+        )
+    except (ValidationError, KeyError, TypeError):
+        logger.exception(
+            "stored reconciliation for field %s does not validate; serving none",
+            field.id,
+        )
+        return [], None
+
+
 @router.get("/queue", response_model=list[ReviewQueueItem])
 async def list_review_queue(
     limit: int = Query(50, ge=1, le=200),
@@ -64,9 +102,10 @@ async def list_review_queue(
     session: AsyncSession = Depends(get_session),
 ) -> list[ReviewQueueItem]:
     stmt = (
-        select(ExtractedField, Extraction, Document)
+        select(ExtractedField, Extraction, Document, Reconciliation.report)
         .join(Extraction, ExtractedField.extraction_id == Extraction.id)
         .join(Document, Extraction.document_id == Document.id)
+        .outerjoin(Reconciliation, Reconciliation.extraction_id == Extraction.id)
         .where(*_PENDING)
         # Oldest extraction first -- the queue is FIFO so nothing starves;
         # field_name breaks ties deterministically within one extraction.
@@ -75,26 +114,34 @@ async def list_review_queue(
         .offset(offset)
     )
     rows = (await session.execute(stmt)).all()
-    currencies = await currency_fields(session, [extraction.id for _, extraction, _ in rows])
-    return [
-        ReviewQueueItem(
-            field_id=field.id,
-            field_name=field.field_name,
-            value=api_field_value(
-                field.field_name,
-                field.value,
-                minor_units_for(currencies.get(extraction.id)),
-            ),
-            currency=currency_code(currencies.get(extraction.id)),
-            confidence=field.confidence,
-            document_id=document.id,
-            filename=document.filename,
-            extraction_id=extraction.id,
-            model=extraction.model,
-            extracted_at=extraction.created_at,
+    currencies = await currency_fields(
+        session, [extraction.id for _, extraction, _, _ in rows]
+    )
+    items = []
+    for field, extraction, document, report in rows:
+        checks, suggestion = _reconciliation_context(field, report)
+        items.append(
+            ReviewQueueItem(
+                field_id=field.id,
+                field_name=field.field_name,
+                value=api_field_value(
+                    field.field_name,
+                    field.value,
+                    minor_units_for(currencies.get(extraction.id)),
+                ),
+                currency=currency_code(currencies.get(extraction.id)),
+                confidence=field.confidence,
+                review_reason=field.review_reason,
+                checks=checks,
+                suggestion=suggestion,
+                document_id=document.id,
+                filename=document.filename,
+                extraction_id=extraction.id,
+                model=extraction.model,
+                extracted_at=extraction.created_at,
+            )
         )
-        for field, extraction, document in rows
-    ]
+    return items
 
 
 @router.get("/queue/count", response_model=ReviewQueueCount)
@@ -111,21 +158,29 @@ async def resolve_field(
     field_id: uuid.UUID,
     payload: ReviewResolveRequest,
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> ExtractedFieldOut:
     field = await session.get(ExtractedField, field_id)
     if field is None:
         raise HTTPException(status_code=404, detail="Field not found")
+    extraction_id = field.extraction_id
+    # Lock the extraction before looking at the field again (see
+    # review_routing): two reviewers resolving different fields of one
+    # document queue up here instead of deadlocking on each other's rows, and
+    # the second sees the first's decision.
+    await lock_extraction(session, extraction_id)
+    await session.refresh(field)
     if field.reviewed_at is not None:
         # A second resolution would silently overwrite the first
-        # reviewer's decision; surface the conflict instead. (Two
-        # reviewers racing the same field both read reviewed_at as NULL
-        # only if neither has committed yet -- last write wins then,
-        # acceptable for the current single-reviewer deployments; a
-        # multi-reviewer setup should move this check into the UPDATE's
-        # WHERE clause as a compare-and-set.)
+        # reviewer's decision; surface the conflict instead. The extraction
+        # lock above makes two reviewers of the same field take turns, so
+        # the second reads the first's reviewed_at here.
         raise HTTPException(status_code=409, detail="Field already reviewed")
 
-    if payload.action == "correct" and "corrected_value" not in payload.model_fields_set:
+    if (
+        payload.action == "correct"
+        and "corrected_value" not in payload.model_fields_set
+    ):
         # Distinguish "correct this to null" (explicit corrected_value:
         # null in the body -- legal, asserts the field is absent from the
         # document) from forgetting to send a corrected_value at all.
@@ -153,6 +208,11 @@ async def resolve_field(
         field.review_action = "corrected"
         field.corrected_value = corrected_value
 
+    # The new decision changes what the arithmetic says about the siblings: a
+    # corrected culprit clears the other operands, an approved misread flags
+    # them. Same transaction, so the queue never shows a half-applied review.
+    await session.flush()
+    await refresh_reconciliation(session, extraction_id, settings)
     await session.commit()
     await session.refresh(field)
     # Serve the field with the currency as it is now: correcting the

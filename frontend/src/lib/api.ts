@@ -53,12 +53,18 @@ export type ExtractedFieldValue = FieldLeaf | LineItem[] | null;
 // Set once a human has resolved the field from the review queue.
 export type ReviewAction = "approved" | "corrected";
 
+// Why a field is flagged: the model's own doubt, or the failing arithmetic
+// check that names it ("reconciliation:lines_sum"). Null exactly when
+// needs_review is false; a reviewed field keeps the reason it had.
+export type ReviewReason = "confidence" | `reconciliation:${string}`;
+
 export interface ExtractedField {
   id: string;
   field_name: string;
   value: ExtractedFieldValue;
   confidence: number;
   needs_review: boolean;
+  review_reason: ReviewReason | null;
   reviewed_at: string | null;
   review_action: ReviewAction | null;
   // The human-supplied *semantic* value (scalar for scalar fields, the
@@ -67,6 +73,56 @@ export interface ExtractedField {
   // review_action === "corrected". The original `value` is never
   // overwritten by a correction.
   corrected_value: unknown;
+}
+
+// The arithmetic check of one extraction (backend/app/reconcile.py), as
+// stored in reconciliations.report. Amounts are DecimalString; coefficients
+// and quantities are plain decimal strings.
+export type CheckStatus = "pass" | "fail" | "skipped";
+
+export interface ReconciliationOperand {
+  path: string;
+  value: DecimalString | null;
+  source: "extracted" | "approved" | "corrected" | "computed" | "assumed" | "included";
+  verified: boolean;
+}
+
+export interface ReconciliationCheck {
+  id: string;
+  kind: "equation" | "bound" | "presence" | "format";
+  formula: string;
+  terms: { coef: string | null; operand: ReconciliationOperand }[];
+  rhs: ReconciliationOperand | null;
+  expected: DecimalString | null;
+  actual: DecimalString | null;
+  delta: DecimalString | null;
+  tolerance: DecimalString | null;
+  status: CheckStatus;
+  detail: string | null;
+  fields: string[];
+  all_operands_verified: boolean;
+}
+
+// The one change that fixes every failing check: set `path` (a field name or
+// `line_items[i].total`) to `value`.
+export interface ReconciliationSuggestion {
+  path: string;
+  value: DecimalString;
+  current: DecimalString | null;
+  check_ids: string[];
+  detail: string;
+}
+
+export interface Reconciliation {
+  rules_version: string;
+  status: CheckStatus;
+  currency: string | null;
+  minor_units: number;
+  assumptions: string[];
+  derived: { path: string; value: DecimalString | null; formula: string }[];
+  checks: ReconciliationCheck[];
+  suggestion: ReconciliationSuggestion | null;
+  computed_at: string;
 }
 
 export interface Extraction {
@@ -79,6 +135,8 @@ export interface Extraction {
   output_tokens: number;
   created_at: string;
   fields: ExtractedField[];
+  // Null for an extraction nobody has reconciled yet.
+  reconciliation: Reconciliation | null;
 }
 
 export interface DocumentDetail {
@@ -153,6 +211,11 @@ export interface ReviewQueueItem {
   // minor unit (2 when the code is missing or unlisted).
   currency: string | null;
   confidence: number;
+  review_reason: ReviewReason;
+  // The failing checks of the extraction that involve this field, and the
+  // suggested fix when it targets this field.
+  checks: ReconciliationCheck[];
+  suggestion: ReconciliationSuggestion | null;
   document_id: string;
   filename: string;
   extraction_id: string;
