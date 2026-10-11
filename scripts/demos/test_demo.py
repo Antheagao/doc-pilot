@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
+
 import demo
+import encode
 import pytest
 
 
@@ -105,3 +109,87 @@ def test_seed_parser_reads_reset() -> None:
     parser = demo.build_parser()
     assert parser.parse_args(["seed"]).reset is False
     assert parser.parse_args(["seed", "--reset"]).reset is True
+
+
+def test_record_all_skips_the_smoke_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(demo, "SCENARIOS", {"smoke": None, "search-hybrid": None})
+    assert demo.resolve_slugs(["all"]) == ["search-hybrid"]
+
+
+def test_record_all_with_only_smoke_registered_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(demo, "SCENARIOS", {"smoke": None})
+    with pytest.raises(demo.CliError, match="no feature scenarios"):
+        demo.resolve_slugs(["all"])
+
+
+def test_record_refuses_an_unknown_slug() -> None:
+    with pytest.raises(demo.CliError, match="unknown scenario nope"):
+        demo.resolve_slugs(["smoke", "nope"])
+    assert demo.resolve_slugs(["smoke"]) == ["smoke"]
+
+
+def test_smoke_never_reaches_the_committed_gifs() -> None:
+    assert demo.gif_destination("smoke") is None
+    assert demo.gif_destination("search-hybrid") == (
+        demo.REPO_ROOT / "screenshots" / "features" / "search-hybrid.gif"
+    )
+
+
+def test_a_ready_stack_has_no_problems() -> None:
+    assert demo.readiness_problems(True, True, 25) == []
+
+
+def test_a_down_or_empty_stack_says_how_to_fix_it() -> None:
+    problems = demo.readiness_problems(False, False, 0)
+    assert len(problems) == 2
+    assert all("demo.py stack up" in p for p in problems)
+    (empty,) = demo.readiness_problems(True, True, 0)
+    assert "demo.py seed --reset" in empty
+
+
+def test_record_parser_takes_slugs() -> None:
+    parser = demo.build_parser()
+    assert parser.parse_args(["record", "smoke", "x"]).slugs == ["smoke", "x"]
+    assert parser.parse_args(["record", "all"]).slugs == ["all"]
+
+
+def feature_gifs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, infos: dict[str, encode.MediaInfo]
+) -> None:
+    for name in infos:
+        (tmp_path / name).write_bytes(b"gif")
+    monkeypatch.setattr(demo, "FEATURES_DIR", tmp_path)
+    monkeypatch.setattr(encode, "require_tools", lambda: None)
+    monkeypatch.setattr(encode, "probe", lambda path: infos[path.name])
+
+
+def test_check_passes_gifs_within_the_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feature_gifs(tmp_path, monkeypatch, {"a.gif": encode.MediaInfo(9.0, 960, 800_000)})
+    assert demo.check(argparse.Namespace()) == 0
+
+
+def test_check_fails_when_any_gif_is_over_a_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    feature_gifs(
+        tmp_path,
+        monkeypatch,
+        {
+            "ok.gif": encode.MediaInfo(9.0, 960, 800_000),
+            "big.gif": encode.MediaInfo(16.0, 960, 1_200_000),
+        },
+    )
+    assert demo.check(argparse.Namespace()) == 1
+    err = capsys.readouterr().err
+    assert "big.gif" in err and "ok.gif" not in err
+
+
+def test_check_with_no_gifs_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feature_gifs(tmp_path, monkeypatch, {})
+    assert demo.check(argparse.Namespace()) == 0

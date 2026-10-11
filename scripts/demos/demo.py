@@ -6,13 +6,20 @@ Run from anywhere with the backend venv (stdlib only, so no install step):
     backend\.venv\Scripts\python scripts\demos\demo.py stack status
     backend\.venv\Scripts\python scripts\demos\demo.py stack down [--volumes] [--dry-run]
     backend\.venv\Scripts\python scripts\demos\demo.py seed [--reset]
+    backend\.venv\Scripts\python scripts\demos\demo.py record <slug>... | all
+    backend\.venv\Scripts\python scripts\demos\demo.py check
+
+`record` and `check` need the `demo` extra (`pip install -e ".[dev,demo]"` in
+backend/, then `python -m playwright install chromium`) and ffmpeg on PATH;
+`record` also needs the demo stack up and seeded.
 
 Every docker call goes through compose() below, which pins the compose
 project to PROJECT. The project name is a constant, never an argument, so
 this CLI cannot address the dev stack (project `doc-pilot`) or its volumes:
 the dev database volume was wiped once by a careless `down -v`.
 
-Later demo tasks add their subcommands (record, check) beside `stack` and `seed`.
+Recording is split across modules: scenarios.py (what to do), harness.py
+(Playwright, the only module that imports it), encode.py (ffmpeg).
 """
 
 from __future__ import annotations
@@ -20,12 +27,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import encode
+from scenarios import SCENARIOS, SMOKE_SLUG
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT = "doc-pilot-demo"
@@ -34,6 +45,8 @@ PROJECT_LABEL = "com.docker.compose.project"
 API_URL = "http://localhost:8100"
 FRONTEND_URL = "http://localhost:3100"
 FRONTEND_WAIT_SECONDS = 60
+FEATURES_DIR = REPO_ROOT / "screenshots" / "features"
+OUT_DIR = Path(__file__).resolve().parent / "out"
 
 
 class CliError(Exception):
@@ -253,6 +266,120 @@ def seed(args: argparse.Namespace) -> int:
     return compose(*seed_command(args.reset))
 
 
+def http_get(url: str) -> bytes | None:
+    """The body of a GET that answers 200, or None when it does not."""
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return response.read() if response.status == 200 else None
+    except OSError:  # URLError is an OSError
+        return None
+
+
+def readiness_problems(
+    api_ok: bool, frontend_ok: bool, document_count: int
+) -> list[str]:
+    """What stands between a recording and a usable demo stack, each with
+    its fix; empty when the stack is up and seeded."""
+    problems = []
+    if not api_ok:
+        problems.append(f"the API at {API_URL} is not healthy: run `demo.py stack up`")
+    if not frontend_ok:
+        problems.append(
+            f"the frontend at {FRONTEND_URL} is not serving: run `demo.py stack up`"
+        )
+    if api_ok and document_count == 0:
+        problems.append("the demo database is empty: run `demo.py seed --reset`")
+    return problems
+
+
+def ensure_stack_ready() -> None:
+    api_ok = http_get(f"{API_URL}/healthz") is not None
+    documents = http_get(f"{API_URL}/documents") if api_ok else None
+    document_count = len(json.loads(documents)) if documents else 0
+    frontend_ok = http_get(FRONTEND_URL) is not None
+    problems = readiness_problems(api_ok, frontend_ok, document_count)
+    if problems:
+        raise CliError("; ".join(problems))
+
+
+def resolve_slugs(requested: list[str]) -> list[str]:
+    """The scenarios to record. `all` is every feature scenario: smoke only
+    proves the harness and is recorded by name."""
+    if requested == ["all"]:
+        slugs = [slug for slug in SCENARIOS if slug != SMOKE_SLUG]
+        if not slugs:
+            raise CliError(
+                "no feature scenarios are registered yet; try `record smoke`"
+            )
+        return slugs
+    unknown = [slug for slug in requested if slug not in SCENARIOS]
+    if unknown:
+        known = ", ".join(sorted(SCENARIOS))
+        raise CliError(f"unknown scenario {', '.join(unknown)} (known: {known})")
+    return requested
+
+
+def gif_destination(slug: str) -> Path | None:
+    """Where a recorded GIF is committed to; None for smoke, which stays in
+    the gitignored out/ directory."""
+    return None if slug == SMOKE_SLUG else FEATURES_DIR / f"{slug}.gif"
+
+
+def record(args: argparse.Namespace) -> int:
+    slugs = resolve_slugs(args.slugs)
+    encode.require_tools()
+    ensure_stack_ready()
+    for slug in slugs:
+        print(f"Recording {slug} ...")
+        try:
+            from harness import recording
+
+            with recording(slug, FRONTEND_URL, OUT_DIR) as rec:
+                SCENARIOS[slug](rec.page, rec)
+        except ModuleNotFoundError as exc:
+            if exc.name != "playwright":
+                raise
+            raise CliError(
+                'playwright is not installed: run `pip install -e ".[dev,demo]"` '
+                "in backend/ and `python -m playwright install chromium`"
+            ) from exc
+        paths = encode.encode_all(
+            OUT_DIR / f"{slug}.frames" / "frames.txt", OUT_DIR / f"{slug}.json", OUT_DIR
+        )
+        destination = gif_destination(slug)
+        if destination is not None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(paths["gif"], destination)
+            print(f"  copied the GIF to {destination.relative_to(REPO_ROOT)}")
+        for kind, path in paths.items():
+            print(
+                f"  {kind}: {path.relative_to(REPO_ROOT)} ({path.stat().st_size} bytes)"
+            )
+    return 0
+
+
+def check(_args: argparse.Namespace) -> int:
+    """Every committed feature GIF against the limits (encode.gif_problems)."""
+    encode.require_tools()
+    gifs = sorted(FEATURES_DIR.glob("*.gif"))
+    if not gifs:
+        print(f"No GIFs in {FEATURES_DIR}: nothing to check.")
+        return 0
+    failed = False
+    for gif in gifs:
+        info = encode.probe(gif)
+        problems = encode.gif_problems(info)
+        summary = f"{info.duration:.1f}s, {info.size} bytes, {info.width}px"
+        if problems:
+            failed = True
+            print(
+                f"FAIL {gif.name}: {'; '.join(problems)} ({summary})", file=sys.stderr
+            )
+        else:
+            print(f"ok   {gif.name}: {summary}")
+    return 1 if failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -293,6 +420,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     seed_parser.set_defaults(run=seed)
 
+    record_parser = commands.add_parser(
+        "record",
+        help="record scenarios against the seeded demo stack and encode them",
+    )
+    record_parser.add_argument(
+        "slugs",
+        nargs="+",
+        metavar="slug",
+        help="scenario slugs, or `all` for every feature scenario",
+    )
+    record_parser.set_defaults(run=record)
+
+    check_parser = commands.add_parser(
+        "check", help="check the committed GIFs against the size and length limits"
+    )
+    check_parser.set_defaults(run=check)
+
     return parser
 
 
@@ -303,7 +447,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         return args.run(args)
-    except CliError as exc:
+    except (CliError, encode.EncodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
