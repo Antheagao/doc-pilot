@@ -31,14 +31,14 @@ from statistics import mean
 from typing import Any
 
 from app.evals.dataset import EvalCase
-from app.extraction import TOP_LEVEL_FIELDS, _coerce_leaf
+from app.extraction import MONEY_FIELDS, TOP_LEVEL_FIELDS, _coerce_leaf
 
 VENDOR_MATCH_THRESHOLD = 0.85
 ITEM_DESC_THRESHOLD = 0.8
 AMOUNT_TOLERANCE = 0.01
 
 _LINE_ITEM_KEYS = ("description", "quantity", "unit_price", "total")
-_AMOUNT_FIELD_NAMES = ("subtotal", "tax", "total")
+_AMOUNT_FIELD_NAMES = MONEY_FIELDS
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _PUNCTUATION_RE = re.compile(r"[^\w\s]")

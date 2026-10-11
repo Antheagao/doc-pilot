@@ -28,40 +28,7 @@ Two principles run through every batch below.
 This matters for the headline eval result: Haiku missed 4.6% of fields and flagged none of them (caught_by_review 0.0).
 Model confidence alone cannot catch its own errors; deterministic checks and grounding can.
 
-## Batch A - Deterministic money and reconciliation (no model change)
-
-Goal: every extraction gets a reconciliation report computed by code, and failed checks route to review.
-Works on the current 7-field schema, so it ships with zero live spend.
-
-- **A1 Money module** (`backend/app/money.py`).
-  Parse a leaf value into `Decimal` via `Decimal(str(v))`, quantize to the currency's ISO 4217 minor unit (USD 2, JPY 0, BHD 3; unknown or null currency defaults to 2 and is reported as an assumption).
-  Reject NaN, infinity, and values that need more precision than the minor unit allows.
-  Serialize money in API responses as canonical decimal strings, never floats.
-  Fix the review UI's `Number()` parsing of corrections to send strings.
-- **A2 Reconciliation engine** (`backend/app/reconcile.py`), a pure function: reviewed record in, list of `Check` out.
-  Each check carries `id`, `formula`, operands with source field paths, `expected`, `actual`, `delta`, `tolerance`, and `status` (`pass`, `fail`, `skipped` when an operand is missing).
-  Initial rules:
-  - per line: `quantity x unit_price = line total` (tolerance one minor unit);
-  - `sum(line totals) = subtotal` (tolerance: half a minor unit per line, for per-line rounding);
-  - `subtotal + tax = total`;
-  - implied tax rate `tax / subtotal` within 0-30%, reported as a number either way;
-  - non-negative totals, and line items present when a subtotal is present.
-  Rules are versioned (`RULES_VERSION`), so a stored report says which rule set produced it.
-  This also closes the H3 carry-over gap: a malformed `line_items` that silently stores `[]` now fails the sum check.
-- **A3 Persist and route.**
-  New `reconciliations` table (extraction_id, rules_version, checks JSONB, status, computed_at).
-  Compute after extraction and again after every review resolve, so corrections re-reconcile.
-  A failed check sets `needs_review` on the fields it involves, with a new `review_reason` column (`confidence`, `reconciliation:<check_id>`, later `grounding`).
-  When exactly one operand of a failed equation is the odd one out, attach a *suggested* value (for example "total computes to 13.53"), shown to the reviewer and never auto-applied.
-- **A4 UI.**
-  A reconciliation panel on the document page that renders each check as its equation, `12.50 + 1.03 = 13.53` with a pass or fail mark, and links its operands to their field rows.
-  Values the code derived (such as a subtotal computed when none was printed) are labeled "computed", visually distinct from "extracted".
-  Review queue rows show the reason and the suggestion.
-- **A5 Evals and tests.**
-  Property tests (hypothesis) that perturb one amount of a consistent record and assert a check catches it.
-  New eval metric `caught_by_checks` beside `caught_by_review`, measured with mutated mock extractions, plus a re-score of the committed Haiku artifact to show how many of its silent misses arithmetic would have caught.
-  All 25 eval labels are already internally consistent, so they serve as the passing baseline.
-- **A6 Demo GIF:** a receipt with a misread subtotal fails `sum(line totals) = subtotal`, the reconciliation panel shows the red equation and the suggested value, the reviewer accepts it, and the check turns green.
+Batch A (deterministic money and reconciliation) was promoted to PRESENT.md on 2026-10-11.
 
 ## Batch B - Extraction schema v2: richer fields plus evidence (one prompt bump, one paid eval re-run)
 
@@ -162,4 +129,4 @@ Resolved 2026-10-09: no hosting ever (local resume demo only); OCR is model boxe
 
 - H6 retry amplification: a retryable failure on page N of a chunked PDF re-bills pages 1..N-1 on the next attempt.
 - No dependency pinning or lockfiles.
-- H3 (`line_items` non-list stored as `[]`) is resolved by Batch A2.
+- H3 (`line_items` non-list stored as `[]`) is closed by A3's `lines_present` check (PRESENT.md).

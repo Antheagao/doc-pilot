@@ -102,6 +102,13 @@ TOP_LEVEL_FIELDS = (
     "currency",
 )
 
+# The top-level fields that hold an amount, and the line-item cell keys that
+# do (quantity is a count, not money). Money parsing and formatting
+# (app/money.py) keys off these so no caller repeats the literals;
+# app/evals/dataset.py keeps its own copy to stay free of this module's imports.
+MONEY_FIELDS = ("subtotal", "tax", "total")
+LINE_ITEM_MONEY_KEYS = ("unit_price", "total")
+
 DEFAULT_MAX_TOKENS = 4096
 
 
@@ -366,7 +373,7 @@ MERGE_CONFLICT_CONFIDENCE = 0.5
 _MERGE_TIE_BREAK_EARLIEST = ("vendor", "document_date", "currency")
 # Money fields: ties in confidence break to the LATEST page (totals
 # conventionally print at the end of a multi-page invoice).
-_MERGE_TIE_BREAK_LATEST = ("subtotal", "tax", "total")
+_MERGE_TIE_BREAK_LATEST = MONEY_FIELDS
 
 
 def _values_disagree(a: Any, b: Any) -> bool:

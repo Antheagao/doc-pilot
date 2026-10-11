@@ -22,6 +22,7 @@ The Rust and axum subsections of the global guide do not apply; the backend is F
 | Model output parsed once at the edge: `_coerce_leaf`, `_schema_violations`, one repair reprompt | `app/extraction.py` |
 | One rule, one home: `records.field_value`, `review._PENDING` | `app/records.py`, `routers/review.py` |
 | Code computes the numbers the agent quotes: `query_extractions` returns counts and sums from code | `app/agent/tools.py` |
+| Money is `Decimal`, parsed at every edge by `money.to_decimal` and printed to the ISO 4217 minor unit; never `float` arithmetic or `round()` | `app/money.py` |
 | Results tied to `(model, prompt_version, dataset_version)` | `backend/prompts/`, `app/evals/` |
 
 ## Known gaps: do not copy these
@@ -34,7 +35,7 @@ The Rust and axum subsections of the global guide do not apply; the backend is F
 
 ## Planned modules (`FUTURE.md`)
 
-- `app/money.py` (parse to `Decimal`, quantize to the ISO 4217 minor unit) and `app/reconcile.py` (pure: record in, `Check` list out, `RULES_VERSION`).
+- `app/reconcile.py` (pure: record in, `Check` list out, `RULES_VERSION`), built on `app/money.py`.
 - `app/grounding.py` (evidence quote to page boxes) behind an `OcrProvider` interface selected by `OCR_PROVIDER` (PyMuPDF text layer, model boxes, optional Tesseract).
 - `/reports/totals` aggregation that the agent's structured-data tool also calls (D5), so the two can never disagree.
 - Decisions are recorded in README "Why these tech choices" and on the boards; there is no `docs/decisions/` folder.

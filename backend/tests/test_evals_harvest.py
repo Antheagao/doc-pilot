@@ -161,6 +161,106 @@ async def test_harvests_fully_reviewed_document(
     assert (evals_dir / "docs" / f"{doc_id}.png").read_bytes() == TINY_PNG
 
 
+async def test_string_money_corrections_are_harvested_as_numbers(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    now = datetime.now(UTC)
+    corrected = {
+        "confidence": 0.5,
+        "needs_review": True,
+        "reviewed_at": now,
+        "review_action": "corrected",
+    }
+    document = await _seed_document(
+        db_session,
+        tmp_path,
+        field_states={
+            "subtotal": {**corrected, "corrected_value": "45.25"},
+            "tax": {**corrected, "corrected_value": "0.80"},
+            "total": {**corrected, "corrected_value": "46"},
+            "line_items": {
+                "value": [
+                    {
+                        "description": _leaf("Hammer", 0.99),
+                        "quantity": _leaf("2.50", 0.99),
+                        "unit_price": _leaf(10.0, 0.99),
+                        "total": _leaf("10.50", 0.99),
+                    }
+                ]
+            },
+        },
+    )
+    evals_dir = tmp_path / "evals"
+
+    outcomes = await harvest_corrections(db_session, evals_dir=evals_dir)
+
+    (ours,) = [o for o in outcomes if o.document_id == document.id]
+    assert ours.status == "harvested"
+    fields = json.loads((evals_dir / "labels" / f"{ours.doc_id}.json").read_text())["fields"]
+    assert fields["subtotal"] == 45.25 and isinstance(fields["subtotal"], float)
+    assert fields["tax"] == 0.8 and isinstance(fields["tax"], float)
+    assert fields["total"] == 46 and isinstance(fields["total"], int)
+    assert fields["line_items"][0]["total"] == 10.5
+    assert fields["line_items"][0]["unit_price"] == 10
+    assert fields["line_items"][0]["quantity"] == 2.5
+
+
+async def test_a_non_numeric_money_correction_is_still_rejected(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    document = await _seed_document(
+        db_session,
+        tmp_path,
+        field_states={
+            "total": {
+                "confidence": 0.5,
+                "needs_review": True,
+                "reviewed_at": datetime.now(UTC),
+                "review_action": "corrected",
+                "corrected_value": "1,234.50",
+            },
+        },
+    )
+    evals_dir = tmp_path / "evals"
+
+    outcomes = await harvest_corrections(db_session, evals_dir=evals_dir)
+
+    (ours,) = [o for o in outcomes if o.document_id == document.id]
+    assert ours.status == "invalid"
+    assert "fields.total must be numeric" in ours.detail
+    assert _labels_for(evals_dir, document.id) == []
+
+
+async def test_a_non_object_line_item_row_is_invalid_and_the_run_continues(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    bad = await _seed_document(
+        db_session,
+        tmp_path,
+        filename="bad rows.png",
+        field_states={
+            "line_items": {
+                "confidence": 0.5,
+                "needs_review": True,
+                "reviewed_at": datetime.now(UTC),
+                "review_action": "corrected",
+                "corrected_value": [1, "a", None],
+            },
+        },
+    )
+    good = await _seed_document(db_session, tmp_path, filename="good rows.png")
+    evals_dir = tmp_path / "evals"
+
+    outcomes = await harvest_corrections(db_session, evals_dir=evals_dir)
+
+    (bad_outcome,) = [o for o in outcomes if o.document_id == bad.id]
+    (good_outcome,) = [o for o in outcomes if o.document_id == good.id]
+    assert bad_outcome.status == "invalid"
+    assert "line_items" in bad_outcome.detail
+    assert good_outcome.status == "harvested"
+    assert _labels_for(evals_dir, bad.id) == []
+
+
 async def test_skips_document_with_pending_review(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:

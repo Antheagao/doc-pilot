@@ -35,13 +35,15 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.evals import dataset
-from app.extraction import TOP_LEVEL_FIELDS
+from app.extraction import LINE_ITEM_MONEY_KEYS, MONEY_FIELDS, TOP_LEVEL_FIELDS
 from app.models import Document, ExtractedField, Extraction
+from app.money import MoneyError, to_decimal, to_label_number
 from app.records import field_value
 
 HARVEST_SOURCE = "human-review"
@@ -53,6 +55,10 @@ _MIME_EXT = {
     "image/webp": ".webp",
     "image/gif": ".gif",
 }
+
+# Quantities are numbers on a label too, and become canonical strings once a
+# reviewer can correct them.
+_LINE_ITEM_NUMBER_KEYS = ("quantity", *LINE_ITEM_MONEY_KEYS)
 
 _DOC_ID_PREFIX_RE = re.compile(r"^(\d{3})-")
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9]+")
@@ -100,6 +106,42 @@ def _existing_source_ids(labels_dir: Path) -> set[str]:
         if isinstance(source_id, str):
             seen.add(source_id)
     return seen
+
+
+def _label_number(value: Any) -> Any:
+    """A money value as the JSON number a label carries: a string correction
+    such as "45.25" becomes 45.25, whole amounts become ints, and null stays
+    null. Anything that is not a plain amount is returned unchanged so the
+    dataset validator rejects the label loudly, with its own message."""
+    if value is None:
+        return None
+    try:
+        return to_label_number(to_decimal(value))
+    except MoneyError:
+        return value
+
+
+def _label_fields(by_name: dict[str, ExtractedField]) -> dict[str, Any]:
+    """The human-verified value of every top-level field, in label form."""
+    label_fields = {
+        name: field_value(by_name[name]) if name in by_name else None
+        for name in TOP_LEVEL_FIELDS
+    }
+    for name in MONEY_FIELDS:
+        label_fields[name] = _label_number(label_fields[name])
+    if isinstance(label_fields["line_items"], list):
+        # A row that is not an object (a typed correction can be any JSON
+        # array) goes through unchanged for the validator to reject.
+        label_fields["line_items"] = [
+            {
+                key: _label_number(cell) if key in _LINE_ITEM_NUMBER_KEYS else cell
+                for key, cell in row.items()
+            }
+            if isinstance(row, dict)
+            else row
+            for row in label_fields["line_items"]
+        ]
+    return label_fields
 
 
 async def _reviewable_documents(
@@ -211,10 +253,7 @@ async def harvest_corrections(
             continue
 
         by_name = {f.field_name: f for f in fields}
-        label_fields = {
-            name: field_value(by_name[name]) if name in by_name else None
-            for name in TOP_LEVEL_FIELDS
-        }
+        label_fields = _label_fields(by_name)
 
         doc_id = f"{next_number:03d}-review-{_slugify(document.filename)}"
         label_path = labels_dir / f"{doc_id}.json"

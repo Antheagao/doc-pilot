@@ -2,6 +2,7 @@
 a scripted fake client (no network)."""
 
 import uuid
+from decimal import Decimal as D
 from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -28,9 +29,12 @@ from app.agent.tools import (
     MalformedToolResult,
     ToolContext,
     ToolError,
+    _matches,
     assert_tool_result_content,
+    extraction_summary,
     get_page,
     query_extractions,
+    record_lines,
     search_documents,
 )
 from app.config import Settings
@@ -38,6 +42,7 @@ from app.evals.corpus import seed_labeled_corpus
 from app.evals.dataset import load_cases
 from app.evals.retrieval import load_gold_corpus
 from app.main import app
+from app.records import DocumentRecord
 from app.retrieval.embeddings import HashingEmbedder, get_embedder
 from app.retrieval.indexing import ChunkingConfig
 from app.routers.ask import get_anthropic_client
@@ -126,6 +131,88 @@ async def test_query_extractions_date_range_and_bad_dates(db_session: AsyncSessi
 
     with pytest.raises(ToolError, match="YYYY-MM-DD"):
         await query_extractions(ctx, {"date_from": "May 2026"})
+
+
+def _record(total, currency="USD", **fields) -> DocumentRecord:
+    return DocumentRecord(
+        uuid.uuid4(), "r.png", {"total": total, "currency": currency, **fields}, []
+    )
+
+
+def test_a_string_total_is_counted_summed_and_matched() -> None:
+    # A stored human correction will be a canonical string, not a float.
+    records = [_record("425.58"), _record(62.65)]
+
+    assert extraction_summary(records) == "2 matching document(s). Sum of totals: 488.23 USD."
+
+    assert _matches(records[0], {}, None, None, D("425.58"), None)
+    assert _matches(records[0], {}, None, None, None, D("425.58"))
+    assert not _matches(records[0], {}, None, None, D("425.59"), None)
+    assert not _matches(records[0], {}, None, None, None, D("425.57"))
+
+
+def test_an_unparseable_total_counts_as_missing_not_a_crash() -> None:
+    records = [_record("425.58"), _record("about 60"), _record(float("nan")), _record(None)]
+
+    assert extraction_summary(records) == (
+        "4 matching document(s). Sum of totals: 425.58 USD. 3 matching document(s) have no total."
+    )
+    assert not _matches(records[1], {}, None, None, D(0), None)
+    assert not _matches(records[1], {}, None, None, None, D(1000))
+    assert _matches(records[1], {}, None, None, None, None)
+
+
+def test_a_total_beyond_the_amount_bound_is_not_summed() -> None:
+    records = [_record(1e12), _record("999999999999.99"), _record(0.01)]
+
+    assert extraction_summary(records) == (
+        "3 matching document(s). Sum of totals: 1000000000000.00 USD. "
+        "1 matching document(s) have no total."
+    )
+    assert not _matches(records[0], {}, None, None, None, D("1E+13"))
+
+
+def test_sums_keep_every_digit_instead_of_rounding_to_the_decimal_context() -> None:
+    records = [_record("1.0000000000000000000000000000001"), _record(1)]
+
+    assert extraction_summary(records) == (
+        "2 matching document(s). Sum of totals: 2.0000000000000000000000000000001 USD."
+    )
+
+
+async def test_a_bad_total_filter_is_a_tool_error(db_session: AsyncSession) -> None:
+    ctx, _ = await _seed(db_session)
+
+    with pytest.raises(ToolError, match="min_total"):
+        await query_extractions(ctx, {"min_total": True})
+    with pytest.raises(ToolError, match="max_total"):
+        await query_extractions(ctx, {"max_total": float("nan")})
+
+
+def test_sums_and_lines_use_each_currencys_digits() -> None:
+    yen = [_record(1500, "JPY"), _record("2500", "jpy")]
+    assert extraction_summary(yen) == "2 matching document(s). Sum of totals: 4000 JPY."
+
+    mixed = [_record(1500, "JPY"), _record(10.5, "EUR"), _record(1.5, "KWD"), _record(2, "XYZ")]
+    assert extraction_summary(mixed) == (
+        "4 matching document(s). Sum of totals: 10.50 EUR; 1500 JPY; 1.500 KWD; 2.00 XYZ."
+    )
+
+    lines = dict(
+        record_lines(
+            _record(
+                1500,
+                "JPY",
+                subtotal="1364",
+                tax=136,
+                line_items=[{"description": "Tea", "quantity": 2, "unit_price": 682, "total": 1364.0}],
+            )
+        )
+    )
+    assert lines["total"] == "total: 1500"
+    assert lines["subtotal"] == "subtotal: 1364"
+    assert lines["line_items[0]"] == "line item: Tea, qty 2, unit price 682, line total 1364"
+    assert dict(record_lines(_record(46.2)))["total"] == "total: 46.20"
 
 
 async def test_search_documents_returns_line_level_citable_results(
