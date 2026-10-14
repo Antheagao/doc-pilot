@@ -87,7 +87,7 @@ STAGED_REVIEW_CASES = (
     # The session-5 staged misread: the bakery note's subtotal read as 46.25
     # instead of 45.25, with the doubt a real model would show.
     StagedReviewCase(
-        "016-handwriting-bakery-note", "subtotal", 46.25, 0.68, "review-correction scenario"
+        "016-handwriting-bakery-note", "subtotal", 46.25, 0.68, "reconciliation scenario"
     ),
 )
 

@@ -44,6 +44,9 @@ class FakeMouse:
     def move(self, x: float, y: float) -> None:
         self.moves.append((x, y))
 
+    def wheel(self, dx: float, dy: float) -> None:
+        self.moves.append((dx, dy))
+
 
 class FakeClock:
     def __init__(self) -> None:
@@ -175,3 +178,18 @@ def test_glide_to_an_element_without_a_box_fails(tmp_path: Path) -> None:
     rec, _, _ = make(tmp_path)
     with pytest.raises(RuntimeError, match="no bounding box"):
         rec.glide(FakeLocator(None))  # type: ignore[arg-type]
+
+
+def test_open_can_start_the_take_at_an_element_below_the_fold(tmp_path: Path) -> None:
+    rec, page, _ = make(tmp_path)
+    box = {"x": 0.0, "y": 900.0, "width": 10.0, "height": 10.0}
+    rec.open("http://x/", start_at=FakeLocator(box))  # type: ignore[arg-type]
+    assert page.evaluated[-1] == ("dy => window.scrollBy(0, dy)", 900 - harness.TOP_MARGIN_PX)
+
+
+def test_scroll_to_wheels_the_element_to_the_top_margin(tmp_path: Path) -> None:
+    rec, page, _ = make(tmp_path)
+    rec.scroll_to(FakeLocator({"x": 0.0, "y": 500.0, "width": 10.0, "height": 10.0}))  # type: ignore[arg-type]
+    assert sum(dy for _, dy in page.moves) == 500 - harness.TOP_MARGIN_PX
+    with pytest.raises(RuntimeError, match="no bounding box"):
+        rec.scroll_to(FakeLocator(None))  # type: ignore[arg-type]

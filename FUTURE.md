@@ -9,7 +9,7 @@ The old Deploy and Stretch sections are gone: deploy was cancelled 2026-08-03, p
 Everything must run on one machine through `docker compose up`, and every feature must be showable in a short GIF.
 The Terraform Cloud Run code stays as an infrastructure-as-code sample but is never applied.
 
-Batch 0 (demo GIF pipeline) was promoted to PRESENT.md on 2026-10-09.
+Batch 0 (demo GIF pipeline) was promoted to PRESENT.md on 2026-10-09; Batch A on 2026-10-11; Batch B on 2026-10-14.
 
 **Every batch below ends with a demo task:** record that batch's GIF(s) with the harness and add them to the gallery.
 The batch is not done until its GIF exists.
@@ -29,22 +29,6 @@ This matters for the headline eval result: Haiku missed 4.6% of fields and flagg
 Model confidence alone cannot catch its own errors; deterministic checks and grounding can.
 
 Batch A (deterministic money and reconciliation) was promoted to PRESENT.md on 2026-10-11.
-
-## Batch B - Extraction schema v2: richer fields plus evidence (one prompt bump, one paid eval re-run)
-
-Goal: capture what real invoices carry, and make every leaf say where it came from.
-Fields and evidence change in the same prompt version so the live eval runs only once.
-
-- **B1 Schema v2** (`prompts/extract_v2.md`, `RECORD_EXTRACTION_TOOL` v2; v1 stays for the eval comparison).
-  New fields: `invoice_number`, `po_number`, `due_date`, `payment_terms`, `discount`, `shipping`, `tip`, `amount_paid`, `amount_due`, `tax_lines` (label, rate, amount), `payment_method` (last 4 only, never full numbers), `vendor_tax_id`.
-  Every leaf gains `evidence: {page, quote}`, where `quote` is the verbatim printed text the value was read from.
-- **B2 Reconciliation rules v2:** `subtotal - discount + shipping + tax + tip = total`, `sum(tax_lines) = tax`, `tax_line.rate x base = tax_line.amount`, `total - amount_paid = amount_due`, `due_date >= document_date`.
-- **B3 Value-quote agreement**, a deterministic anti-hallucination check.
-  Parse the number out of each money leaf's quote with the existing `retrieval/normalize.py` rules (comma decimals, thousands separators, currency symbols) and require it to equal the extracted value.
-  A mismatch means the model wrote a number it did not read, which becomes a review reason.
-- **B4 PDF chunk merge** carries evidence pages through `merge_page_tool_inputs`, so single-call and chunked PDFs both record a page per field.
-- **B5 Eval:** extend labels and `make_evals.py` with the new fields (record-first generation keeps labels correct by construction), add a few documents with discounts, shipping, multiple tax lines, and partial payments, then run Sonnet and Haiku v1 against v2 under the usual cost cap.
-- **B6 Demo GIF:** an invoice with a discount, shipping, and two tax lines extracts and reconciles end to end; a second clip shows the value-quote check catching a number that is not on the page.
 
 ## Batch C - Highlighting: field boxes over the rendered document
 

@@ -82,36 +82,46 @@ def search_hybrid(page: Page, rec: Recording) -> None:
 
 
 # The staged misread (backend/app/demo_seed.py STAGED_REVIEW_CASES): the
-# bakery note's subtotal reads 46.25; the document says 45.25.
+# bakery note's subtotal reads 46.25; the document says 45.25, which is also
+# the one change the arithmetic check suggests.
 REVIEW_DOCUMENT = "016-handwriting-bakery-note.png"
 REVIEW_DOCUMENT_ID = "d03f3f24-6d81-5f98-8454-d7ca27dd5b3f"  # uuid5, stable across resets
-REVIEW_CORRECT_VALUE = "45.25"
-
-
-def review_correction(page: Page, rec: Recording) -> None:
-    """The flagged subtotal on the document, corrected in the review queue,
-    then the document again with the original struck through."""
-    # The reconciliation panel repeats the number, so the row, not the page.
-    subtotal_row = page.locator("#field-subtotal")
-    subtotal = subtotal_row.get_by_text("46.25", exact=True)
-    rec.open(f"{rec.base_url}/documents/{REVIEW_DOCUMENT_ID}", subtotal)
-    rec.beat(1.5)
+SUGGESTED_VALUE = "45.25"
+def reconciliation(page: Page, rec: Recording) -> None:
+    """The staged misread caught by arithmetic: both failing equations and
+    the suggested fix on the document, an operand lighting up its field,
+    the queue card with the same equations, the suggestion used and saved,
+    and the corrected subtotal above both checks passing."""
+    panel = page.get_by_role("region", name=re.compile(r"^Arithmetic check"))
+    rec.open(f"{rec.base_url}/documents/{REVIEW_DOCUMENT_ID}", panel, start_at=panel)
+    failing = page.get_by_role("heading", name=re.compile(r"^Arithmetic check.*Fails$"))
+    if failing.count() == 0:
+        raise ScenarioError("016 does not fail its checks: run `demo.py seed --reset` first")
+    rec.beat(2)
+    rec.click(panel.get_by_role("button", name="46.25 subtotal").first)
+    page.locator("#field-subtotal.cited").wait_for(state="visible")
+    rec.beat(1.2)
     rec.click(page.get_by_role("link", name=re.compile(r"^Review")))
     card = page.locator(".review-row").filter(
         has=page.get_by_role("link", name=REVIEW_DOCUMENT)
     )
     card.wait_for(state="visible")
+    rec.beat(1.2)
+    rec.click(card.get_by_role("button", name=f"Use {SUGGESTED_VALUE}"))
     rec.beat()
-    rec.click(card.get_by_role("button", name="Correct…"))
-    rec.retype(card.get_by_placeholder("Corrected value"), REVIEW_CORRECT_VALUE)
-    rec.beat(0.5)
     rec.click(card.get_by_role("button", name="Save correction"))
     card.wait_for(state="detached")
-    rec.beat(1.5)
+    rec.beat()
     # The document has no link back from the queue once its card is gone;
-    # browser back returns to it, and the route change refreshes the badge.
+    # browser back returns to it.
     page.go_back()
-    subtotal_row.get_by_text("was 46.25").wait_for(state="visible")
+    page.get_by_role("heading", name=re.compile(r"^Arithmetic check.*Passes$")).wait_for(
+        state="visible"
+    )
+    # From the corrected subtotal down to both passing checks, which fit in
+    # one 800 px view; the cursor waits in the gutter, off the numbers.
+    rec.park()
+    rec.scroll_to(page.locator("#field-subtotal"))
     rec.beat(2)
     rec.end_hold()
 
@@ -251,7 +261,7 @@ def monitoring_dashboard(page: Page, rec: Recording) -> None:
 SCENARIOS: dict[str, Scenario] = {
     SMOKE_SLUG: smoke,
     "search-hybrid": search_hybrid,
-    "review-correction": review_correction,
+    "reconciliation": reconciliation,
     "ask-agent": ask_agent,
     "document-chat": document_chat,
     "monitoring-dashboard": monitoring_dashboard,

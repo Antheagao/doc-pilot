@@ -2,6 +2,18 @@
 
 > Append-only log of finished batches/tasks, newest first. `/batch-loop` moves completed tasks here from [PRESENT.md](PRESENT.md) with the date and commit hash. Keep entries short — detail lives in git history.
 
+## Batch A - Deterministic money and reconciliation (COMPLETE 2026-10-14)
+
+A1-A4 on Windows, A5-A7 on macOS; zero model spend for the batch.
+- [x] A1 Money module: exact decimals, ISO 4217 minor units from the SIX list - `64fdc02`
+- [x] A2 Decimal strings at the API, validated corrections with currency-named 422s - `a42b7fd`; review card values on their own line on phones - `8e9e4bb`
+- [x] A3 Reconciliation engine (pure, `rules_v1`), tax-inclusive receipts under recorded assumptions - `9ddcf0f`
+- [x] A4 Reconciliation stored per extraction, failed checks routed to review - `c765ac7`; one backend image for migrate, api, and worker - `bf90afa`
+- [x] A5 Arithmetic check panel on the document page, reasons and a "Use" suggestion in the review queue, badge refreshed on resolve - `5567f80`
+- [x] A6 `caught_by_checks` (Haiku 0.0% by review, 50.0% by checks) and the mutation eval (1604 of 1628 detected, 0 wrong fixes); scorer on exact decimals, harvest refuses labels that do not add up - `bbbc05b`
+- [x] A7 Reconciliation GIF replacing the review-correction GIF - this batch's closing commit
+- Also landed during the batch: `/ask` multi-block citations shown one line per block (`6639877`) and answers rendered from their Markdown (`3b28c78`).
+
 ## Batch 0 - Demo GIF pipeline (COMPLETE 2026-10-11)
 
 Worked on Windows and one macOS session; five feature GIFs in `screenshots/features/`, all at most 15 s, under 1 MB, 960 px.

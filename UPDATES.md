@@ -25,6 +25,12 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-14 (macOS, continued: A5-A7, Batch A complete)
+- A5 (`5567f80`) resumed from `wip/a5-reconciliation-ui` and verified in a browser; the deep review found a quantity-0 line drawn as tax-inclusive, skipped lines counted as failures, two operands of one line cancelling each other's highlight, and a stale prefill note, all fixed. Found on the way: the review badge only refreshed on navigation.
+- A6 (`bbbc05b`), planned by the planner against the committed artifacts: `caught_by_checks` replays stored answers through review routing (Haiku 0.0% by review, 50.0% by checks); the mutation eval detects 1604 of 1628 single-amount misreads with 0 wrong fixes; the scorer reads amounts as exact decimals with no committed score moving. Review caught a tautological test and a missing-key crash path.
+- A7: `reconciliation.gif` (13.2 s, 912 KB) replaces `review-correction.gif`; `Recording.open(start_at=)` starts a take below the fold, because a watched scroll repaints every frame and pushed the first take past 1 MB. Today's demo spend: $0.00.
+- Batch A moved to PREVIOUS.md; Batch B promoted, not yet expanded. Its live eval re-run needs Anthony's approval.
+
 ### 2026-10-14 (macOS: stale checkout, duplicate T0.5, three UI and citation fixes kept)
 - The Mac checkout was 11 commits behind `origin/master` and was not fetched first, so the session redid T0.5 (the `/ask` 400 fix and both live GIFs) that Windows had pushed on 2026-10-11, spending about $0.14 of the approved demo budget on duplicate work.
 - Reset to `origin/master` and kept only what origin lacked, all found in the duplicate recordings and checked in a browser (light and dark, 360 to 1440 px):

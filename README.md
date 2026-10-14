@@ -6,7 +6,7 @@ AI document intelligence: upload messy real-world receipts and invoices → a vi
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-535 mocked backend tests and 69 demo-tooling tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+890 mocked backend tests and 71 demo-tooling tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Features
 
@@ -20,11 +20,12 @@ No model call: retrieval runs on local embeddings and Postgres full-text search.
 
 ![Hybrid search: "a light for my workspace" returns the LED Desk Lamp lines first, then keyword mode finds the Berlin receipt from "27.82 euros"](screenshots/features/search-hybrid.gif)
 
-**Human review.**
-A low-confidence field goes to the review queue on its own, is corrected inline, and the document keeps the model's original value struck through beside the correction.
-The misread subtotal in this take is staged for the demo, and the seed records it as staged in the extraction's provenance; the queue's other three items are the model's own low-confidence fields.
+**Arithmetic checks and human review.**
+Every extraction's amounts are checked in code: here a misread subtotal breaks two equations, and the check suggests the one value that makes every check pass.
+Selecting an amount lights up its field; the review queue shows the same equations, and using the suggestion still waits for Save.
+The misread subtotal in this take is staged for the demo, and the seed records it as staged in the extraction's provenance; no model call is made.
 
-![Review correction: the flagged subtotal is corrected in the queue, and the document shows the original struck through](screenshots/features/review-correction.gif)
+![Arithmetic check: the bakery note's subtotal fails two equations, the queue fills in the suggested 45.25, and after saving both checks pass](screenshots/features/reconciliation.gif)
 
 **Ask an agent.**
 The agent on Claude Opus 5.5 picks a tool, here a query over the extracted records, and every number in its answer links to the field it came from.
@@ -515,4 +516,4 @@ The misses are a total read as the subtotal on a document with tax, which looks 
 
 <!-- CHECKS_TABLE:END -->
 
-*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. An LLM judge grades answers for correctness and groundedness beside the deterministic rubric, and both are scored against hand-labeled answers; in production, every answer is stored with its evidence, rated by people, and (sampled) graded for groundedness in the background. Next: the first live agent-eval and judge-calibration runs, then pick a host and ship the demo.*
+*Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. An LLM judge grades answers for correctness and groundedness beside the deterministic rubric, and both are scored against hand-labeled answers; in production, every answer is stored with its evidence, rated by people, and (sampled) graded for groundedness in the background. Next: the first live agent-eval and judge-calibration runs, and Batch B's richer schema with evidence for every value (`FUTURE.md`). doc-pilot stays a local demonstration and is never hosted.*

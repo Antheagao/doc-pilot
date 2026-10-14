@@ -52,6 +52,7 @@ GLIDE_MS = 600  # how long a glide takes
 SCROLL_STEP_PX = 24  # per wheel tick of Recording.scroll
 SCROLL_TICK_MS = 16
 END_HOLD = 1.5  # seconds on the final state before the video ends
+TOP_MARGIN_PX = 80  # where scroll_to and open(start_at=) leave an element
 
 # Seconds added to the measured first-paint time: a frame needs a moment
 # to reach the screen.
@@ -188,15 +189,23 @@ class Recording:
         (self._frames_dir / name).write_bytes(frame["data"])
         self._frames.append((frame["timestamp"] / 1000, name))
 
-    def open(self, url: str, *ready: Locator) -> None:
+    def open(self, url: str, *ready: Locator, start_at: Locator | None = None) -> None:
         """Load url, wait until every `ready` locator is visible and the
         network is idle (no content left to pop in and shift the layout).
         Everything before the first open's ready moment is the blank lead-in
-        the encode trims; a later open keeps what was recorded before it."""
+        the encode trims; a later open keeps what was recorded before it.
+
+        `start_at` jumps the page to that element (TOP_MARGIN_PX below the
+        top) before the take begins, for a take about something below the
+        fold: a scroll the viewer watched would repaint every frame of it,
+        the costliest motion for the GIF's size limit. On a later open the
+        jump is a visible cut."""
         self.page.goto(url)
         for locator in ready:
             locator.wait_for(state="visible")
         self.page.wait_for_load_state("networkidle")
+        if start_at is not None:
+            self.page.evaluate("dy => window.scrollBy(0, dy)", self._distance_to(start_at))
         self.page.mouse.move(*START_POINTER)
         self._pointer = START_POINTER
         self.page.wait_for_timeout(100)
@@ -270,6 +279,17 @@ class Recording:
             self.page.mouse.wheel(0, direction * step)
             self.page.wait_for_timeout(SCROLL_TICK_MS)
             remaining -= step
+
+    def scroll_to(self, locator: Locator) -> None:
+        """Wheel-scroll, smoothly, until the element's top sits
+        TOP_MARGIN_PX below the top of the viewport."""
+        self.scroll(self._distance_to(locator))
+
+    def _distance_to(self, locator: Locator) -> int:
+        box = locator.bounding_box()
+        if box is None:
+            raise RuntimeError(f"{locator} has no bounding box to scroll to")
+        return int(box["y"] - TOP_MARGIN_PX)
 
     @contextmanager
     def fast_forward(self, factor: float) -> Iterator[None]:
