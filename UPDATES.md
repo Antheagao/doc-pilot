@@ -25,6 +25,15 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-11 to 2026-10-13 (Windows: Batch A, A1-A4)
+- Batch A promoted (planner, `91db9c7` base); the planner's seven open questions were taken at their defaults and recorded on PRESENT.md.
+- A1 money module (`64fdc02`): exact decimals, ISO 4217 minor units from the SIX list (165 codes); review caught a harvest crash on malformed line-item corrections.
+- A2 decimal strings at the API (`a42b7fd`): review caught the review page turning a European `45,25` into `4525.00`; corrections now validated with currency-named 422s.
+- A3 reconciliation engine (`9ddcf0f`): Haiku's 018/019/020 fail, 4 of its 8 silent misses; tax-inclusive EU receipts pass under recorded assumptions (decision taken during review).
+- A4 persist and route (`c765ac7`): migration `e8c3a6f1b254` applied to the dev database after a `pg_dump` backup; failed checks route to review.
+- Also: phone layout for review cards (`8e9e4bb`); one backend image for migrate, api, and worker (`bf90afa`), after a stale migrate image silently skipped a migration.
+- CI green on every commit. A PC crash on 2026-10-12 interrupted A5; its partial work is on branch `wip/a5-reconciliation-ui`. Next: finish A5, then A6 (evals) and A7 (GIF).
+
 ### 2026-10-11 (Windows: T0.5-T0.7, Batch 0 complete)
 - Pulled the macOS session (T0.3 review, T0.3b, T0.4); its frames and GIFs checked here.
 - Anthony approved the T0.5 live spend (cap $1.50) and chose real data only for the dashboard.
