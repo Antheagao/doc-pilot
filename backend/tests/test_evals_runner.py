@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from app.evals.checks import check_metrics, doc_routing
 from app.evals.dataset import load_cases
 from app.evals.runner import (
     RunResult,
@@ -56,6 +57,27 @@ class TestMockRun:
         predicted = predicted_mock_accuracy(cases)
         assert predicted == pytest.approx((5 * 7 - 1) / (5 * 7))
         assert result.summary["overall_accuracy"] == predicted
+        # The one perturbation inside the subset is the tax, which the
+        # arithmetic catches: 1 of 1 incorrect fields.
+        assert check_metrics(result.to_dict()).caught_by_checks == 1.0
+
+    async def test_mock_caught_by_checks_is_pinned(self):
+        cases = load_cases()
+        result = await run_eval(cases, extract_fn=build_mock_extract_fn(cases))
+        run = result.to_dict()
+
+        metrics = check_metrics(run)
+
+        # The two wrong mock fields are 003's tax (+0.10, which breaks
+        # total_math) and 007's vendor (null, which no amount rule can see), so
+        # the checks catch exactly one of two. This pins the replay path end to
+        # end without a model.
+        assert metrics.n_incorrect == 2
+        assert metrics.n_caught_by_checks == 1
+        assert metrics.caught_by_checks == 0.5
+        tax_doc = next(d for d in run["per_doc"] if d["fields"]["tax"]["correct"] is False)
+        routing = doc_routing(tax_doc, run["review_threshold"])
+        assert routing["tax"].review_reason == "reconciliation:total_math"
 
 
 class TestCostCap:

@@ -41,6 +41,8 @@ jobs:
         run: ruff check .
       - name: Lint the demo scripts
         run: ruff check ../scripts/demos
+      - name: Lint the eval CLIs
+        run: ruff check ../evals
       - name: Test the demo scripts
         run: python -m pytest ../scripts/demos -q
       # No separate migrate step: the suite runs on its own database

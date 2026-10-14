@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.evals.agent import RESULTS_DIR as AGENT_RESULTS_DIR
+from app.evals.checks import check_metrics
 from app.evals.report import RESULTS_DIR as EXTRACTION_RESULTS_DIR
 from app.evals.report import load_results
 from app.evals.retrieval import RESULTS_DIR as RETRIEVAL_RESULTS_DIR
@@ -83,7 +84,8 @@ def _read_json_dir(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
 def extraction_points(results_dir: Path | None = None) -> list[EvalRunPoint]:
     points = []
     for run in load_results(results_dir or EXTRACTION_RESULTS_DIR):
-        summary = run["summary"]
+        summary = run["summary"] or {}
+        metrics = check_metrics(run)
         points.append(
             EvalRunPoint(
                 suite="extraction",
@@ -99,6 +101,7 @@ def extraction_points(results_dir: Path | None = None) -> list[EvalRunPoint]:
                 latency_p95_ms=run["latency_p95_ms"],
                 extra={
                     "caught_by_review": summary.get("caught_by_review"),
+                    "caught_by_checks": metrics.caught_by_checks if metrics else None,
                     "hallucinations": summary.get("total_hallucinations"),
                 },
             )

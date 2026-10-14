@@ -2,9 +2,12 @@
 history tables consumed by README.md and evals/results/latest.md, and
 inject them into README between the EVAL_TABLE marker comments.
 
-Pure/offline: reads only the JSON artifacts app.evals.runner.write_result
+Offline: reads only the JSON artifacts app.evals.runner.write_result
 already wrote, plus the README.md text -- no DB, no network, no
-re-running extraction. Deliberately tolerant of a corrupt or
+re-running extraction. The one computed column, Caught by checks, replays
+each run's stored answers through the reconciliation rules every time the
+tables are rendered (app.evals.checks), so it follows the rules version
+and is never written into an artifact. Deliberately tolerant of a corrupt or
 half-written artifact file (warns to stderr, skips it) so one bad run
 can't take down reporting for every other run in evals/results/.
 """
@@ -14,7 +17,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from app.evals.checks import check_metrics, doc_routing
 from app.evals.dataset import EVALS_DIR
+from app.reconcile import RULES_VERSION
+from app.review_routing import Routing
 
 RESULTS_DIR = EVALS_DIR / "results"
 LATEST_MD_PATH = RESULTS_DIR / "latest.md"
@@ -26,7 +32,7 @@ END_MARKER = "<!-- EVAL_TABLE:END -->"
 # before the first eval run -- kept as one constant so the two never
 # drift out of sync with each other.
 NO_RUNS_PLACEHOLDER = (
-    "*No eval runs recorded yet — table appears after the first "
+    "*No eval runs recorded yet - table appears after the first "
     "`evals/run.py` run with `--update-readme`.*"
 )
 
@@ -49,6 +55,7 @@ _REQUIRED_KEYS = (
     "latency_p50_ms",
     "latency_p95_ms",
     "per_doc",
+    "review_threshold",
 )
 
 # (column label, per_field_accuracy key) -- in the table's display
@@ -76,6 +83,7 @@ _OPS_HEADER = (
     "Prompt",
     "Conf ✓/✗",
     "Caught by review",
+    "Caught by checks",
     "Halluc.",
     "$/doc",
     "Total $",
@@ -93,7 +101,10 @@ _OPS_CAPTION = (
     "*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; "
     "Caught by review is the share of incorrect fields whose confidence fell "
     "below that run's review_threshold -- the empirical case for the "
-    "human-review queue; $/doc and Total $ are extraction spend in USD; "
+    "human-review queue; Caught by checks is the share of incorrect fields "
+    f"the arithmetic checks (app/reconcile.py, {RULES_VERSION}) route to "
+    "review, replayed from each run's stored answers whenever this table is "
+    "rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; "
     "latency is wall-clock p50/p95 per document.*"
 )
 
@@ -216,6 +227,8 @@ def _ops_row(result: dict[str, Any]) -> str:
         conf = f"{_conf(summary['mean_confidence_correct'])} / {_conf(summary['mean_confidence_incorrect'])}"
         caught = _pct(summary["caught_by_review"])
         halluc = str(summary["total_hallucinations"])
+    metrics = check_metrics(result)
+    caught_by_checks = _pct(metrics.caught_by_checks) if metrics else "n/a"
 
     return _row(
         [
@@ -223,6 +236,7 @@ def _ops_row(result: dict[str, Any]) -> str:
             result["prompt_version"] or "n/a",
             conf,
             caught,
+            caught_by_checks,
             halluc,
             f"${result['mean_cost_per_doc']:.4f}",
             f"${result['total_cost_usd']:.4f}",
@@ -300,11 +314,18 @@ def _render_value(value: Any) -> str:
     return _esc(str(value))
 
 
+def _flagged_cell(routing: Routing) -> str:
+    """Why the product would send this field to a person: the model's doubt
+    (`confidence`), a failing check (`reconciliation:<id>`), or neither."""
+    return routing.review_reason or "not flagged"
+
+
 def _failure_rows(latest: dict[str, Any]) -> list[str]:
     rows = []
     for doc in latest["per_doc"]:
         if doc.get("status") != "scored":
             continue
+        routing = doc_routing(doc, latest["review_threshold"])
         for field_name, field_score in doc["fields"].items():
             if field_score["correct"]:
                 continue
@@ -316,6 +337,7 @@ def _failure_rows(latest: dict[str, Any]) -> list[str]:
                         _render_value(field_score["expected"]),
                         _render_value(field_score["actual"]),
                         _conf(field_score["confidence"]),
+                        _flagged_cell(routing[field_name]),
                     ]
                 )
             )
@@ -338,7 +360,7 @@ def render_latest_md(results: list[dict[str, Any]]) -> str:
     latest = results[-1]
     rows = _failure_rows(latest)
     detail = (
-        _table(("Doc", "Field", "Expected", "Actual", "Confidence"), rows)
+        _table(("Doc", "Field", "Expected", "Actual", "Confidence", "Flagged"), rows)
         if rows
         else "*No incorrect fields in the most recent run.*"
     )

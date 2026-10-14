@@ -30,8 +30,9 @@ Longer procedures live in `.claude/skills/` and `.claude/commands/`.
 
 - Backend, from `backend/` with `.venv`: `ruff check .`, `pytest -q` (the suite creates and migrates its own `docpilot_test` database).
 - Demo scripts, from `backend/`: `ruff check ../scripts/demos`, `pytest ../scripts/demos -q`.
+- Eval CLIs, from `backend/`: `ruff check ../evals`.
 - Frontend, from `frontend/`: `npx eslint src`, `npm run build`.
-- Evals: `tests/test_evals_runner.py` pins the mock extraction accuracy inside pytest; `evals/run_retrieval.py --check` gates retrieval quality.
+- Evals: `tests/test_evals_runner.py` pins the mock extraction accuracy inside pytest; `evals/run_retrieval.py --check` gates retrieval quality; `evals/run_checks.py` runs the offline reconciliation eval.
 - Compose: `docker compose config -q`, and with the demo overlay `docker compose -f docker-compose.yml -f docker-compose.demo.yml config -q`.
 - Every model-touching feature ships with an eval before it ships to the demo.
   Live model runs are opt-in and cost-capped (`--max-cost`, `RUN_LIVE_SMOKE=1`, `DAILY_BUDGET_USD`).

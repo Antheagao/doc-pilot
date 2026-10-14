@@ -21,6 +21,11 @@ Every written label is validated with the same loud validator the eval
 loader uses (app.evals.dataset._load_case) before it is kept; a label
 that fails validation (e.g. a hand-typed date in the wrong format) is
 deleted again and reported, never left half-broken in the dataset.
+A label must also add up: its values are run through the reconciliation
+rules, and one that fails them is refused the same way. Labels are the
+consistent baseline the reconciliation eval (app.evals.checks) breaks one
+number at a time, and a label that disagrees with itself would score a
+correct extraction wrong.
 
 Idempotence: each harvested label records the source document's UUID in a
 `source_document_id` top-level key (dataset.py tolerates extra top-level
@@ -41,9 +46,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.evals import dataset
+from app.evals.checks import reconcile_label
 from app.extraction import LINE_ITEM_MONEY_KEYS, MONEY_FIELDS, TOP_LEVEL_FIELDS
 from app.models import Document, ExtractedField, Extraction
 from app.money import MoneyError, to_decimal, to_label_number
+from app.reconcile import STATUS_FAIL
 from app.records import field_value
 
 HARVEST_SOURCE = "human-review"
@@ -142,6 +149,25 @@ def _label_fields(by_name: dict[str, ExtractedField]) -> dict[str, Any]:
             for row in label_fields["line_items"]
         ]
     return label_fields
+
+
+def _label_problem(label_path: Path, evals_dir: Path) -> str | None:
+    """Why a freshly written label must not be kept, or None when it is fine.
+
+    The same loud validation the eval loader applies comes first (a label that
+    would break load_cases() never stays in the dataset), then the
+    reconciliation rules: a label whose own amounts do not add up is refused
+    with the failing checks named.
+    """
+    try:
+        case = dataset._load_case(label_path, evals_dir=evals_dir)
+    except ValueError as exc:
+        return str(exc)
+    report = reconcile_label(case.fields)
+    if report.status == STATUS_FAIL:
+        failing = " ".join(f"{check.id}: {check.detail}" for check in report.failing_checks)
+        return f"the reviewed values fail reconciliation ({report.rules_version}): {failing}"
+    return None
 
 
 async def _reviewable_documents(
@@ -278,16 +304,11 @@ async def harvest_corrections(
             encoding="utf-8",
         )
 
-        # Same loud validation the eval loader applies -- a label that
-        # would break load_cases() must never be left in the dataset.
-        try:
-            dataset._load_case(label_path, evals_dir=evals_dir)
-        except ValueError as exc:
+        problem = _label_problem(label_path, evals_dir)
+        if problem is not None:
             label_path.unlink(missing_ok=True)
             image_path.unlink(missing_ok=True)
-            outcomes.append(
-                HarvestOutcome(document.id, None, "invalid", str(exc))
-            )
+            outcomes.append(HarvestOutcome(document.id, None, "invalid", problem))
             continue
 
         next_number += 1

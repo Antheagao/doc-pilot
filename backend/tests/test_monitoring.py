@@ -13,6 +13,7 @@ from app.evals import history
 from app.evals.history import (
     agent_points,
     eval_history,
+    extraction_points,
     parse_started_at,
     retrieval_points,
 )
@@ -102,6 +103,29 @@ def test_the_committed_runs_load_oldest_first() -> None:
     extraction = runs["extraction"][-1]
     assert extraction.accuracy_metric == "field accuracy" and 0 <= extraction.accuracy <= 1
     assert extraction.mean_cost_usd > 0 and extraction.latency_p95_ms >= extraction.latency_p50_ms
+
+
+def test_extraction_points_carry_the_checks_that_caught_each_runs_misses() -> None:
+    points = {(p.series, p.n): p for p in extraction_points()}
+
+    # Haiku's confidence caught none of its 8 misses; the arithmetic caught 4.
+    haiku = points[("claude-haiku-4-5", 25)]
+    assert haiku.extra["caught_by_review"] == 0.0
+    assert haiku.extra["caught_by_checks"] == 0.5
+    assert points[("claude-sonnet-5", 25)].extra["caught_by_checks"] == 0.0
+    # The 3-document Sonnet run got everything right: nothing to catch.
+    assert points[("claude-sonnet-5", 3)].extra["caught_by_checks"] is None
+
+
+def test_an_extraction_run_without_a_summary_is_a_point_without_accuracy(tmp_path) -> None:
+    committed = next(iter(sorted(history.EXTRACTION_RESULTS_DIR.glob("*.json"))))
+    run = json.loads(committed.read_text(encoding="utf-8"))
+    _write(tmp_path / "run.json", {**run, "summary": None, "n_scored": 0, "per_doc": []})
+
+    (point,) = extraction_points(tmp_path)
+
+    assert point.accuracy is None
+    assert point.extra["caught_by_checks"] is None
 
 
 async def test_eval_endpoint_returns_every_suite(client: AsyncClient, monkeypatch, tmp_path) -> None:

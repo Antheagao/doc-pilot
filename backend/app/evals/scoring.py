@@ -14,6 +14,10 @@ tolerated here per the module's own docstring: engine creation in app.db
 is lazy, so this stays importable with Postgres down. app.worker is
 never imported and no DB session is ever opened.
 
+Amounts are read with the product's own parser (app.money.to_decimal) and
+compared as exact decimals, so the eval and the reconciliation checks agree
+on what a string such as "17.44" or "$17.44" means.
+
 Null semantics, applied uniformly to every top-level field including
 line_items as a whole:
 - gold None, pred None -> correct
@@ -27,22 +31,23 @@ import difflib
 import re
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from statistics import mean
 from typing import Any
 
 from app.evals.dataset import EvalCase
 from app.extraction import MONEY_FIELDS, TOP_LEVEL_FIELDS, _coerce_leaf
+from app.money import MoneyError, to_decimal
 
 VENDOR_MATCH_THRESHOLD = 0.85
 ITEM_DESC_THRESHOLD = 0.8
-AMOUNT_TOLERANCE = 0.01
+AMOUNT_TOLERANCE = Decimal("0.01")
 
 _LINE_ITEM_KEYS = ("description", "quantity", "unit_price", "total")
 _AMOUNT_FIELD_NAMES = MONEY_FIELDS
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _PUNCTUATION_RE = re.compile(r"[^\w\s]")
-_CURRENCY_JUNK_RE = re.compile(r"[^\d.\-]")
 
 
 # --- text normalization -----------------------------------------------
@@ -157,53 +162,44 @@ def match_currency(expected: str, actual: str) -> bool:
 # --- amounts ---------------------------------------------------------------
 
 
-def _coerce_amount(value: Any) -> tuple[float | None, bool]:
-    """Coerce a numeric-ish value to float. Returns (value, coerced) where
-    coerced is True iff the value was a string that had to be parsed
-    (strip currency symbols, strip thousands-separator commas) rather
-    than arriving as a plain int/float -- every such coercion is counted
-    as a schema violation by the caller, since the model was asked for a
-    bare number, not a formatted string. Kept intentionally simple:
-    commas are always treated as thousands separators (no European
-    "17,44"-as-decimal support).
+def _coerce_amount(value: Any) -> tuple[Decimal | None, bool]:
+    """Read a numeric-ish value as a Decimal through app.money.to_decimal.
+    Returns (value, coerced) where coerced is True iff the value was a
+    string -- every string is counted as a schema violation by the caller,
+    since the model was asked for a bare number, not text. A string that is
+    not a plain number ("$17.44", "1,234.50") is refused by the parser, so
+    it reads as None and scores wrong, the way the product would treat it.
     """
     if isinstance(value, bool):
         return None, False
-    if isinstance(value, int | float):
-        return float(value), False
-    if isinstance(value, str):
-        cleaned = _CURRENCY_JUNK_RE.sub("", value.replace(",", ""))
-        try:
-            return float(cleaned), True
-        except ValueError:
-            return None, True
-    return None, False
+    try:
+        return to_decimal(value), isinstance(value, str)
+    except MoneyError:
+        return None, isinstance(value, str)
 
 
-def _amounts_match(expected: float, actual: float) -> bool:
-    """Compare two dollar amounts in integer cents rather than raw
-    floats. `abs(expected - actual) <= AMOUNT_TOLERANCE` is float-broken
-    exactly at the boundary it's supposed to police: 19.99 - 20.00 is
-    -0.010000000000001563 in binary float, which fails a naive
-    `<= 0.01` even though the two amounts are one cent apart and should
-    pass. Rounding both sides to whole cents first makes the comparison
-    exact regardless of binary-float representation error.
+def _amounts_match(expected: Decimal, actual: Decimal) -> bool:
+    """True when two amounts are within AMOUNT_TOLERANCE of each other.
+    The float boundary bug this once guarded against (19.99 - 20.00 is
+    -0.010000000000001563 in binary float, which failed a naive `<= 0.01`
+    though the amounts are one cent apart) cannot happen in Decimal, so the
+    plain comparison is exact.
     """
-    tolerance_cents = round(AMOUNT_TOLERANCE * 100)
-    return abs(round(expected * 100) - round(actual * 100)) <= tolerance_cents
+    return abs(expected - actual) <= AMOUNT_TOLERANCE
 
 
 def match_amount(expected: float, actual: Any) -> tuple[bool, bool]:
-    """Returns (matched, coerced). `actual` is coerced to float first
-    (see _coerce_amount); `coerced` is True whenever that coercion had to
-    parse a string at all (e.g. "$17.44"), regardless of whether the
-    parsed value ends up matching. `matched` is True iff the coerced
-    actual is within AMOUNT_TOLERANCE of expected (see _amounts_match).
+    """Returns (matched, coerced). `actual` is read as a Decimal first
+    (see _coerce_amount); `coerced` is True whenever it was a string,
+    regardless of whether it parsed or matched. `matched` is True iff the
+    parsed actual is within AMOUNT_TOLERANCE of expected (see
+    _amounts_match). `expected` is a validated label value, so a malformed
+    one raises MoneyError rather than scoring.
     """
     actual_value, coerced = _coerce_amount(actual)
     if actual_value is None:
         return False, coerced
-    return _amounts_match(expected, actual_value), coerced
+    return _amounts_match(to_decimal(expected), actual_value), coerced
 
 
 # --- line items --------------------------------------------------------

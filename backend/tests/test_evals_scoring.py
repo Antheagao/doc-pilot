@@ -20,6 +20,7 @@ from app.evals.dataset import (
     _validate_vendor,
     load_cases,
 )
+from app.evals.report import load_results
 from app.evals.scoring import (
     CaseScore,
     FieldScore,
@@ -142,15 +143,32 @@ class TestMatchAmount:
         matched, _coerced = match_amount(10.00, 9.99)
         assert matched is True
 
-    def test_dollar_sign_string_is_coerced(self):
+    def test_dollar_sign_string_is_not_an_amount(self):
+        # The product's parser (money.to_decimal) refuses "$17.44", so the
+        # eval scores it wrong rather than guessing what the model meant.
         matched, coerced = match_amount(17.44, "$17.44")
+        assert matched is False
+        assert coerced is True
+
+    def test_thousands_comma_string_is_not_an_amount(self):
+        matched, coerced = match_amount(1234.50, "1,234.50")
+        assert matched is False
+        assert coerced is True
+
+    def test_plain_decimal_string_matches_and_is_coerced(self):
+        matched, coerced = match_amount(17.44, "17.44")
         assert matched is True
         assert coerced is True
 
-    def test_thousands_comma_string_is_coerced(self):
-        matched, coerced = match_amount(1234.50, "1,234.50")
+    def test_float_sum_noise_does_not_matter(self):
+        # 0.1 + 0.2 is 0.30000000000000004 in binary float; both sides are
+        # read as the shortest decimal that round-trips.
+        matched, _coerced = match_amount(0.3, 0.1 + 0.2)
         assert matched is True
-        assert coerced is True
+
+    def test_tolerance_is_exactly_one_cent(self):
+        matched, _coerced = match_amount(10.00, 10.014)
+        assert matched is False
 
     def test_unparseable_string_is_coerced_and_fails(self):
         matched, coerced = match_amount(10.0, "not a number")
@@ -312,12 +330,28 @@ class TestMatchLineItems:
             {
                 "description": _leaf("Widget"),
                 "quantity": _leaf(2),
-                "unit_price": _leaf("$5.00"),
+                "unit_price": _leaf("5.00"),
                 "total": _leaf(10.0),
             }
         ]
         correct, _item_accuracy, schema_violations = match_line_items(gold, pred)
         assert correct is True
+        assert schema_violations == 1
+
+    def test_formatted_amount_inside_an_item_is_not_matched_but_still_counted(self):
+        gold = [
+            {"description": "Widget", "quantity": 2, "unit_price": 5.0, "total": 10.0}
+        ]
+        pred = [
+            {
+                "description": _leaf("Widget"),
+                "quantity": _leaf(2),
+                "unit_price": _leaf("$5.00"),
+                "total": _leaf(10.0),
+            }
+        ]
+        correct, _item_accuracy, schema_violations = match_line_items(gold, pred)
+        assert correct is False
         assert schema_violations == 1
 
 
@@ -418,16 +452,24 @@ class TestScoreCase:
         tool_input = _base_tool_input()
         tool_input["total"] = _leaf("$11.00")
         score = score_case(case, tool_input, review_threshold=0.8)
+        assert score.fields["total"].correct is False
+        assert score.schema_violations == 1
+
+    def test_plain_amount_string_matches_but_is_still_a_schema_violation(self):
+        case = _case()
+        tool_input = _base_tool_input()
+        tool_input["total"] = _leaf("11.00")
+        score = score_case(case, tool_input, review_threshold=0.8)
         assert score.fields["total"].correct is True
         assert score.schema_violations == 1
 
     def test_line_item_amount_coercion_counts_as_schema_violation(self):
         # Previously match_line_items discarded the coerced flag from
-        # its inner match_amount calls, so a string like "$5.00" inside
+        # its inner match_amount calls, so a string like "5.00" inside
         # a line item never reached score_case's schema_violations count.
         case = _case()
         tool_input = _base_tool_input()
-        tool_input["line_items"]["value"][0]["unit_price"] = _leaf("$5.00")
+        tool_input["line_items"]["value"][0]["unit_price"] = _leaf("5.00")
         score = score_case(case, tool_input, review_threshold=0.8)
         assert score.fields["line_items"].correct is True
         assert score.schema_violations == 1
@@ -783,3 +825,26 @@ class TestLoadRealDataset:
         all_cases = load_cases()
         limited = load_cases(limit=3)
         assert [c.doc_id for c in limited] == [c.doc_id for c in all_cases[:3]]
+
+
+def test_rescoring_the_committed_runs_reproduces_their_scores():
+    # The scorer reads amounts through the product's parser; this pins that the
+    # change moved no committed score. Each artifact's stored answers are
+    # rebuilt into a tool_input and scored again.
+    cases = {case.doc_id: case for case in load_cases()}
+    results = load_results()
+    assert results
+    for run in results:
+        for doc in run["per_doc"]:
+            if doc.get("status") != "scored":
+                continue
+            tool_input = {
+                name: {"value": field["actual"], "confidence": field["confidence"]}
+                for name, field in doc["fields"].items()
+            }
+            score = score_case(cases[doc["doc_id"]], tool_input, run["review_threshold"])
+            for name, field in doc["fields"].items():
+                assert score.fields[name].correct == field["correct"], (doc["doc_id"], name)
+            assert score.item_accuracy == doc["item_accuracy"], doc["doc_id"]
+            assert score.schema_violations == doc["schema_violations"], doc["doc_id"]
+            assert score.hallucinations == doc["hallucinations"], doc["doc_id"]

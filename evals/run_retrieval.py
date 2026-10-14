@@ -14,8 +14,8 @@ Run with the backend venv's interpreter, from the repo root:
 """
 
 import argparse
-import json
 import asyncio
+import json
 import sys
 from pathlib import Path
 

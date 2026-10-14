@@ -84,11 +84,15 @@ def _print_summary(result, cases, *, mock: bool) -> None:
     if summary is None:
         print("\nno docs were scored -- nothing to aggregate")
     else:
+        from app.evals.checks import check_metrics
+
         print(f"\noverall_accuracy: {summary['overall_accuracy']:.6f}")
         print("per-field accuracy:")
         for name, acc in summary["per_field_accuracy"].items():
             print(f"  {name:<16} {acc:.4f}")
         print(f"caught_by_review: {summary['caught_by_review']}")
+        metrics = check_metrics(result.to_dict())
+        print(f"caught_by_checks: {metrics.caught_by_checks if metrics else None}")
         print(f"total_hallucinations: {summary['total_hallucinations']}")
         print(f"total_schema_violations: {summary['total_schema_violations']}")
 

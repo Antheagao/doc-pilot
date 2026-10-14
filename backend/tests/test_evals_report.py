@@ -11,8 +11,13 @@ from typing import Any
 
 import pytest
 
+from app.evals.dataset import EVALS_DIR
 from app.evals.report import (
+    _OPS_HEADER,
+    END_MARKER,
+    LATEST_MD_PATH,
     NO_RUNS_PLACEHOLDER,
+    START_MARKER,
     load_results,
     render_latest_md,
     render_tables,
@@ -74,6 +79,44 @@ def _make_artifact(**overrides: Any) -> dict[str, Any]:
     return base
 
 
+def _field(expected, actual, confidence=0.9, correct=True) -> dict[str, Any]:
+    return {"correct": correct, "expected": expected, "actual": actual, "confidence": confidence}
+
+
+def _leaf(value, confidence=0.9) -> dict[str, Any]:
+    return {"value": value, "confidence": confidence}
+
+
+def _doc_with_wrong_tax(tax_confidence: float = 0.9) -> dict[str, Any]:
+    """A scored document whose tax was read as 1.5 instead of 1.0: the amounts no
+    longer add up, so subtotal + tax = total fails."""
+    row = {"description": _leaf("Widget"), "quantity": _leaf(2), "unit_price": _leaf(5.0), "total": _leaf(10.0)}
+    expected_row = {"description": "Widget", "quantity": 2, "unit_price": 5.0, "total": 10.0}
+    return {
+        "doc_id": "042-wrong-tax",
+        "status": "scored",
+        "difficulty": "easy",
+        "fields": {
+            "vendor": _field("Acme", "Acme"),
+            "document_date": _field("2026-01-01", "2026-01-01"),
+            "currency": _field("USD", "USD"),
+            "subtotal": _field(10.0, 10.0),
+            "tax": _field(1.0, 1.5, tax_confidence, correct=False),
+            "total": _field(11.0, 11.0),
+            "line_items": _field([expected_row], [row]),
+        },
+        "schema_violations": 0,
+        "hallucinations": 0,
+        "item_accuracy": 1.0,
+    }
+
+
+def _ops_cell(row: str, column: str) -> str:
+    """One cell of an Ops table row, found by its header label."""
+    cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+    return cells[_OPS_HEADER.index(column)]
+
+
 class TestRenderTables:
     def test_empty_results_is_placeholder(self):
         assert render_tables([]) == NO_RUNS_PLACEHOLDER
@@ -125,6 +168,41 @@ class TestRenderTables:
 
         # a one-line caption under each table
         assert markdown.count("*") >= 4  # two *...* captions, each wrapped
+
+    def test_ops_table_has_a_caught_by_checks_column(self):
+        markdown = render_tables([_make_artifact()])
+
+        ops_header = next(line for line in markdown.splitlines() if "Caught by review" in line)
+        assert "| Caught by review | Caught by checks |" in ops_header
+        assert "Caught by checks is the share" in markdown
+
+    def test_caught_by_checks_is_replayed_from_the_stored_answers(self):
+        artifact = _make_artifact(n_scored=1, per_doc=[_doc_with_wrong_tax()])
+
+        ops_row = render_tables([artifact]).split("### Ops")[1].splitlines()[4]
+
+        # The 1.5 tax breaks total_math, and no unique fix exists, so tax is
+        # flagged by the arithmetic even though the model was confident.
+        assert _ops_cell(ops_row, "Caught by checks") == "100.0%"
+
+    def test_caught_by_checks_moves_apart_from_caught_by_review(self):
+        # A wrong vendor has no arithmetic: the same summary (caught by review
+        # 100%) now reads 0.0% caught by checks.
+        doc = _doc_with_wrong_tax()
+        doc["fields"]["tax"] = _field(1.0, 1.0)
+        doc["fields"]["vendor"] = _field("Acme", "Acme Corp", correct=False)
+        artifact = _make_artifact(n_scored=1, per_doc=[doc])
+
+        ops_row = render_tables([artifact]).split("### Ops")[1].splitlines()[4]
+
+        assert _ops_cell(ops_row, "Caught by review") == "100.0%"
+        assert _ops_cell(ops_row, "Caught by checks") == "0.0%"
+
+    def test_caught_by_checks_is_na_without_scored_answers(self):
+        ops_row = render_tables([_make_artifact(per_doc=[])]).split("### Ops")[1].splitlines()[4]
+
+        assert ops_row.count("n/a") == 1
+        assert "| 100.0% | n/a |" in ops_row
 
     def test_summary_none_renders_na_row(self):
         artifact = _make_artifact(n_scored=0, n_errors=5, summary=None)
@@ -201,6 +279,10 @@ class TestLoadResults:
             json.dumps({"model": "x"}), encoding="utf-8"
         )
         (results_dir / "not-an-object.json").write_text(json.dumps([1, 2]), encoding="utf-8")
+        # Caught by checks replays at this threshold: without it, skip, not crash.
+        no_threshold = _make_artifact()
+        del no_threshold["review_threshold"]
+        (results_dir / "no-threshold.json").write_text(json.dumps(no_threshold), encoding="utf-8")
 
         loaded = load_results(results_dir)
 
@@ -213,6 +295,7 @@ class TestLoadResults:
         assert "corrupt.json" in captured.err
         assert "incomplete.json" in captured.err
         assert "not-an-object.json" in captured.err
+        assert "no-threshold.json" in captured.err
 
 
 class TestRenderLatestMd:
@@ -311,6 +394,28 @@ class TestRenderLatestMd:
         # vendor was correct in the newest run -- must not show up as a failure
         assert "vendor" not in detail_section
 
+    def test_flagged_column_says_why_the_product_would_review_a_field(self):
+        confident = _make_artifact(n_scored=1, per_doc=[_doc_with_wrong_tax(0.9)])
+        doubtful = _make_artifact(n_scored=1, per_doc=[_doc_with_wrong_tax(0.3)])
+
+        confident_md = render_latest_md([confident]).split("### Incorrect fields")[1]
+        doubtful_md = render_latest_md([doubtful]).split("### Incorrect fields")[1]
+
+        assert "| Doc | Field | Expected | Actual | Confidence | Flagged |" in confident_md
+        # The arithmetic names the field whatever the model's confidence was.
+        assert "| 0.90 | reconciliation:total_math |" in confident_md
+        assert "| 0.30 | reconciliation:total_math |" in doubtful_md
+
+    def test_flagged_column_for_a_field_nothing_flags(self):
+        doc = _doc_with_wrong_tax()
+        doc["fields"]["vendor"] = _field("Acme", "Acme Corp Ltd", 0.95, correct=False)
+        doc["fields"]["tax"] = _field(1.0, 1.0)
+        artifact = _make_artifact(n_scored=1, per_doc=[doc])
+
+        detail = render_latest_md([artifact]).split("### Incorrect fields")[1]
+
+        assert "| 0.95 | not flagged |" in detail
+
     def test_does_not_mutate_input(self):
         artifact = _make_artifact(per_doc=[])
         snapshot = deepcopy(artifact)
@@ -318,3 +423,16 @@ class TestRenderLatestMd:
         render_latest_md([artifact])
 
         assert artifact == snapshot
+
+
+def test_readme_eval_table_and_latest_md_are_current():
+    # Regenerate with `python evals/run.py --report-only --update-readme`. The
+    # tables replay the committed runs through the rules, so a rules change
+    # makes this fail until the README catches up.
+    results = load_results()
+    readme = (EVALS_DIR.parent / "README.md").read_text(encoding="utf-8")
+    start = readme.index(START_MARKER) + len(START_MARKER)
+    end = readme.index(END_MARKER)
+
+    assert readme[start:end] == f"\n\n{render_tables(results)}\n\n"
+    assert LATEST_MD_PATH.read_text(encoding="utf-8") == render_latest_md(results)

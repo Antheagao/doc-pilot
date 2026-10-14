@@ -215,7 +215,7 @@ This is the data-flow shape (what happens to a document and a question), not the
 - **Postgres `SKIP LOCKED` instead of Redis for the job queue.** One datastore to run, deploy, and explain instead of two. More importantly, the queue is transactional with the data it produces: a job row and its extraction rows commit or roll back together, so there's no window where the queue says "done" and the data disagrees. A worker that crashes mid-claim doesn't need a separate recovery system -- it's just a `processing` row that a future worker startup reconciles back to `pending` (`reclaim_orphaned_jobs()` in `app/worker.py`). Scaling out is "run more worker processes" -- with the honest caveat that today's startup orphan-reclaim assumes a single worker; running two concurrently would need that sweep to become claim-aware first (see the `worker` service comment in `docker-compose.yml`).
 - **FastAPI / Python for the backend.** First-class SDKs for the pieces that matter here (the Anthropic SDK, async SQLAlchemy, Alembic); the workload is almost entirely I/O-bound waiting on VLM round-trips, which is exactly the case `async`/`await` is for.
 - **Evals from day one.** No prompt version ships without a run against the labeled corpus in `evals/` -- the table in the [Evals](#evals) section below isn't hand-maintained, it's generated from committed run artifacts in `evals/results/`, each tied to the `(model, prompt_version, dataset_version)` triple it was produced with.
-- **Per-field confidence, not a single document-level score, routed to a human review queue.** The extraction tool forces every leaf value into `{value, confidence}`, so review routes individual low-confidence *fields* to a human rather than re-doing an entire document. This is justified empirically, not just by preference: the `caught_by_review` column in the Evals Ops table shows Sonnet flags essentially all of its own misses with low confidence, while Haiku flags almost none of them. That asymmetry -- a model that mostly knows when it's wrong versus one that doesn't -- is the whole case for the queue existing.
+- **Per-field confidence, not a single document-level score, routed to a human review queue.** The extraction tool forces every leaf value into `{value, confidence}`, so review routes individual low-confidence *fields* to a human rather than re-doing an entire document. This is justified empirically, not just by preference: the `caught_by_review` column in the Evals Ops table shows Sonnet flags essentially all of its own misses with low confidence, while Haiku flags none of its 8 misses by confidence. That asymmetry -- a model that mostly knows when it's wrong versus one that doesn't -- is the whole case for the queue existing, and for the second reason that can flag a field: the arithmetic checks catch 4 of Haiku's 8 misses (the `caught_by_checks` column), including ones it was sure of.
 - **pgvector in the same Postgres, not a separate vector database.** Same argument as the queue: chunks, embeddings, and the full-text index live next to the documents they cite, re-indexing a document is one transaction, and hybrid search is two indexed queries against one database instead of a fan-out to two systems. At this corpus size an external vector store would add a service to run and a consistency problem to reason about, and buy nothing.
 - **A local embedding model instead of an embeddings API.** `bge-small-en-v1.5` is 384-d, runs on CPU in milliseconds, and costs nothing per query, so the retrieval eval is free to run on every change and the stack still needs exactly one API key. It sits behind a two-method `Embedder` interface (`app/retrieval/embeddings.py`), so swapping in a hosted model is a new class plus a re-index, and the eval says whether it was worth it.
 - **Prompts as versioned files** (`backend/prompts/extract_v1.md`), not inline strings, so extraction rows and eval results can be tied to a specific prompt revision as prompts iterate. **Next.js as a thin client-side UI over a plain REST API** -- every page is a client component calling the FastAPI backend directly, no server components or BFF layer in between, which is also why the API URL has to be resolved to something the *browser* can reach at build time (see the Quickstart gotcha above).
@@ -233,6 +233,8 @@ A field a person has reviewed is frozen and never flagged again.
 `python scripts/reconcile_all.py --dry-run` (from `backend/`) previews the same recomputation for documents extracted before this existed.
 
 The loop closes with `python scripts/harvest_corrections.py` (from `backend/`): every document whose flagged fields have all been resolved is exported as a new eval case under `evals/` -- corrections become the label, approved and high-confidence values are kept as-is, and each exported label records its `source_document_id` so re-running only harvests new documents. Every harvested label passes the same loud validation the eval loader applies before it is kept, so a hand-typed correction in the wrong format is rejected at harvest time instead of poisoning the dataset.
+A label must also add up: if the reviewed values fail the reconciliation rules, the label is refused with the failing checks named, since a label that disagrees with itself would score a correct extraction wrong.
+Labels are the consistent baseline that the reconciliation eval below breaks.
 
 ## Retrieval: search with page citations
 
@@ -454,7 +456,10 @@ doc-pilot is currently a **single-user local tool** and its security posture is 
 
 ## Evals
 
-Every extraction is scored against a synthetic-but-messy, PII-free corpus of labeled receipts/invoices in `evals/` -- generated with the correct answer known up front (not hand-transcribed from real documents), so the set doubles as a regression suite rather than a noisy guess. Each field has its own match rule: currency is an exact string match, dates are normalized to ISO-8601 before comparing, dollar amounts tolerate ±1 cent (compared in integer cents to dodge float rounding error), vendor names use fuzzy string matching (>=0.85 ratio), and line items must match item-for-item, in order. Every result is tied to the `(model, prompt_version, dataset_version)` triple it was produced with, so accuracy tracks across prompt iterations instead of floating in isolation -- the project rule is that a new prompt version only ships once an eval run proves it. The `caught_by_review` metric -- the share of incorrect fields the model itself flagged with low confidence -- is the empirical justification for routing low-confidence fields to a human review queue instead of trusting every extraction blindly.
+Every extraction is scored against a synthetic-but-messy, PII-free corpus of labeled receipts/invoices in `evals/` -- generated with the correct answer known up front (not hand-transcribed from real documents), so the set doubles as a regression suite rather than a noisy guess. Each field has its own match rule: currency is an exact string match, dates are normalized to ISO-8601 before comparing, dollar amounts tolerate ±1 cent (compared as exact decimals, read with the same parser the product uses, so a string such as `$17.44` scores wrong), vendor names use fuzzy string matching (>=0.85 ratio), and line items must match item-for-item, in order. Every result is tied to the `(model, prompt_version, dataset_version)` triple it was produced with, so accuracy tracks across prompt iterations instead of floating in isolation -- the project rule is that a new prompt version only ships once an eval run proves it. The `caught_by_review` metric -- the share of incorrect fields the model itself flagged with low confidence -- is the empirical justification for routing low-confidence fields to a human review queue instead of trusting every extraction blindly.
+The `caught_by_checks` metric is its counterpart for arithmetic.
+It is the share of incorrect fields that the reconciliation rules (`app/reconcile.py`) would send to a person, found by replaying each run's stored answers through the same worker path.
+It is computed whenever the table is rendered and never stored in an artifact, so it follows the rules version.
 
 Every extraction row records its own `cost_usd` and `latency_ms` (token counts times the model's per-token price), which is where every dollar figure in this README comes from -- there's no separate cost-tracking path to keep in sync. Two numbers show up elsewhere and are worth labeling so they don't read as contradictory: a single manual smoke extraction (`scripts/smoke.py`, one receipt) costs **~$0.009** on `claude-sonnet-5`, while the **$0.0125/doc** below is the **25-document eval mean** for that same model. Both are real; they differ because one is a single sample and the other is averaged across the labeled set -- the eval mean is the number to trust for planning per-document spend, not the one-off smoke run.
 
@@ -474,14 +479,40 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 ### Ops
 
-| Model | Prompt | Conf ✓/✗ | Caught by review | Halluc. | $/doc | Total $ | p50/p95 latency |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| claude-sonnet-5 | extract_v1 | 0.97 / n/a | n/a | 0 | $0.0110 | $0.0329 | 4368ms / 5943ms |
-| claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
-| claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
+| Model | Prompt | Conf ✓/✗ | Caught by review | Caught by checks | Halluc. | $/doc | Total $ | p50/p95 latency |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| claude-sonnet-5 | extract_v1 | 0.97 / n/a | n/a | n/a | 0 | $0.0110 | $0.0329 | 4368ms / 5943ms |
+| claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 0.0% | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
+| claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 50.0% | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
 
-*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
+*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the arithmetic checks (app/reconcile.py, rules_v1) route to review, replayed from each run's stored answers whenever this table is rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
 
 <!-- EVAL_TABLE:END -->
+
+### Reconciliation eval
+
+The extraction eval asks how often a model misreads a document.
+This one asks what the arithmetic checks would do about it, without paying for a model run.
+Every label is a consistent document, and `rules_v1` passes all 25 unmutated.
+The eval then breaks one printed amount at a time (subtotal, tax, total, and every line's quantity, unit price, and total) in the ways a reader gets digits wrong, and replays each broken document with full confidence, so only the arithmetic can notice.
+"Fix suggested" counts the cases where the engine proposes exactly the original value, and "Wrong fixes" counts any other suggestion; it never makes one.
+The misses are a total read as the subtotal on a document with tax, which looks like a tax-inclusive receipt and is the known blind spot.
+`python evals/run_checks.py --update-readme` regenerates the table in a second or two, with no API calls, database, or key.
+
+<!-- CHECKS_TABLE:START -->
+
+| Misread | Example | Mutations | Detected | Field flagged | Fix suggested | Wrong fixes | Correct fields flagged (mean) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| One minor unit off | 46.25 -> 46.26 | 264 | 264 (100.0%) | 264 (100.0%) | 120 (45.5%) | 0 | 0.37 |
+| Two digits swapped | 46.25 -> 46.52 | 262 | 262 (100.0%) | 262 (100.0%) | 119 (45.4%) | 0 | 0.37 |
+| Leading digit misread | 46.25 -> 96.25 | 359 | 359 (100.0%) | 359 (100.0%) | 146 (40.7%) | 0 | 0.13 |
+| Decimal point dropped | 46.25 -> 4625 | 264 | 264 (100.0%) | 264 (100.0%) | 169 (64.0%) | 0 | 0.00 |
+| Extra leading digit | 46.25 -> 146.25 | 359 | 359 (100.0%) | 359 (100.0%) | 154 (42.9%) | 0 | 0.08 |
+| Wrong row read | total read as the subtotal | 120 | 96 (80.0%) | 96 (80.0%) | 96 (80.0%) | 0 | 0.00 |
+| All |  | 1628 | 1604 (98.5%) | 1604 (98.5%) | 804 (49.4%) | 0 | 0.17 |
+
+*All 25 labels pass rules_v1 unmutated; each row then breaks one printed amount (subtotal, tax, total, and every line's quantity, unit price, and total) in one way and replays the document with full confidence, so only the arithmetic can notice. Detected means a check fails. Field flagged means the broken field is routed to review because of a failing check. Fix suggested means the engine proposes exactly the original value for that field; Wrong fixes counts any other suggestion. Quantities and unit prices are never suggested, so those misreads are flagged but not fixed. Correct fields flagged is the mean number of other fields a mutation sends to review. Undetected: 24 wrong row read on total.*
+
+<!-- CHECKS_TABLE:END -->
 
 *Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. An LLM judge grades answers for correctness and groundedness beside the deterministic rubric, and both are scored against hand-labeled answers; in production, every answer is stored with its evidence, rated by people, and (sampled) graded for groundedness in the background. Next: the first live agent-eval and judge-calibration runs, then pick a host and ship the demo.*

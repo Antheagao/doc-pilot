@@ -179,15 +179,15 @@ async def test_string_money_corrections_are_harvested_as_numbers(
         tmp_path,
         field_states={
             "subtotal": {**corrected, "corrected_value": "45.25"},
-            "tax": {**corrected, "corrected_value": "0.80"},
+            "tax": {**corrected, "corrected_value": "0.75"},
             "total": {**corrected, "corrected_value": "46"},
             "line_items": {
                 "value": [
                     {
                         "description": _leaf("Hammer", 0.99),
                         "quantity": _leaf("2.50", 0.99),
-                        "unit_price": _leaf(10.0, 0.99),
-                        "total": _leaf("10.50", 0.99),
+                        "unit_price": _leaf(18.1, 0.99),
+                        "total": _leaf("45.25", 0.99),
                     }
                 ]
             },
@@ -201,11 +201,45 @@ async def test_string_money_corrections_are_harvested_as_numbers(
     assert ours.status == "harvested"
     fields = json.loads((evals_dir / "labels" / f"{ours.doc_id}.json").read_text())["fields"]
     assert fields["subtotal"] == 45.25 and isinstance(fields["subtotal"], float)
-    assert fields["tax"] == 0.8 and isinstance(fields["tax"], float)
+    assert fields["tax"] == 0.75 and isinstance(fields["tax"], float)
     assert fields["total"] == 46 and isinstance(fields["total"], int)
-    assert fields["line_items"][0]["total"] == 10.5
-    assert fields["line_items"][0]["unit_price"] == 10
+    assert fields["line_items"][0]["total"] == 45.25
+    assert fields["line_items"][0]["unit_price"] == 18.1
     assert fields["line_items"][0]["quantity"] == 2.5
+
+
+async def test_a_label_that_does_not_add_up_is_refused(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    now = datetime.now(UTC)
+    document = await _seed_document(
+        db_session,
+        tmp_path,
+        field_states={
+            # 10.00 + 0.80 is not 11.80.
+            "total": {
+                "confidence": 0.5,
+                "needs_review": True,
+                "review_reason": "confidence",
+                "reviewed_at": now,
+                "review_action": "corrected",
+                "corrected_value": "11.80",
+            }
+        },
+    )
+    evals_dir = tmp_path / "evals"
+
+    outcomes = await harvest_corrections(db_session, evals_dir=evals_dir)
+
+    (ours,) = [o for o in outcomes if o.document_id == document.id]
+    assert ours.status == "invalid"
+    assert ours.doc_id is None
+    assert "fail reconciliation" in ours.detail
+    assert "total_math" in ours.detail
+    assert _labels_for(evals_dir, document.id) == []
+    # No image is left without a label.
+    label_stems = {path.stem for path in (evals_dir / "labels").glob("*.json")}
+    assert {path.stem for path in (evals_dir / "docs").iterdir()} <= label_stems
 
 
 async def test_a_non_numeric_money_correction_is_still_rejected(

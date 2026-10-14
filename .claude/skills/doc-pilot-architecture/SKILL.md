@@ -20,6 +20,7 @@ Load the global `design-principles` guide for the rules; this file holds what ex
 - Per-document chat (`routers/chat.py`) reuses `run_agent` with a `ChatScope`; its turns are `AskRun` rows with `document_id` and `conversation_id`.
 - Spend guards: `budget.enforce_daily_budget` (`DAILY_BUDGET_USD`) and `ratelimit.limit_ask` / `limit_upload` (in memory, one API process).
 - Evals: logic in `backend/app/evals/`, CLIs in `evals/run*.py`, committed artifacts in `evals/results/`, read by `GET /stats` and `GET /monitoring/*`.
+- `app/evals/checks.py` replays stored answers and labels through `build_extracted_fields`, `reconcile`, and `route` (no database): `caught_by_checks` per run at render time, and the mutation eval behind `evals/run_checks.py`; `harvest.py` refuses a label that fails the checks.
 - Telemetry: OpenTelemetry in `app/telemetry.py`, off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set; `jobs.traceparent` carries a document's trace across the queue; Langfuse (`app/langfuse_link.py`) is off unless its keys are set.
 - Frontend: Next.js 16 in `frontend/`; every page is a client component fetching through `src/lib/api.ts`.
 
