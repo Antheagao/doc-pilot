@@ -5,6 +5,7 @@ import type {
   ReviewAction,
 } from "@/lib/api";
 import ConfidenceBadge from "@/components/ConfidenceBadge";
+import ReconciliationPanel from "@/components/ReconciliationPanel";
 import { EMPTY_VALUE, formatAmount, formatDuration } from "@/lib/format";
 
 // Display order for the scalar fields; line_items is rendered separately
@@ -24,6 +25,20 @@ const SCALAR_FIELD_ORDER = [
 const MONEY_FIELDS: ReadonlySet<string> = new Set(["subtotal", "tax", "total"]);
 
 const NO_HIGHLIGHT: ReadonlySet<string> = new Set();
+
+function noop() {}
+
+// Values the document did not print that the arithmetic check worked out
+// (an absent subtotal, an absent line total), by path: "subtotal",
+// "line_items[2].total". They show only where the printed value is missing,
+// always tagged, so a computed number never reads as an extracted one.
+type ComputedValues = ReadonlyMap<string, string>;
+
+const NO_COMPUTED: ComputedValues = new Map();
+
+function ComputedTag() {
+  return <span className="computed-tag">computed</span>;
+}
 
 /** The DOM id of a field's row, by the name a chat citation uses for it
  * ("total", "line_items[2]"), so the chat can scroll to it. */
@@ -74,12 +89,16 @@ function LineItemCell({
   leaf,
   money = false,
   numeric = false,
+  computed,
 }: {
   leaf: unknown;
   /** Set for money columns, which group the integer part (formatAmount). */
   money?: boolean;
   /** Right-aligns the cell, for the quantity and money columns. */
   numeric?: boolean;
+  /** The value the arithmetic check worked out for a cell with no printed
+   * value; shown tagged "computed". */
+  computed?: string;
 }) {
   const format = money ? formatAmount : formatScalar;
   // Corrected line-item rows (review_action === "corrected") hold plain
@@ -88,22 +107,39 @@ function LineItemCell({
   if (!isLeaf(leaf)) {
     const scalar =
       leaf === null || typeof leaf === "string" || typeof leaf === "number";
-    return <td className={numeric ? "num" : undefined}>{scalar ? format(leaf) : EMPTY_VALUE}</td>;
+    const shown = scalar ? format(leaf) : EMPTY_VALUE;
+    return (
+      <td className={numeric ? "num" : undefined}>
+        {shown === EMPTY_VALUE && computed !== undefined ? <Computed value={computed} /> : shown}
+      </td>
+    );
   }
   const low = leaf.confidence < 0.8;
+  const shown = format(leaf.value);
   return (
     <td className={[numeric && "num", low && "cell-low"].filter(Boolean).join(" ") || undefined}>
-      {format(leaf.value)}
+      {shown === EMPTY_VALUE && computed !== undefined ? <Computed value={computed} /> : shown}
     </td>
+  );
+}
+
+/** A computed amount in a cell or row: the tag, then the number. */
+function Computed({ value }: { value: string }) {
+  return (
+    <>
+      <ComputedTag /> {formatAmount(value)}
+    </>
   );
 }
 
 function LineItemsTable({
   items,
   highlight,
+  computed,
 }: {
   items: unknown[];
   highlight: ReadonlySet<string>;
+  computed: ComputedValues;
 }) {
   if (items.length === 0) {
     return <div className="field-value null-value">No line items extracted</div>;
@@ -133,7 +169,12 @@ function LineItemsTable({
               <LineItemCell leaf={row.description} />
               <LineItemCell leaf={row.quantity} numeric />
               <LineItemCell leaf={row.unit_price} money numeric />
-              <LineItemCell leaf={row.total} money numeric />
+              <LineItemCell
+                leaf={row.total}
+                money
+                numeric
+                computed={computed.get(`line_items[${i}].total`)}
+              />
             </tr>
           );
         })}
@@ -149,9 +190,12 @@ function ReviewBadge({ action }: { action: ReviewAction }) {
 function ScalarFieldRow({
   field,
   cited,
+  computed,
 }: {
   field: ExtractedField;
   cited: boolean;
+  /** The arithmetic check's value for this field when it printed none. */
+  computed?: string;
 }) {
   const leaf = isLeaf(field.value) ? field.value : null;
   const corrected = field.review_action === "corrected";
@@ -164,6 +208,11 @@ function ScalarFieldRow({
         <span className={`field-value${display === EMPTY_VALUE ? " null-value" : ""}`}>
           {display}
         </span>
+        {display === EMPTY_VALUE && computed !== undefined && (
+          <span className="field-computed">
+            <Computed value={computed} />
+          </span>
+        )}
         {corrected && (
           <span className="field-original">was {format(leaf?.value)}</span>
         )}
@@ -181,15 +230,28 @@ function ScalarFieldRow({
   );
 }
 
-/** `highlight` names the fields a selected chat citation points at, as
- * the citation names them ("total", "line_items[2]"). */
+/** `highlight` names the fields a selected chat citation or reconciliation
+ * operand points at, as the citation names them ("total", "line_items[2]").
+ * `picked` is the one operand field the reconciliation panel has selected,
+ * and `onPick` is called when an operand there is chosen. */
 export default function ExtractionPanel({
   extraction,
   highlight = NO_HIGHLIGHT,
+  picked = null,
+  onPick = noop,
 }: {
   extraction: Extraction;
   highlight?: ReadonlySet<string>;
+  picked?: string | null;
+  onPick?: (path: string) => void;
 }) {
+  const computed: ComputedValues = extraction.reconciliation
+    ? new Map(
+        extraction.reconciliation.derived.flatMap((d) =>
+          d.value === null ? [] : [[d.path, d.value] as const]
+        )
+      )
+    : NO_COMPUTED;
   const byName = new Map(extraction.fields.map((f) => [f.field_name, f]));
   const orderedFields = SCALAR_FIELD_ORDER.map((name) => byName.get(name)).filter(
     (f): f is ExtractedField => f !== undefined
@@ -221,13 +283,17 @@ export default function ExtractionPanel({
             key={field.field_name}
             field={field}
             cited={highlight.has(field.field_name)}
+            computed={computed.get(field.field_name)}
           />
         ))}
       </div>
 
       {lineItemsField && (
         <div>
-          <div className="field-row line-items-header">
+          <div
+            id={fieldElementId("line_items")}
+            className={`field-row line-items-header${highlight.has("line_items") ? " cited" : ""}`}
+          >
             <span className="field-name">line items</span>
             <span className="badge-row">
               <ConfidenceBadge
@@ -242,9 +308,15 @@ export default function ExtractionPanel({
               )}
             </span>
           </div>
-          <LineItemsTable items={lineItems} highlight={highlight} />
+          <LineItemsTable items={lineItems} highlight={highlight} computed={computed} />
         </div>
       )}
+
+      <ReconciliationPanel
+        reconciliation={extraction.reconciliation}
+        picked={picked}
+        onPick={onPick}
+      />
 
       <div className="footer-strip">
         <span>

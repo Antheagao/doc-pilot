@@ -10,6 +10,7 @@ import {
   type DocumentDetail,
 } from "@/lib/api";
 import ExtractionPanel, { fieldElementId } from "@/components/ExtractionPanel";
+import { fieldOfPath } from "@/lib/reconciliation";
 import ChatPanel, { type SelectedCitation } from "@/components/ChatPanel";
 
 const POLL_INTERVAL_MS = 2000;
@@ -50,10 +51,16 @@ export default function DocumentPage() {
   // row of the extraction; a text citation turns a PDF to its page.
   const [selected, setSelected] = useState<SelectedCitation | null>(null);
   const citation = selected?.citation ?? null;
-  const highlight = useMemo(
-    () => new Set(citation?.kind === "record" ? citation.fields : []),
-    [citation]
-  );
+  // The reconciliation operand selected, by report path ("line_items[2].total");
+  // its field lights up the same way a field citation does. Operands of one
+  // line share a row but are told apart, so choosing another keeps it lit.
+  const [picked, setPicked] = useState<string | null>(null);
+  const pickedField = picked === null ? null : fieldOfPath(picked);
+  const highlight = useMemo(() => {
+    const fields = new Set(citation?.kind === "record" ? citation.fields : []);
+    if (pickedField) fields.add(pickedField);
+    return fields;
+  }, [citation, pickedField]);
   const previewPage = citation && citation.kind !== "record" ? citation.page_number : null;
 
   useEffect(() => {
@@ -64,6 +71,20 @@ export default function DocumentPage() {
         ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }, [citation]);
+
+  useEffect(() => {
+    if (!pickedField) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document
+      .getElementById(fieldElementId(pickedField))
+      ?.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
+  }, [picked, pickedField]);
+
+  // Choosing an operand again lets go of it.
+  const pickOperand = useCallback(
+    (path: string) => setPicked((current) => (current === path ? null : path)),
+    []
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -171,7 +192,12 @@ export default function DocumentPage() {
 
             {doc.status === "extracted" &&
               (doc.extraction ? (
-                <ExtractionPanel extraction={doc.extraction} highlight={highlight} />
+                <ExtractionPanel
+                  extraction={doc.extraction}
+                  highlight={highlight}
+                  picked={picked}
+                  onPick={pickOperand}
+                />
               ) : (
                 <div className="results-panel">
                   <div className="empty-state">

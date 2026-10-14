@@ -473,7 +473,7 @@ def test_a_null_tax_counts_as_zero_and_says_so() -> None:
     report = reconcile(ReconcileInput.from_tool_input(label_tool_input(case.fields)))
 
     assert report.status == STATUS_PASS
-    assert report.assumptions == ("tax is null; total_math counts it as 0.",)
+    assert report.assumptions == ("no tax is shown, so subtotal + tax = total counts it as 0.",)
     tax = check_of(report, "total_math").terms[1].operand
     assert (tax.path, tax.value, tax.source) == ("tax", Decimal(0), "assumed")
     assert check_of(report, "tax_rate").status == STATUS_SKIPPED

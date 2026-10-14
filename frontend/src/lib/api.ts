@@ -242,6 +242,10 @@ export async function getReviewQueueCount(): Promise<number> {
   return body.pending;
 }
 
+/** Dispatched on window after a review field is resolved, so the header's
+ * pending-count badge can refetch without waiting for a route change. */
+export const REVIEW_QUEUE_CHANGED = "docpilot:review-queue-changed";
+
 export async function resolveReviewField(
   fieldId: string,
   resolution:
@@ -256,7 +260,9 @@ export async function resolveReviewField(
       body: JSON.stringify(resolution),
     }
   );
-  return handle<ExtractedField>(res);
+  const field = await handle<ExtractedField>(res);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(REVIEW_QUEUE_CHANGED));
+  return field;
 }
 
 export interface StatsReview {

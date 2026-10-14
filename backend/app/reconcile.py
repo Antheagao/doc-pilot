@@ -889,7 +889,7 @@ def _run(inp: ReconcileInput, *, allow_included: bool = True) -> Report:
         lines_sum, subtotal = _lines_sum_check(p, derived)
         total_math, tax_assumed = _total_math_check(p, subtotal)
         if tax_assumed:
-            assumptions.append("tax is null; total_math counts it as 0.")
+            assumptions.append("no tax is shown, so subtotal + tax = total counts it as 0.")
         net_base = False
         gross_subtotal = gross_lines = None
         if allow_included and total_math.status == STATUS_FAIL:
@@ -899,14 +899,14 @@ def _run(inp: ReconcileInput, *, allow_included: bool = True) -> Report:
         if gross_subtotal is not None:
             total_math, net_base = gross_subtotal, True
             assumptions.append(
-                "prices include tax; total_math reads the subtotal as already containing "
-                f"the tax {to_api_string(p.tax.value, p.minor_units)}, and tax_rate is "
-                "judged on total - tax."
+                "prices include tax: subtotal + tax = total reads the subtotal as already "
+                f"containing the tax {to_api_string(p.tax.value, p.minor_units)}, and the tax "
+                "rate is judged on total - tax."
             )
         if gross_lines is not None:
             lines_sum = gross_lines
             assumptions.append(
-                "line prices include tax; lines_sum compares the line totals with the "
+                "line prices include tax: the sum of line totals is compared with the "
                 "total instead of the subtotal."
             )
         checks = [
