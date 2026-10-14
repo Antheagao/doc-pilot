@@ -230,7 +230,7 @@ def _resolve_citation(raw: Any, sources: dict[str, Source]) -> dict[str, Any] | 
         "filename": source.filename,
         "page_number": source.page_number,
         "kind": source.kind,
-        "cited_text": raw.cited_text,
+        "cited_text": "\n".join(source.lines[raw.start_block_index : raw.end_block_index]),
         "char_start": min(s for s, _ in spans) if spans else None,
         "char_end": max(e for _, e in spans) if spans else None,
         "fields": [b for b in blocks if isinstance(b, str)],

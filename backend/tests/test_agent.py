@@ -544,6 +544,31 @@ def test_agent_max_tokens_stays_under_the_sdks_non_streaming_ceiling() -> None:
         Settings(agent_max_tokens=21_001)
 
 
+async def test_a_multi_block_citation_keeps_one_line_per_block(db_session: AsyncSession) -> None:
+    """The API's cited_text runs the cited blocks together ("subtotal:
+    393.15tax: 32.43"); the stored citation shows each line on its own."""
+    ctx, _ = await _seed(db_session)
+    content = await query_extractions(ctx, {"vendor": "northgate", "min_total": 400})
+    (record,) = _results(content)
+    texts = [block["text"] for block in record["content"]]
+    start = next(i for i, text in enumerate(texts) if text.startswith("subtotal:"))
+    cited = texts[start : start + 2]
+    citation = SimpleNamespace(
+        type="search_result_location",
+        source=record["source"],
+        title=record["title"],
+        cited_text="".join(cited),
+        search_result_index=0,
+        start_block_index=start,
+        end_block_index=start + 2,
+    )
+
+    _, (resolved,), unresolved = _assemble_answer([_text("Before tax.", [citation])], ctx.sources)
+
+    assert resolved.cited_text == "\n".join(cited) == "subtotal: 393.15\ntax: 32.43"
+    assert resolved.fields == ["subtotal", "tax"] and unresolved == 0
+
+
 def test_unresolvable_citations_are_counted_not_trusted() -> None:
     stray = SimpleNamespace(
         source="https://elsewhere", cited_text="x", start_block_index=0, end_block_index=1

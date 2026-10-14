@@ -110,6 +110,10 @@ class Source:
     # Per content block, in order: the (char_start, char_end) of that line
     # in the page's stored text, or the record field name it shows.
     blocks: list[tuple[int, int] | str]
+    # Per content block, in order: its text as sent. A citation's cited_text
+    # is rebuilt from these, one line per block: the API's runs the blocks
+    # of a multi-block citation together with no separator.
+    lines: list[str]
 
 
 @dataclass
@@ -313,6 +317,7 @@ async def search_documents(ctx: ToolContext, tool_input: dict[str, Any]) -> list
             filename=hit.filename,
             page_number=hit.page_number,
             blocks=list(spans),
+            lines=[block["text"] for block in content],
         )
         ctx.sources[source.source] = source
         results.append(
@@ -355,6 +360,7 @@ async def get_page(ctx: ToolContext, tool_input: dict[str, Any]) -> list[dict[st
         filename=filename,
         page_number=page_number,
         blocks=list(spans),
+        lines=[block["text"] for block in content],
     )
     ctx.sources[source.source] = source
     return [_search_result(source, f"{filename}, page {page_number} (full page)", content)]
@@ -487,6 +493,7 @@ async def query_extractions(ctx: ToolContext, tool_input: dict[str, Any]) -> lis
             filename=record.filename,
             page_number=None,
             blocks=[name for name, _ in lines],
+            lines=[text for _, text in lines],
         )
         ctx.sources[source.source] = source
         content.append(
