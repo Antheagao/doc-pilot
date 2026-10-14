@@ -996,6 +996,23 @@ textarea:focus-visible,
   line-height: 1.6;
 }
 
+.answer-text > * {
+  margin: 0;
+}
+
+.answer-text > * + * {
+  margin-top: 0.6em;
+}
+
+.answer-text > ul,
+.answer-text > ol {
+  padding-left: 1.3rem;
+}
+
+.answer-text li + li {
+  margin-top: 0.25em;
+}
+
 .cite-marker {
   display: inline-flex;
   align-items: center;
@@ -1010,6 +1027,10 @@ textarea:focus-visible,
   font-size: 0.7rem;
   font-weight: 700;
   vertical-align: text-top;
+}
+
+.cite-anchor {
+  white-space: nowrap;
 }
 
 .cite-marker.static {
@@ -1259,6 +1280,9 @@ textarea:focus-visible,
 
 .chat-passage {
   margin-top: 0.35rem;
+  /* The chat column is narrow: wrap a long line rather than clip it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .chat-meta {

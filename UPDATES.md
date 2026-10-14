@@ -25,6 +25,13 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-14 (macOS: stale checkout, duplicate T0.5, three UI and citation fixes kept)
+- The Mac checkout was 11 commits behind `origin/master` and was not fetched first, so the session redid T0.5 (the `/ask` 400 fix and both live GIFs) that Windows had pushed on 2026-10-11, spending about $0.14 of the approved demo budget on duplicate work.
+- Reset to `origin/master` and kept only what origin lacked, all found in the duplicate recordings and checked in a browser (light and dark, 360 to 1440 px):
+  - multi-block citations showed their lines run together ("subtotal: 393.15tax: 32.43"); fixed in `6639877`.
+  - answers showed the model's Markdown raw (the Batch 0 follow-up), a citation marker could start a line alone at 360 px, and a long cited line was clipped in the chat column; fixed in the commit that adds this entry.
+- No `Co-Authored-By` trailers on these commits. The live GIFs on master were not re-recorded.
+
 ### 2026-10-11 to 2026-10-13 (Windows: Batch A, A1-A4)
 - Batch A promoted (planner, `91db9c7` base); the planner's seven open questions were taken at their defaults and recorded on PRESENT.md.
 - A1 money module (`64fdc02`): exact decimals, ISO 4217 minor units from the SIX list (165 codes); review caught a harvest crash on malformed line-item corrections.

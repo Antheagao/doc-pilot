@@ -42,7 +42,6 @@ Design decisions (planner defaults, taken 2026-10-11; Anthony can override):
 
 ## Follow-ups from Batch 0 (not yet scheduled)
 
-- Answers can contain Markdown (`**Date:**`) that the UI renders as raw asterisks: render a safe Markdown subset or tell the prompts to answer in plain text.
 - The top `screenshots/demo.gif` predates the Search, Ask, and Dashboard navigation; re-recording it with the harness costs one live extraction (about $0.02).
 - The Screenshots section still shows stills that the Features GIFs now cover (`search-hybrid.png`, `search-amount.png`, `review-correct.png`).
 - The macOS session's four commits carry `Co-Authored-By` trailers, against the global no-attribution rule; that machine's claude-brain setup needs bootstrapping.

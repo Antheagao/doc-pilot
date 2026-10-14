@@ -4,7 +4,7 @@
 // per-document chat: the cited answer text, the person's verdict, the
 // automatic grader's, and the live progress of a run in flight.
 
-import { Fragment, useCallback, useState } from "react";
+import { Fragment, useCallback, useState, type ReactNode } from "react";
 import {
   sendAskFeedback,
   type AskEvent,
@@ -20,8 +20,46 @@ export const STATUS_NOTES: Record<string, string> = {
   budget_exceeded: "The agent hit its per-question cost cap before finishing.",
 };
 
-/** The answer text with each [n] marker turned into a link to its source
- * -- or, with onCite, a button that selects it. */
+type AnswerBlock = { kind: "p"; lines: string[] } | { kind: "ul" | "ol"; items: string[] };
+
+/** The Markdown the model writes, as far as answers use it: paragraphs,
+ * bullet and numbered lists, headings (shown bold), and **bold**. Anything
+ * else stays literal text, and nothing is ever parsed as HTML. */
+export function answerBlocks(answer: string): AnswerBlock[] {
+  const blocks: AnswerBlock[] = [];
+  // Whether the next line may join the last block (a blank line closes it).
+  let open = false;
+  for (const raw of answer.split("\n")) {
+    const line = raw.trim();
+    const last = open ? blocks[blocks.length - 1] : undefined;
+    open = line !== "";
+    if (!line) continue;
+    const bullet = /^[-*•]\s+(.*)$/.exec(line);
+    const numbered = /^\d+[.)]\s+(.*)$/.exec(line);
+    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    if (bullet || numbered) {
+      const kind = bullet ? "ul" : "ol";
+      const item = (bullet ?? numbered)![1];
+      if (last?.kind === kind) last.items.push(item);
+      else blocks.push({ kind, items: [item] });
+    } else if (heading) {
+      blocks.push({ kind: "p", lines: [`**${heading[1]}**`] });
+      open = false;
+    } else if (last && last.kind !== "p" && raw !== line) {
+      // An indented line continues the list item above it.
+      last.items[last.items.length - 1] += ` ${line}`;
+    } else if (last?.kind === "p") {
+      last.lines.push(line);
+    } else {
+      blocks.push({ kind: "p", lines: [line] });
+    }
+  }
+  return blocks;
+}
+
+/** The answer text, rendered from its Markdown, with each [n] marker
+ * turned into a link to its source -- or, with onCite, a button that
+ * selects it. */
 export function AnswerText({
   answer,
   citations,
@@ -34,31 +72,71 @@ export function AnswerText({
   activeNumber?: number | null;
 }) {
   const byNumber = new Map(citations.map((c) => [c.number, c]));
-  const parts = answer.split(/\s?\[(\d+)\]/);
+
+  const marker = (number: string, key: string) => {
+    const citation = byNumber.get(Number(number));
+    if (!citation) return <Fragment key={key}>[{number}]</Fragment>;
+    return onCite ? (
+      <button
+        key={key}
+        type="button"
+        className={`cite-marker${activeNumber === citation.number ? " active" : ""}`}
+        aria-label={`Show source ${citation.number}: ${sourceLabel(citation)}`}
+        aria-pressed={activeNumber === citation.number}
+        onClick={() => onCite(citation)}
+      >
+        {citation.number}
+      </button>
+    ) : (
+      <a key={key} href={`#citation-${citation.number}`} className="cite-marker">
+        {citation.number}
+      </a>
+    );
+  };
+
+  // Each run of markers stays on one line with the word before it, so a
+  // narrow column never starts a line with a lone marker.
+  const markers = (text: string, key: string) => {
+    const parts: ReactNode[] = [];
+    let last = 0;
+    for (const match of text.matchAll(/(\S*)((?:\s?\[\d+\])+)/g)) {
+      parts.push(text.slice(last, match.index));
+      const numbers = [...match[2].matchAll(/\[(\d+)\]/g)].map((m) => m[1]);
+      parts.push(
+        <span key={`${key}.${match.index}`} className="cite-anchor">
+          {match[1]}
+          {numbers.map((n, i) => marker(n, `${key}.${match.index}.${i}`))}
+        </span>,
+      );
+      last = match.index + match[0].length;
+    }
+    parts.push(text.slice(last));
+    return parts;
+  };
+
+  const inline = (text: string, key: string) =>
+    text.split(/\*\*(.+?)\*\*/).map((part, i) =>
+      i % 2 === 0 ? (
+        <Fragment key={`${key}.${i}`}>{markers(part, `${key}.${i}`)}</Fragment>
+      ) : (
+        <strong key={`${key}.${i}`}>{markers(part, `${key}.${i}`)}</strong>
+      ),
+    );
+
   return (
-    <p className="answer-text">
-      {parts.map((part, i) => {
-        if (i % 2 === 0) return <Fragment key={i}>{part}</Fragment>;
-        const citation = byNumber.get(Number(part));
-        if (!citation) return <Fragment key={i}>[{part}]</Fragment>;
-        return onCite ? (
-          <button
-            key={i}
-            type="button"
-            className={`cite-marker${activeNumber === citation.number ? " active" : ""}`}
-            aria-label={`Show source ${citation.number}: ${sourceLabel(citation)}`}
-            aria-pressed={activeNumber === citation.number}
-            onClick={() => onCite(citation)}
-          >
-            {citation.number}
-          </button>
-        ) : (
-          <a key={i} href={`#citation-${citation.number}`} className="cite-marker">
-            {citation.number}
-          </a>
+    <div className="answer-text">
+      {answerBlocks(answer).map((block, b) => {
+        if (block.kind === "p") return <p key={b}>{inline(block.lines.join(" "), `${b}`)}</p>;
+        const List = block.kind;
+        return (
+          <List key={b}>
+            {block.items.map((item, i) => (
+              <li key={i}>{inline(item, `${b}.${i}`)}</li>
+            ))}
+          </List>
         );
       })}
-    </p>
+    </div>
   );
 }
 
