@@ -1,0 +1,315 @@
+"use client";
+
+import Link from "next/link";
+import type {
+  CheckStatus,
+  Reconciliation,
+  ReconciliationCheck,
+  ReconciliationOperand,
+} from "@/lib/api";
+import { formatAmount } from "@/lib/format";
+import {
+  amountText,
+  equationView,
+  fieldOfPath,
+  pathLabel,
+  type EquationView,
+} from "@/lib/reconciliation";
+
+const STATUS_WORD: Record<CheckStatus, string> = {
+  pass: "Passes",
+  fail: "Fails",
+  skipped: "Skipped",
+};
+
+// The mark is decoration: the word beside it carries the meaning.
+const STATUS_MARK: Record<CheckStatus, string> = {
+  pass: "✓",
+  fail: "✕",
+  skipped: "–",
+};
+
+// Per-line checks ("line_math[3]") are summarized, not listed.
+const LINE_CHECK = /^line_math\[\d+\]$/;
+
+// What the quieter checks are called when a pass is summarized.
+function quietName(id: string): string {
+  if (id.startsWith("non_negative:")) return "no negative amounts";
+  if (id === "tax_rate") return "tax rate";
+  if (id === "lines_present") return "line items present";
+  return id.replace(/[_:]/g, " ");
+}
+
+function StatusMark({ status }: { status: CheckStatus }) {
+  return (
+    <span className={`recon-mark ${status}`}>
+      <span aria-hidden="true">{STATUS_MARK[status]}</span> {STATUS_WORD[status]}
+    </span>
+  );
+}
+
+/** A tag for a number the document did not print as such. An extracted or
+ * reviewed amount carries none. */
+function SourceTag({ source }: { source: ReconciliationOperand["source"] }) {
+  if (source !== "computed" && source !== "assumed") return null;
+  return <span className="computed-tag">{source}</span>;
+}
+
+interface PickProps {
+  /** The field a selected operand highlights in the panel above. */
+  picked: string | null;
+  onPick: (field: string) => void;
+}
+
+/** An operand of a check: a button that highlights its field in the
+ * extraction above and scrolls to it. `label` is shown beside the number
+ * when the number alone would not say what it is. */
+function Operand({
+  operand,
+  label,
+  picked,
+  onPick,
+}: PickProps & { operand: ReconciliationOperand; label?: string }) {
+  const field = fieldOfPath(operand.path);
+  const pressed = picked === field;
+  const text = amountText(operand);
+  return (
+    <>
+      <button
+        type="button"
+        className={`operand${pressed ? " picked" : ""}`}
+        aria-pressed={pressed}
+        aria-label={`${text} ${pathLabel(operand.path)}`}
+        onClick={() => onPick(field)}
+      >
+        {text}
+        {label && <span className="operand-label">{label}</span>}
+      </button>
+      <SourceTag source={operand.source} />
+    </>
+  );
+}
+
+function Equation({ view, ...pick }: PickProps & { view: EquationView }) {
+  return (
+    <p className="recon-equation">
+      {view.collapsed !== null ? (
+        <span className="recon-sum">{view.collapsed}</span>
+      ) : (
+        view.terms.map((term, i) => (
+          <span key={`${term.operand.path}-${i}`} className="recon-term">
+            {(i > 0 || term.sign === "-") && <span className="recon-sign">{term.sign}</span>}
+            {term.coef !== null && <span className="recon-sign">{term.coef} ×</span>}
+            <Operand operand={term.operand} {...pick} />
+          </span>
+        ))
+      )}
+      {view.included.map((operand) => (
+        <span key={operand.path} className="recon-term">
+          <span className="recon-sign">(</span>
+          <Operand operand={operand} label={`${pathLabel(operand.path)} included`} {...pick} />
+          <span className="recon-sign">)</span>
+        </span>
+      ))}
+      <span className="recon-sign">=</span>
+      {view.relation === "=" ? (
+        <Operand operand={view.rhs} label={pathLabel(view.rhs.path)} {...pick} />
+      ) : (
+        <>
+          <span className="recon-expected">{view.expected}</span>
+          <span className="recon-sign">
+            <span aria-hidden="true">{view.relation}</span>
+            <span className="visually-hidden">
+              {view.relation === "≠" ? "does not equal" : "is about"}
+            </span>
+          </span>
+          <Operand operand={view.rhs} label={pathLabel(view.rhs.path)} {...pick} />
+        </>
+      )}
+      {view.off !== null && view.relation === "≠" && (
+        <span className="recon-off">off by {view.off}</span>
+      )}
+    </p>
+  );
+}
+
+function CheckRow({ check, ...pick }: PickProps & { check: ReconciliationCheck }) {
+  const view = equationView(check);
+  const failing = check.status === "fail";
+  const operands = view === null && failing ? check.terms : [];
+  return (
+    <li className={`recon-check ${check.status}`}>
+      <div className="recon-check-head">
+        <StatusMark status={check.status} />
+        <span className="recon-formula">{check.formula}</span>
+      </div>
+      {view !== null && <Equation view={view} {...pick} />}
+      {view === null && failing && check.detail && (
+        <p className="recon-detail">{check.detail}</p>
+      )}
+      {operands.length > 0 && (
+        <p className="recon-operands">
+          {operands.map(({ operand }) => (
+            <span key={operand.path} className="recon-term">
+              <Operand operand={operand} label={pathLabel(operand.path)} {...pick} />
+            </span>
+          ))}
+        </p>
+      )}
+      {view !== null && view.collapsed !== null && (
+        <details className="recon-terms">
+          <summary>Show the {view.terms.length} amounts</summary>
+          <p className="recon-operands">
+            {view.terms.map(({ operand }) => (
+              <span key={operand.path} className="recon-term">
+                <Operand operand={operand} label={pathLabel(operand.path)} {...pick} />
+              </span>
+            ))}
+          </p>
+        </details>
+      )}
+      {failing && check.all_operands_verified && (
+        <p className="recon-note recon-reviewed">
+          Every amount in this check was reviewed, and the document still does not add up.
+        </p>
+      )}
+    </li>
+  );
+}
+
+function SkippedChecks({ checks }: { checks: ReconciliationCheck[] }) {
+  if (checks.length === 0) return null;
+  const items = checks.map((check) => (
+    <li key={check.id}>
+      {check.formula}
+      {check.detail && ` - ${check.detail}`}
+    </li>
+  ));
+  const noun = `${checks.length} check${checks.length === 1 ? "" : "s"} skipped`;
+  // A long run of skipped line checks stays one line until it is asked for.
+  if (checks.length > 3) {
+    return (
+      <details className="recon-muted recon-skipped">
+        <summary>{noun}</summary>
+        <ul>{items}</ul>
+      </details>
+    );
+  }
+  return (
+    <div className="recon-muted recon-skipped">
+      <p>{noun}:</p>
+      <ul>{items}</ul>
+    </div>
+  );
+}
+
+/** Whether the document's amounts add up, from the stored report. It sits
+ * under the line items; selecting an operand highlights that amount above.
+ * The suggestion is display-only here: it is applied from the review queue. */
+export default function ReconciliationPanel({
+  reconciliation,
+  picked,
+  onPick,
+}: PickProps & { reconciliation: Reconciliation | null }) {
+  if (reconciliation === null) {
+    return (
+      <section className="recon recon-muted" aria-label="Arithmetic check">
+        <p>Arithmetic check: not run for this extraction.</p>
+      </section>
+    );
+  }
+  const pick = { picked, onPick };
+  const { checks, suggestion, derived, assumptions } = reconciliation;
+  const lineChecks = checks.filter((c) => LINE_CHECK.test(c.id));
+  const linesPassing = lineChecks.filter((c) => c.status === "pass").length;
+  const shown = checks.filter(
+    (c) =>
+      c.status === "fail" ||
+      (c.status === "pass" && c.kind === "equation" && !LINE_CHECK.test(c.id))
+  );
+  const skipped = checks.filter((c) => c.status === "skipped");
+  const quietPasses = [
+    ...new Set(
+      checks
+        .filter((c) => c.status === "pass" && c.kind !== "equation")
+        .map((c) => quietName(c.id))
+    ),
+  ];
+  const passCount = checks.filter((c) => c.status === "pass" && c.kind !== "equation").length;
+
+  return (
+    <section className="recon" aria-labelledby="recon-heading">
+      <h2 className="recon-heading" id="recon-heading">
+        Arithmetic check <StatusMark status={reconciliation.status} />
+      </h2>
+
+      {lineChecks.length > 0 && (
+        <p className="recon-summary">
+          {linesPassing} of {lineChecks.length} lines add up
+        </p>
+      )}
+
+      {shown.length > 0 && (
+        <ul className="recon-checks">
+          {shown.map((check) => (
+            <CheckRow key={check.id} check={check} {...pick} />
+          ))}
+        </ul>
+      )}
+
+      {passCount > 0 && (
+        <p className="recon-summary">
+          {passCount} other check{passCount === 1 ? "" : "s"} pass ({quietPasses.join(", ")})
+        </p>
+      )}
+
+      <SkippedChecks checks={skipped} />
+
+      {derived.length > 0 && (
+        <div className="recon-muted">
+          <p>Not printed, so computed from the document:</p>
+          <ul>
+            {derived.map((d) => (
+              <li key={d.path}>
+                {pathLabel(d.path)} <span className="computed-tag">computed</span>{" "}
+                {formatAmount(d.value)} - {d.formula}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {assumptions.length > 0 && (
+        <div className="recon-muted">
+          <p>Assumptions:</p>
+          <ul>
+            {assumptions.map((a) => (
+              <li key={a}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {suggestion && (
+        <div className="recon-suggestion" role="note">
+          <p>
+            <strong>
+              Suggested: {pathLabel(suggestion.path)} {formatAmount(suggestion.value)}
+            </strong>{" "}
+            - one change that makes every check pass
+            {suggestion.current !== null && ` (now ${formatAmount(suggestion.current)})`}.
+          </p>
+          <p className="recon-muted">
+            Nothing is changed here. Apply it from the{" "}
+            <Link href="/review">review queue</Link>.
+          </p>
+        </div>
+      )}
+
+      <p className="recon-version">
+        {reconciliation.rules_version}
+        {reconciliation.currency && ` - ${reconciliation.currency}`}
+      </p>
+    </section>
+  );
+}

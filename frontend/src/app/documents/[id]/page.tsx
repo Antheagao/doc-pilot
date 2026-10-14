@@ -50,10 +50,14 @@ export default function DocumentPage() {
   // row of the extraction; a text citation turns a PDF to its page.
   const [selected, setSelected] = useState<SelectedCitation | null>(null);
   const citation = selected?.citation ?? null;
-  const highlight = useMemo(
-    () => new Set(citation?.kind === "record" ? citation.fields : []),
-    [citation]
-  );
+  // The amount a reconciliation operand points at, by field name: it lights
+  // up the same way a field citation does.
+  const [picked, setPicked] = useState<string | null>(null);
+  const highlight = useMemo(() => {
+    const fields = new Set(citation?.kind === "record" ? citation.fields : []);
+    if (picked) fields.add(picked);
+    return fields;
+  }, [citation, picked]);
   const previewPage = citation && citation.kind !== "record" ? citation.page_number : null;
 
   useEffect(() => {
@@ -64,6 +68,20 @@ export default function DocumentPage() {
         ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }, [citation]);
+
+  useEffect(() => {
+    if (!picked) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document
+      .getElementById(fieldElementId(picked))
+      ?.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
+  }, [picked]);
+
+  // Choosing an operand again lets go of it.
+  const pickOperand = useCallback(
+    (field: string) => setPicked((current) => (current === field ? null : field)),
+    []
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -171,7 +189,12 @@ export default function DocumentPage() {
 
             {doc.status === "extracted" &&
               (doc.extraction ? (
-                <ExtractionPanel extraction={doc.extraction} highlight={highlight} />
+                <ExtractionPanel
+                  extraction={doc.extraction}
+                  highlight={highlight}
+                  picked={picked}
+                  onPick={pickOperand}
+                />
               ) : (
                 <div className="results-panel">
                   <div className="empty-state">

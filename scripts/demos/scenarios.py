@@ -91,7 +91,9 @@ REVIEW_CORRECT_VALUE = "45.25"
 def review_correction(page: Page, rec: Recording) -> None:
     """The flagged subtotal on the document, corrected in the review queue,
     then the document again with the original struck through."""
-    subtotal = page.get_by_text("46.25", exact=True)
+    # The reconciliation panel repeats the number, so the row, not the page.
+    subtotal_row = page.locator("#field-subtotal")
+    subtotal = subtotal_row.get_by_text("46.25", exact=True)
     rec.open(f"{rec.base_url}/documents/{REVIEW_DOCUMENT_ID}", subtotal)
     rec.beat(1.5)
     rec.click(page.get_by_role("link", name=re.compile(r"^Review")))
@@ -109,7 +111,7 @@ def review_correction(page: Page, rec: Recording) -> None:
     # The document has no link back from the queue once its card is gone;
     # browser back returns to it, and the route change refreshes the badge.
     page.go_back()
-    page.get_by_text("was 46.25").wait_for(state="visible")
+    subtotal_row.get_by_text("was 46.25").wait_for(state="visible")
     rec.beat(2)
     rec.end_hold()
 

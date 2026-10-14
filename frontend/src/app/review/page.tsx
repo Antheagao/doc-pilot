@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import ConfidenceBadge from "@/components/ConfidenceBadge";
 import { EMPTY_VALUE, formatAmount } from "@/lib/format";
+import { checkText, pathLabel } from "@/lib/reconciliation";
 
 // Fields that hold an amount of money. Mirrors MONEY_FIELDS in the backend
 // (app/extraction.py).
@@ -92,6 +93,36 @@ function parseDraft(fieldName: string, raw: string): unknown {
   return trimmed;
 }
 
+// A line total suggestion: "line_items[2].total" names the row to change.
+const LINE_TOTAL_PATH = /^line_items\[(\d+)\]\.total$/;
+
+/** The correction draft with a suggestion applied, or null when the
+ * suggestion does not target this field (or the draft cannot take it). A
+ * scalar is replaced by the suggested value; for line items only that row's
+ * total changes in the JSON draft, and anything typed so far is kept. */
+function draftWithSuggestion(
+  item: ReviewQueueItem,
+  suggestion: NonNullable<ReviewQueueItem["suggestion"]>,
+  currentDraft: string | null
+): string | null {
+  if (item.field_name !== "line_items") {
+    return suggestion.path === item.field_name ? suggestion.value : null;
+  }
+  const match = LINE_TOTAL_PATH.exec(suggestion.path);
+  if (!match) return null;
+  let rows: unknown;
+  try {
+    rows = JSON.parse(currentDraft ?? initialDraft(item));
+  } catch {
+    rows = JSON.parse(initialDraft(item));
+  }
+  if (!Array.isArray(rows)) return null;
+  const row = rows[Number(match[1])];
+  if (typeof row !== "object" || row === null) return null;
+  (row as Record<string, unknown>).total = suggestion.value;
+  return JSON.stringify(rows, null, 2);
+}
+
 function formatDisplayValue(item: ReviewQueueItem): string {
   if (item.field_name === "line_items") {
     const items = Array.isArray(item.value) ? item.value : [];
@@ -121,6 +152,30 @@ function ReviewRow({
   const [correcting, setCorrecting] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // What the last "Use ..." click filled in, said once in a live region.
+  const [prefilled, setPrefilled] = useState("");
+  const hintId = `review-hint-${item.field_id}`;
+  const lowConfidence = `Low confidence (${Math.round(item.confidence * 100)}%)`;
+  const reasonText =
+    item.review_reason !== "confidence"
+      ? "These amounts do not add up:"
+      : item.checks.length > 0
+        ? `${lowConfidence}, and these amounts do not add up:`
+        : lowConfidence;
+  const suggestion = item.suggestion;
+  const suggestedDraft = suggestion
+    ? draftWithSuggestion(item, suggestion, correcting ? draft : null)
+    : null;
+
+  const usePrefill = () => {
+    if (suggestion === null || suggestedDraft === null) return;
+    setDraft(suggestedDraft);
+    setCorrecting(true);
+    onError(null);
+    setPrefilled(
+      `Filled in ${formatAmount(suggestion.value)} for ${pathLabel(suggestion.path)}. Nothing is saved until you choose Save correction.`
+    );
+  };
 
   const resolve = async (
     resolution:
@@ -173,6 +228,34 @@ function ReviewRow({
         </div>
       </div>
 
+      <div className="review-reason">
+        <p>
+          <span className="review-reason-label">{reasonText}</span>
+        </p>
+        {item.checks.length > 0 && (
+          <ul className="review-checks">
+            {item.checks.map((check) => (
+              <li key={check.id}>
+                <span className="review-check-formula">{check.formula}</span>
+                <span className="review-check-equation">{checkText(check)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {suggestion && suggestedDraft !== null && (
+        <div className="review-suggestion">
+          <span>
+            Suggested: {pathLabel(suggestion.path)} {formatAmount(suggestion.value)} - one
+            change that makes every check pass
+          </span>
+          <button className="btn" disabled={busy} onClick={usePrefill}>
+            Use {formatAmount(suggestion.value)}
+          </button>
+        </div>
+      )}
+
       {correcting && (
         <div className="review-correct-form">
           {item.field_name === "line_items" ? (
@@ -198,6 +281,10 @@ function ReviewRow({
           )}
         </div>
       )}
+      {/* Mounted before it has text, so a screen reader announces the change. */}
+      <div className="review-prefill-note" aria-live="polite">
+        {correcting ? prefilled : ""}
+      </div>
 
       <div className="review-actions">
         {!correcting && (
@@ -205,6 +292,7 @@ function ReviewRow({
             <button
               className="btn btn-primary"
               disabled={busy}
+              aria-describedby={item.checks.length > 0 ? hintId : undefined}
               onClick={() => void resolve({ action: "approve" })}
             >
               Approve
@@ -243,6 +331,12 @@ function ReviewRow({
           </>
         )}
       </div>
+      {!correcting && item.checks.length > 0 && (
+        <p className="review-hint" id={hintId}>
+          Approving keeps this check failing and sends the other amounts in it to review.
+          If the value is wrong, correct it instead.
+        </p>
+      )}
     </div>
   );
 }
@@ -277,6 +371,9 @@ export default function ReviewPage() {
     setItems((prev) =>
       prev === null ? prev : prev.filter((i) => i.field_id !== fieldId)
     );
+    // Resolving a field can clear other fields of the same document or flag
+    // new ones, so the queue is read again.
+    void refresh();
   };
 
   return (
