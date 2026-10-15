@@ -17,7 +17,8 @@ Routing, from scratch on every call (so a correction can clear what it fixed):
 2. For each failing check, in report order, the suspects are the field the
    report's suggestion targets, when there is one and nobody has reviewed it;
    otherwise every unreviewed field the check involves. An operand path such
-   as `line_items[2].total` belongs to the `line_items` field. The suggestion
+   as `line_items[2].total` belongs to the `line_items` field, and
+   `tax_lines[1].amount` to `tax_lines`. The suggestion
    is the one change that fixes every failing check, so it is the likeliest
    misread and the other operands are not worth a person's time yet. After a
    person approves a value that still fails, no suggestion can target it, and
@@ -58,7 +59,8 @@ _FIELD_NAME_RE = re.compile(r"[^.\[]+")
 
 def field_name_of(path: str) -> str:
     """The field an operand path belongs to: `line_items[2].total` is the
-    `line_items` field, `subtotal` is `subtotal`."""
+    `line_items` field, `tax_lines[1].amount` is the `tax_lines` field,
+    `subtotal` is `subtotal`."""
     match = _FIELD_NAME_RE.match(path)
     return match.group() if match else path
 

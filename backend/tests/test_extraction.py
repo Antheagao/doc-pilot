@@ -1316,7 +1316,7 @@ async def test_a_consistent_extraction_is_stored_with_a_passing_reconciliation(
 
     row = await _reconciliation_of(db_session, document.id)
     assert row is not None
-    assert (row.status, row.rules_version) == ("pass", "rules_v1")
+    assert (row.status, row.rules_version) == ("pass", "rules_v2")
     fields = (await db_session.execute(select(ExtractedField))).scalars()
     reasons = {f.field_name: f.review_reason for f in fields if f.extraction_id == row.extraction_id}
     # Only the model's own doubts are flagged: document_date (0.6) and total (0.79).

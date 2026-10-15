@@ -3,14 +3,18 @@ eval labels and runs, plus hand-built records for each rule's edges. No
 database and no network. tests/test_reconcile_properties.py holds the
 generated cases."""
 
+import dataclasses
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from app.demo_seed import STAGED_REVIEW_CASES
+from app.evals import checks
 from app.evals.dataset import EVALS_DIR, load_cases
+from app.extraction_fields import SCHEMAS
 from app.models import ExtractedField
 from app.reconcile import (
     RULES_VERSION,
@@ -20,13 +24,17 @@ from app.reconcile import (
     FieldInput,
     LineInput,
     ReconcileInput,
+    TaxLineInput,
     reconcile,
     report_to_json,
 )
 
 RESULTS_DIR = EVALS_DIR / "results"
+GOLDEN_V1_REPORTS = Path(__file__).parent / "fixtures" / "rules_v1_reports.json"
+GOLDEN_V1_EDGE_INPUTS = Path(__file__).parent / "fixtures" / "rules_v1_edge_inputs.json"
 SONNET_RUNS = sorted(RESULTS_DIR.glob("*claude-sonnet*_extract_v1.json"))
 HAIKU_RUN = next(RESULTS_DIR.glob("*claude-haiku*_extract_v1.json"))
+SONNET_REPLAY = RESULTS_DIR / "20260731T064853Z_claude-sonnet-5_extract_v1.json"
 
 
 def leaf(value, confidence=1.0):
@@ -179,6 +187,75 @@ def test_haiku_019_names_the_line_sum_and_the_printed_subtotal() -> None:
     assert "5470.40" in lines_sum.detail
     # Four wrong header amounts could each be the culprit: no single fix.
     assert report.suggestion is None
+
+
+
+# ---- rules_v1 compatibility ---------------------------------------------------
+
+
+def current_v1_shaped_reports() -> dict[str, dict]:
+    """The reports behind tests/fixtures/rules_v1_reports.json, recomputed:
+    every label, every scored document of the committed runs, the staged 016
+    record, and the hand-built edge shapes of rules_v1_edge_inputs.json (gross
+    readings, computed and assumed values, each format failure, suggestions),
+    all v1-shaped. The fixture was written by the rules_v1 engine (before
+    rules_v2 existed) and is never regenerated."""
+    reports = {}
+    for case in load_cases():
+        reports[f"label:{case.doc_id}"] = report_to_json(checks.reconcile_label(case.fields))
+    for path in sorted(RESULTS_DIR.glob("*.json")):
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        schema = SCHEMAS[artifact["prompt_version"]]
+        threshold = artifact["review_threshold"]
+        for entry in scored(path):
+            tool = artifact_tool_input(entry)
+            reports[f"run:{path.stem}:{entry['doc_id']}"] = report_to_json(
+                checks.replay(tool, threshold, schema)[0]
+            )
+            for staged in STAGED_REVIEW_CASES:
+                if staged.doc_id == entry["doc_id"] and path.name == SONNET_REPLAY.name:
+                    tool = {**tool, staged.field_name: leaf(staged.value, staged.confidence)}
+                    reports[f"staged:{staged.doc_id}:{staged.field_name}"] = report_to_json(
+                        checks.replay(tool, threshold, schema)[0]
+                    )
+    for case in json.loads(GOLDEN_V1_EDGE_INPUTS.read_text(encoding="utf-8")):
+        reports[f"edge:{case['id']}"] = report_to_json(reconcile(edge_input(case)))
+    return reports
+
+
+def edge_input(case) -> ReconcileInput:
+    """The v1-shaped record of one edge case in rules_v1_edge_inputs.json: a raw
+    tool_input, or a list of stored fields (name, value, confidence, review
+    action, correction, reviewed)."""
+    if "tool_input" in case:
+        return ReconcileInput.from_tool_input(case["tool_input"])
+    return ReconcileInput.from_fields(
+        [
+            ExtractedField(
+                field_name=spec["name"],
+                value=spec["value"]
+                if spec["name"] == "line_items"
+                else leaf(spec["value"], spec["confidence"]),
+                confidence=spec["confidence"],
+                needs_review=False,
+                reviewed_at=datetime(2026, 1, 1, tzinfo=UTC) if spec["reviewed"] else None,
+                review_action=spec["action"],
+                corrected_value=spec["corrected"],
+            )
+            for spec in case["fields"]
+        ]
+    )
+
+
+def test_a_v1_shaped_record_keeps_every_rules_v1_report() -> None:
+    frozen = json.loads(GOLDEN_V1_REPORTS.read_text(encoding="utf-8"))
+    current = current_v1_shaped_reports()
+
+    assert current.keys() == frozen.keys()
+    assert {report["rules_version"] for report in frozen.values()} == {"rules_v1"}
+    assert RULES_VERSION == "rules_v2"
+    for key, report in current.items():
+        assert {**report, "rules_version": "rules_v1"} == frozen[key], key
 
 
 # ---- The staged 016 case -----------------------------------------------------
@@ -857,3 +934,917 @@ def test_a_line_input_and_field_input_are_plain_values() -> None:
     )
 
     assert reconcile(inp).status == STATUS_PASS
+
+
+# ---- rules_v2: adjustments, tax lines, balance, dates ------------------------------------
+
+
+def run_v2(*, lines=((1, 100, 100),), currency="USD", tax_lines=None, **header):
+    """A record built directly. `header` are FieldInput values by name
+    (subtotal, discount, due_date, ...); `tax_lines` are (rate, base, amount)
+    triples, `rate` the printed percent as a string."""
+    return reconcile(v2_input(lines=lines, currency=currency, tax_lines=tax_lines, **header))
+
+
+def v2_input(*, lines=((1, 100, 100),), currency="USD", tax_lines=None, **header):
+    return ReconcileInput(
+        currency=currency,
+        line_items=None if lines is None else tuple(LineInput(*line) for line in lines),
+        tax_lines=None
+        if tax_lines is None
+        else tuple(TaxLineInput(f"Tax {n}", rate, base, amount) for n, (rate, base, amount) in enumerate(tax_lines, 1)),
+        **{name: FieldInput(value) for name, value in header.items()},
+    )
+
+
+def v2_tool_input(**fields):
+    """A tool_input with the v1 fields already filled in for a 100.00 document."""
+    base = tool_input(subtotal=100, tax=0, total=100, lines=[(1, 100, 100)])
+    return {**base, **{name: leaf(value) for name, value in fields.items()}}
+
+
+# total_math with discount, shipping, and tip
+
+
+def test_total_math_takes_the_discount_off_and_adds_shipping_and_tip() -> None:
+    report = run_v2(subtotal=100, discount=10, shipping=8, tax=7.2, tip=5, total=110.2)
+
+    total_math = check_of(report, "total_math")
+    assert total_math.status == STATUS_PASS
+    assert total_math.formula == "subtotal - discount + shipping + tax + tip = total"
+    assert [(t.operand.path, t.coef) for t in total_math.terms] == [
+        ("subtotal", Decimal(1)),
+        ("discount", Decimal(-1)),
+        ("shipping", Decimal(1)),
+        ("tax", Decimal(1)),
+        ("tip", Decimal(1)),
+    ]
+    assert total_math.fields == ("subtotal", "discount", "shipping", "tax", "tip", "total")
+    assert report.status == STATUS_PASS
+    assert report.assumptions == ()
+
+
+def test_total_math_names_the_adjustments_when_it_fails() -> None:
+    report = run_v2(subtotal=100, discount=10, shipping=8, tax=7.2, total=106.2)
+
+    total_math = check_of(report, "total_math")
+    assert failing_ids(report) == ["total_math"]
+    assert total_math.detail == (
+        "The subtotal 100.00 minus discount 10.00 plus shipping 8.00 plus tax 7.20 is 105.20, "
+        "but the total is 106.20 (off by 1.00)."
+    )
+
+
+def test_an_absent_adjustment_adds_no_term_and_no_assumption() -> None:
+    report = run_v2(subtotal=100, tax=7, shipping=3, total=110)
+
+    total_math = check_of(report, "total_math")
+    # Only the printed shipping joins; the discount and tip are not 0, they are not there.
+    assert [t.operand.path for t in total_math.terms] == ["subtotal", "shipping", "tax"]
+    assert total_math.formula == "subtotal + shipping + tax = total"
+    assert report.assumptions == ()
+
+
+def test_a_null_tax_with_a_discount_still_counts_as_zero_and_says_so() -> None:
+    report = run_v2(subtotal=100, discount=10, tax=None, total=90)
+
+    assert report.status == STATUS_PASS
+    assert report.assumptions == ("no tax is shown, so subtotal + tax = total counts it as 0.",)
+    assert check_of(report, "total_math").formula == "subtotal - discount + tax = total"
+
+
+def test_an_unreadable_discount_skips_total_math_and_fails_its_format() -> None:
+    report = run_v2(subtotal=100, discount="ten", tax=0, total=90)
+
+    assert failing_ids(report) == ["format:discount"]
+    total_math = check_of(report, "total_math")
+    assert total_math.status == STATUS_SKIPPED
+    assert "discount is unreadable" in total_math.detail
+    assert check_of(report, "non_negative:discount").status == STATUS_SKIPPED
+
+
+def test_the_gross_subtotal_reading_carries_the_adjustments() -> None:
+    # A tax-included receipt with 5.00 shipping: 27.82 of items (1.82 of it tax)
+    # plus 5.00 shipping.
+    report = run_v2(
+        lines=GROSS_LINES, subtotal=27.82, tax=1.82, shipping=5, total=32.82
+    )
+
+    assert report.status == STATUS_PASS
+    total_math = check_of(report, "total_math")
+    assert total_math.formula == "subtotal + shipping = total (the total includes the tax)"
+    assert [(t.operand.path, t.coef, t.operand.source) for t in total_math.terms] == [
+        ("subtotal", Decimal(1), "extracted"),
+        ("shipping", Decimal(1), "extracted"),
+        ("tax", Decimal(0), "included"),
+    ]
+
+
+def test_the_gross_lines_reading_carries_the_adjustments() -> None:
+    report = run_v2(
+        lines=GROSS_LINES, subtotal=26.0, tax=1.82, discount=2, tip=3, total=28.82
+    )
+
+    assert report.status == STATUS_PASS
+    lines_sum = check_of(report, "lines_sum")
+    assert lines_sum.formula == (
+        "sum of line totals - discount + tip = total (the line prices include the tax)"
+    )
+    assert lines_sum.terms[-1].operand.source == "included"
+
+
+# lines_sum with a discount
+
+
+def test_a_subtotal_already_after_the_discount_passes_with_an_assumption() -> None:
+    # Lines 100.00, discount 10.00, the printed subtotal is 90.00 (after the
+    # discount), then 5.00 shipping and 7.20 tax.
+    report = run_v2(subtotal=90, discount=10, shipping=5, tax=7.2, total=102.2)
+
+    assert report.status == STATUS_PASS
+    assert report.assumptions == (
+        (
+            "the subtotal is after the discount: the line totals less the discount make up the "
+            "subtotal, and the total is built from that subtotal without taking the discount off again."
+        ),
+    )
+    lines_sum = check_of(report, "lines_sum")
+    assert lines_sum.formula == (
+        "sum of line totals - discount = subtotal (the subtotal is after the discount)"
+    )
+    assert (lines_sum.expected, lines_sum.actual) == (Decimal(90), Decimal(90))
+    total_math = check_of(report, "total_math")
+    assert total_math.formula == "subtotal + shipping + tax = total (the subtotal is after the discount)"
+    discount = next(t for t in total_math.terms if t.operand.path == "discount")
+    assert (discount.coef, discount.operand.source) == (Decimal(0), "included")
+
+
+def test_a_subtotal_that_fits_neither_discount_reading_still_fails() -> None:
+    report = run_v2(subtotal=95, discount=10, shipping=5, tax=7.2, total=102.2)
+
+    assert "lines_sum" in failing_ids(report)
+    assert report.assumptions == ()
+    assert check_of(report, "lines_sum").formula == "sum of line totals = subtotal"
+
+
+def test_the_discount_reading_needs_the_total_to_follow_it_too() -> None:
+    # Lines less the discount do reach the subtotal, but the total takes the
+    # discount off a second time: that is not the reading, so the lines still
+    # do not add up to the subtotal.
+    report = run_v2(subtotal=90, discount=10, shipping=5, tax=7.2, total=92.2)
+
+    assert failing_ids(report) == ["lines_sum"]
+    assert report.assumptions == ()
+    assert check_of(report, "lines_sum").formula == "sum of line totals = subtotal"
+
+
+def test_the_discount_reading_is_not_tried_for_a_document_that_passes() -> None:
+    report = run_v2(subtotal=100, discount=10, shipping=5, tax=7.2, total=102.2)
+
+    assert report.status == STATUS_PASS
+    assert report.assumptions == ()
+    assert all(op.source != "included" for check in report.checks for op in check.operands)
+
+
+# tax_lines_sum and tax derived from its lines
+
+
+def test_the_tax_lines_add_up_to_the_tax() -> None:
+    report = run_v2(
+        subtotal=100, tax=10, total=110, tax_lines=[("6", 100, 6), ("4", 100, 4)]
+    )
+
+    assert report.status == STATUS_PASS
+    tax_lines_sum = check_of(report, "tax_lines_sum")
+    assert tax_lines_sum.status == STATUS_PASS
+    assert tax_lines_sum.formula == "sum of tax line amounts = tax"
+    assert tax_lines_sum.fields == ("tax_lines[0].amount", "tax_lines[1].amount", "tax")
+
+
+def test_tax_lines_that_do_not_add_up_to_the_tax_fail() -> None:
+    report = run_v2(subtotal=100, tax=10, total=110, tax_lines=[("6", 100, 6), ("4", 100, 3)])
+
+    tax_lines_sum = check_of(report, "tax_lines_sum")
+    assert tax_lines_sum.status == STATUS_FAIL
+    assert tax_lines_sum.detail == (
+        "The tax line amounts add up to 9.00, but the tax is 10.00 (off by 1.00)."
+    )
+    assert "tax_lines[1].amount" in tax_lines_sum.fields
+    # The second amount alone explains the gap in both of its checks.
+    assert failing_ids(report) == ["tax_lines_sum", "tax_line_math[1]"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax_lines[1].amount", Decimal(4))
+
+
+def test_a_tax_that_is_not_printed_is_computed_from_its_lines() -> None:
+    report = run_v2(subtotal=100, tax=None, total=106, tax_lines=[("4", 100, 4), ("2", 100, 2)])
+
+    assert report.status == STATUS_PASS
+    assert [(d.path, d.value, d.formula) for d in report.derived] == [
+        ("tax", Decimal(6), "sum of tax line amounts")
+    ]
+    assert check_of(report, "tax_lines_sum").status == STATUS_SKIPPED
+    assert "computed as the sum of the tax line amounts" in check_of(report, "tax_lines_sum").detail
+    total_math = check_of(report, "total_math")
+    tax = total_math.terms[1].operand
+    assert (tax.path, tax.value, tax.source) == ("tax", Decimal(6), "computed")
+    # The tax is not assumed to be 0: it was worked out.
+    assert report.assumptions == ()
+    assert total_math.fields == ("subtotal", "tax_lines[0].amount", "tax_lines[1].amount", "total")
+
+
+def test_a_derived_tax_still_catches_a_wrong_total() -> None:
+    report = run_v2(subtotal=100, tax=None, total=107, tax_lines=[("4", 100, 4), ("2", 100, 2)])
+
+    assert failing_ids(report) == ["total_math"]
+
+
+def test_an_unreadable_tax_line_amount_skips_the_sum_and_the_derivation() -> None:
+    report = run_v2(subtotal=100, tax=None, total=100, tax_lines=[("4", 100, "four")])
+
+    assert "format:tax_lines[0].amount" in failing_ids(report)
+    assert check_of(report, "tax_lines_sum").status == STATUS_SKIPPED
+    assert report.derived == ()
+
+
+def test_no_tax_lines_means_no_tax_line_checks() -> None:
+    for tax_lines in (None, []):
+        report = run_v2(subtotal=100, tax=7, total=107, tax_lines=tax_lines)
+
+        assert not [c for c in report.checks if "tax_line" in c.id]
+
+
+# tax_line_math
+
+
+def test_a_tax_line_is_its_rate_times_its_base() -> None:
+    report = run_v2(subtotal=100, tax=8, total=108, tax_lines=[("8", 100, 8)])
+
+    line = check_of(report, "tax_line_math[0]")
+    assert line.status == STATUS_PASS
+    assert line.formula == "tax line 1: rate x base = amount"
+    assert [(t.coef, t.operand.path) for t in line.terms] == [(Decimal("0.08"), "tax_lines[0].base")]
+    assert line.rhs.path == "tax_lines[0].amount"
+    assert line.fields == ("tax_lines[0].rate", "tax_lines[0].base", "tax_lines[0].amount")
+    assert line.tolerance == Decimal(0)
+
+
+def test_a_tax_line_that_is_not_its_rate_times_its_base_fails() -> None:
+    report = run_v2(subtotal=100, tax=9, total=109, tax_lines=[("8", 100, 9)])
+
+    line = check_of(report, "tax_line_math[0]")
+    assert failing_ids(report) == ["tax_line_math[0]"]
+    assert line.detail == (
+        "Tax line 1: 8% of the base 100.00 is 8.00, but the amount is 9.00 (off by 1.00)."
+    )
+
+
+def test_two_tax_lines_on_different_printed_bases() -> None:
+    report = run_v2(
+        lines=((1, 200, 200),),
+        subtotal=200,
+        tax=10.25,
+        total=210.25,
+        # 6% of 150.00 and 2.5% of 50.00: each line against its own base.
+        tax_lines=[("6", 150, 9), ("2.5", 50, 1.25)],
+    )
+
+    assert report.status == STATUS_PASS
+    assert report.assumptions == ()
+    assert [c.id for c in report.checks if c.id.startswith("tax_line_math")] == [
+        "tax_line_math[0]",
+        "tax_line_math[1]",
+    ]
+    wrong = run_v2(
+        lines=((1, 200, 200),),
+        subtotal=200,
+        tax=10.25,
+        total=210.25,
+        tax_lines=[("6", 150, 9), ("2.5", 150, 1.25)],
+    )
+    assert failing_ids(wrong) == ["tax_line_math[1]"]
+
+
+def test_a_rounded_tax_line_gets_one_minor_unit_of_slack() -> None:
+    # 8.875% of 100.00 is 8.875, printed as 8.88 or 8.87 but not 8.89.
+    for printed in (8.88, 8.87):
+        report = run_v2(subtotal=100, tax=printed, total=100 + printed, tax_lines=[("8.875", 100, printed)])
+        line = check_of(report, "tax_line_math[0]")
+        assert (line.status, line.tolerance) == (STATUS_PASS, Decimal("0.01"))
+    off = run_v2(subtotal=100, tax=8.89, total=108.89, tax_lines=[("8.875", 100, 8.89)])
+    assert failing_ids(off) == ["tax_line_math[0]"]
+
+
+def test_an_exact_tax_line_product_gets_no_slack() -> None:
+    report = run_v2(subtotal=100, tax=8.01, total=108.01, tax_lines=[("8", 100, 8.01)])
+
+    assert failing_ids(report) == ["tax_line_math[0]"]
+    assert check_of(report, "tax_line_math[0]").tolerance == Decimal(0)
+
+
+def test_a_tax_line_without_a_base_is_checked_against_the_subtotal() -> None:
+    report = run_v2(subtotal=100, tax=8, total=108, tax_lines=[("8", None, 8)])
+
+    assert report.status == STATUS_PASS
+    assert report.assumptions == (
+        "tax line 1 shows no base amount, so its amount is checked against the subtotal.",
+    )
+    line = check_of(report, "tax_line_math[0]")
+    assert line.terms[0].operand.path == "subtotal"
+
+
+def test_a_tax_line_without_a_base_is_checked_against_the_subtotal_less_the_discount() -> None:
+    # 8% of 100.00 - 10.00 = 7.20.
+    report = run_v2(subtotal=100, discount=10, tax=7.2, total=97.2, tax_lines=[("8", None, 7.2)])
+
+    assert report.status == STATUS_PASS
+    assert report.assumptions == (
+        (
+            "tax line 1 shows no base amount, so its amount is checked against the subtotal "
+            "less the discount."
+        ),
+    )
+    base = check_of(report, "tax_line_math[0]").terms[0].operand
+    assert (base.path, base.value, base.source) == ("tax_lines[0].base", Decimal(90), "computed")
+    assert check_of(report, "tax_line_math[0]").fields == (
+        "tax_lines[0].rate",
+        "subtotal",
+        "discount",
+        "tax_lines[0].amount",
+    )
+
+
+def test_a_tax_line_without_a_base_falls_back_to_the_taxed_shipping_base() -> None:
+    # Shipping is taxed too: 8% of 100.00 - 10.00 + 10.00 = 8.00, not 8% of 90.00.
+    report = run_v2(
+        subtotal=100, discount=10, shipping=10, tax=8, total=108, tax_lines=[("8", None, 8)]
+    )
+
+    assert report.status == STATUS_PASS
+    assert report.assumptions == (
+        (
+            "tax line 1 shows no base amount, so its amount is checked against the subtotal "
+            "less the discount plus shipping."
+        ),
+    )
+    base = check_of(report, "tax_line_math[0]").terms[0].operand
+    assert (base.value, base.source) == (Decimal(100), "computed")
+
+
+def test_a_tax_line_that_fits_no_fallback_base_reports_the_first() -> None:
+    report = run_v2(
+        subtotal=100, discount=10, shipping=10, tax=9, total=109, tax_lines=[("8", None, 9)]
+    )
+
+    assert failing_ids(report) == ["tax_line_math[0]"]
+    assert check_of(report, "tax_line_math[0]").detail == (
+        "Tax line 1: 8% of the subtotal less the discount 90.00 is 7.20, but the amount is 9.00 "
+        "(off by 1.80)."
+    )
+
+
+def test_a_printed_base_is_never_replaced_by_a_fallback() -> None:
+    # The printed base 50.00 is wrong for 8.00; the subtotal would fit, but the
+    # printed number is the one judged.
+    report = run_v2(subtotal=100, tax=8, total=108, tax_lines=[("8", 50, 8)])
+
+    assert failing_ids(report) == ["tax_line_math[0]"]
+    assert report.assumptions == ()
+
+
+def test_a_tax_line_without_a_rate_is_skipped() -> None:
+    report = run_v2(subtotal=100, tax=5, total=105, tax_lines=[(None, None, 5)])
+
+    line = check_of(report, "tax_line_math[0]")
+    assert line.status == STATUS_SKIPPED
+    assert "tax_lines[0].rate is missing" in line.detail
+    assert line.terms[0].coef is None
+    assert report.status == STATUS_PASS
+
+
+def test_a_tax_line_without_a_base_and_a_subtotal_is_skipped() -> None:
+    report = run_v2(subtotal=None, tax=8, total=108, tax_lines=[("8", None, 8)], lines=None)
+
+    line = check_of(report, "tax_line_math[0]")
+    assert line.status == STATUS_SKIPPED
+    assert "subtotal is missing" in line.detail
+    assert report.assumptions == ()
+
+
+def test_an_unreadable_rate_is_a_format_failure() -> None:
+    report = run_v2(subtotal=100, tax=8, total=108, tax_lines=[("8%", 100, 8)])
+
+    assert "format:tax_lines[0].rate" in failing_ids(report)
+    assert check_of(report, "tax_line_math[0]").status == STATUS_SKIPPED
+
+
+# balance_math
+
+
+def test_the_balance_is_the_total_less_what_was_paid() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100, amount_paid=40, amount_due=60)
+
+    balance = check_of(report, "balance_math")
+    assert balance.status == STATUS_PASS
+    assert balance.formula == "total - amount_paid = amount_due"
+    assert balance.fields == ("total", "amount_paid", "amount_due")
+    assert report.assumptions == ()
+
+
+def test_a_wrong_amount_due_fails_the_balance() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100, amount_paid=40, amount_due=70)
+
+    assert failing_ids(report) == ["balance_math"]
+    assert check_of(report, "balance_math").detail == (
+        "The total 100.00 less the amount paid 40.00 is 60.00, but the amount due is 70.00 "
+        "(off by 10.00)."
+    )
+
+
+def test_no_amount_paid_beside_an_amount_due_counts_as_zero_and_says_so() -> None:
+    passing = run_v2(subtotal=100, tax=0, total=100, amount_due=100)
+    failing = run_v2(subtotal=100, tax=0, total=100, amount_due=60)
+
+    assert passing.status == STATUS_PASS
+    assert passing.assumptions == (
+        "no payment is shown, so total - amount paid = amount due counts it as 0.",
+    )
+    paid = check_of(passing, "balance_math").terms[1].operand
+    assert (paid.path, paid.value, paid.source) == ("amount_paid", Decimal(0), "assumed")
+    assert failing_ids(failing) == ["balance_math"]
+    assert "(no payment is printed, so it counts as 0)" in check_of(failing, "balance_math").detail
+    # Nothing is made of a payment that was never there.
+    assert "non_negative:amount_paid" not in [c.id for c in passing.checks]
+
+
+def test_a_missing_amount_due_is_computed() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100, amount_paid=40)
+
+    assert report.status == STATUS_PASS
+    assert [(d.path, d.value, d.formula) for d in report.derived] == [
+        ("amount_due", Decimal(60), "total - amount paid")
+    ]
+    balance = check_of(report, "balance_math")
+    assert balance.status == STATUS_SKIPPED
+    assert balance.rhs.source == "computed"
+    assert balance.fields == ("total", "amount_paid")
+
+
+def test_the_balance_is_not_checked_without_a_payment_or_an_amount_due() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100)
+
+    assert "balance_math" not in [c.id for c in report.checks]
+    assert report.derived == ()
+
+
+def test_a_balance_without_a_total_is_skipped() -> None:
+    report = run_v2(subtotal=100, tax=0, total=None, amount_paid=40, amount_due=60)
+
+    balance = check_of(report, "balance_math")
+    assert balance.status == STATUS_SKIPPED
+    assert "total is missing" in balance.detail
+
+
+def test_a_balance_that_the_paid_or_due_amount_could_explain_gets_no_suggestion() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100, amount_paid=40, amount_due=70)
+
+    # Amount paid 30 and amount due 60 each fix it, and the total is pinned by
+    # total_math: two single fixes, so neither is offered.
+    assert report.suggestion is None
+    fixed = run_v2(subtotal=100, tax=0, total=100, amount_paid=40, amount_due=60)
+    assert fixed.status == STATUS_PASS
+
+
+def test_a_misread_amount_due_is_suggested_when_the_payment_is_reviewed() -> None:
+    inp = v2_input(subtotal=100, tax=0, total=100, amount_paid=40, amount_due=70)
+    reviewed = dataclasses.replace(inp, amount_paid=FieldInput(40, "approved", True))
+
+    report = reconcile(reviewed)
+
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("amount_due", Decimal(60))
+
+
+# due_date_order
+
+
+def test_a_due_date_on_or_after_the_document_date_passes() -> None:
+    for due in ("2025-03-01", "2025-02-01"):
+        report = run_v2(subtotal=100, tax=0, total=100, document_date="2025-02-01", due_date=due)
+
+        order = check_of(report, "due_date_order")
+        assert order.status == STATUS_PASS
+        assert order.formula == "due_date >= document_date"
+        assert order.fields == ("document_date", "due_date")
+
+
+def test_a_due_date_before_the_document_date_fails() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100, document_date="2025-02-01", due_date="2025-01-15")
+
+    assert failing_ids(report) == ["due_date_order"]
+    assert check_of(report, "due_date_order").detail == (
+        "The due date 2025-01-15 is before the document date 2025-02-01."
+    )
+
+
+def test_the_due_date_order_is_emitted_only_when_a_due_date_is_printed() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100, document_date="2025-02-01")
+
+    assert "due_date_order" not in [c.id for c in report.checks]
+
+
+@pytest.mark.parametrize(
+    ("document_date", "due_date", "reason"),
+    [
+        (None, "2025-03-01", "document_date is missing"),
+        ("2025-02-01", "next week", "due_date is not a date (use YYYY-MM-DD)"),
+        ("01/02/2025", "2025-03-01", "document_date is not a date (use YYYY-MM-DD)"),
+        ("2025-02-30", "2025-03-01", "document_date is not a date (use YYYY-MM-DD)"),
+    ],
+)
+def test_a_date_that_cannot_be_read_skips_the_order_with_the_reason(
+    document_date, due_date, reason
+) -> None:
+    report = run_v2(subtotal=100, tax=0, total=100, document_date=document_date, due_date=due_date)
+
+    order = check_of(report, "due_date_order")
+    assert order.status == STATUS_SKIPPED
+    assert order.detail == f"Skipped because {reason}."
+    assert report.status == STATUS_PASS
+    # Dates have no format: check; they would change v1 reports.
+    assert not [c for c in report.checks if c.id.startswith("format:")]
+
+
+# non_negative for the new amounts
+
+
+@pytest.mark.parametrize("name", ["discount", "shipping", "tip", "amount_paid"])
+def test_the_new_amounts_must_not_be_negative_when_present(name) -> None:
+    ok = run_v2(subtotal=100, tax=0, total=100, **{name: 0})
+    negative = run_v2(subtotal=100, tax=0, total=100, **{name: -5})
+
+    assert check_of(ok, f"non_negative:{name}").status == STATUS_PASS
+    assert f"non_negative:{name}" in failing_ids(negative)
+    assert "is negative" in check_of(negative, f"non_negative:{name}").detail
+
+
+def test_amount_due_may_be_negative() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100, amount_paid=120, amount_due=-20)
+
+    assert report.status == STATUS_PASS
+    assert "non_negative:amount_due" not in [c.id for c in report.checks]
+
+
+def test_an_absent_new_amount_has_no_non_negative_check() -> None:
+    report = run_v2(subtotal=100, tax=0, total=100)
+
+    assert [c.id for c in report.checks if c.id.startswith("non_negative")] == [
+        "non_negative:subtotal",
+        "non_negative:tax",
+        "non_negative:total",
+    ]
+
+
+# the suggestion over the new amounts
+
+
+def test_a_misread_discount_is_suggested_back() -> None:
+    # Truth: 100.00 - 10.00 + 8.00 shipping + 7.20 tax (8% of 90.00) = 105.20.
+    report = run_v2(
+        subtotal=100, discount=15, shipping=8, tax=7.2, total=105.2, tax_lines=[("8", None, 7.2)]
+    )
+
+    assert failing_ids(report) == ["tax_line_math[0]", "total_math"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("discount", Decimal(10))
+    assert report.suggestion.current == Decimal(15)
+    assert report.suggestion.check_ids == ("tax_line_math[0]", "total_math")
+
+
+def test_a_total_math_failure_that_several_amounts_explain_gets_no_suggestion() -> None:
+    report = run_v2(
+        subtotal=100, discount=10, shipping=18, tax=7.2, total=107.2, tax_lines=[("8", 90, 7.2)]
+    )
+
+    # Shipping 10, discount 18, and total 115.20 each fix total_math alone.
+    assert failing_ids(report) == ["total_math"]
+    assert report.suggestion is None
+
+
+def test_a_misread_tax_line_amount_is_suggested_back() -> None:
+    report = run_v2(subtotal=100, tax=10, total=110, tax_lines=[("6", 100, 6), ("4", 100, 5)])
+
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax_lines[1].amount", Decimal(4))
+
+
+def test_a_reviewed_tax_line_field_is_never_suggested() -> None:
+    inp = v2_input(subtotal=100, tax=10, total=110, tax_lines=[("6", 100, 6), ("4", 100, 5)])
+    reviewed = dataclasses.replace(
+        inp,
+        tax_lines=tuple(
+            dataclasses.replace(row, source="approved", verified=True) for row in inp.tax_lines
+        ),
+    )
+
+    report = reconcile(reviewed)
+
+    assert "tax_lines_sum" in failing_ids(report)
+    assert report.suggestion is None
+
+
+# inputs
+
+
+def test_from_tool_input_reads_the_new_fields() -> None:
+    tool = v2_tool_input(
+        discount=10,
+        shipping=8,
+        tip=2,
+        amount_paid=20,
+        amount_due=80,
+        due_date="2025-03-01",
+        tax_lines=[
+            {
+                "label": leaf("State"),
+                "rate": leaf("8.875"),
+                "base": leaf(100.0),
+                "amount": leaf(8.88),
+            }
+        ],
+    )
+
+    inp = ReconcileInput.from_tool_input(tool)
+
+    assert [inp.discount.value, inp.shipping.value, inp.tip.value] == [10, 8, 2]
+    assert [inp.amount_paid.value, inp.amount_due.value] == [20, 80]
+    assert (inp.document_date.value, inp.due_date.value) == ("2025-01-01", "2025-03-01")
+    assert inp.tax_lines == (TaxLineInput("State", "8.875", 100.0, 8.88),)
+
+
+def test_from_tool_input_leaves_absent_fields_absent_not_zero() -> None:
+    inp = ReconcileInput.from_tool_input(tool_input(subtotal=5, tax=0, total=5, lines=[(1, 5, 5)]))
+
+    for name in ("discount", "shipping", "tip", "amount_paid", "amount_due", "due_date"):
+        assert getattr(inp, name) == FieldInput(None)
+    assert inp.tax_lines is None
+
+
+def test_from_tool_input_degrades_a_malformed_tax_line_to_an_empty_row() -> None:
+    tool = v2_tool_input(tax_lines=["not a row", {"rate": "oops"}])
+
+    inp = ReconcileInput.from_tool_input(tool)
+
+    assert inp.tax_lines == (TaxLineInput(), TaxLineInput())
+
+
+def stored_tax_lines(rows, *, action=None, corrected=None, reviewed=False):
+    """The tax_lines field stored the way line_items is: the array itself, a
+    leaf per cell."""
+    return ExtractedField(
+        field_name="tax_lines",
+        value=[{key: leaf(cell) for key, cell in row.items()} for row in rows],
+        confidence=0.99,
+        needs_review=False,
+        reviewed_at=datetime(2026, 1, 1, tzinfo=UTC) if reviewed else None,
+        review_action=action,
+        corrected_value=corrected,
+    )
+
+
+def stored_100(**extra):
+    fields = {
+        "line_items": stored_field(
+            "line_items",
+            [{"description": leaf("a"), "quantity": leaf(1), "unit_price": leaf(100.0), "total": leaf(100.0)}],
+        ),
+        "subtotal": stored_field("subtotal", 100.0),
+        "tax": stored_field("tax", 10.0),
+        "total": stored_field("total", 110.0),
+        "currency": stored_field("currency", "USD"),
+    }
+    fields.update(extra)
+    return list(fields.values())
+
+
+def test_from_fields_reads_the_new_fields_and_the_tax_lines() -> None:
+    rows = [
+        {"label": "State", "rate": "6", "base": 100.0, "amount": 6.0},
+        {"label": "County", "rate": "4", "base": 100.0, "amount": 4.0},
+    ]
+    fields = stored_100(
+        discount=stored_field("discount", 0),
+        due_date=stored_field("due_date", "2025-03-01"),
+        document_date=stored_field("document_date", "2025-02-01"),
+        tax_lines=stored_tax_lines(rows),
+    )
+
+    inp = ReconcileInput.from_fields(fields)
+
+    assert inp.discount == FieldInput(0, "extracted", False)
+    assert (inp.document_date.value, inp.due_date.value) == ("2025-02-01", "2025-03-01")
+    assert inp.tax_lines == (
+        TaxLineInput("State", "6", 100.0, 6.0),
+        TaxLineInput("County", "4", 100.0, 4.0),
+    )
+    assert reconcile(inp).status == STATUS_PASS
+
+
+def test_from_fields_with_no_new_fields_leaves_them_absent() -> None:
+    inp = ReconcileInput.from_fields(stored_100())
+
+    for name in ("discount", "shipping", "tip", "amount_paid", "amount_due", "due_date"):
+        assert getattr(inp, name) == FieldInput()
+    assert inp.tax_lines is None
+
+
+def test_from_fields_lets_a_corrected_tax_lines_field_win_and_marks_it_verified() -> None:
+    wrong = [{"label": "State", "rate": "6", "base": 100.0, "amount": 9.0}]
+    fixed = [{"label": "State", "rate": "10", "base": "100.00", "amount": "10.00"}]
+    fields = stored_100(
+        tax_lines=stored_tax_lines(wrong, action="corrected", corrected=fixed, reviewed=True)
+    )
+
+    report = reconcile(ReconcileInput.from_fields(fields))
+
+    assert report.status == STATUS_PASS
+    amount = check_of(report, "tax_lines_sum").terms[0].operand
+    assert (amount.value, amount.source, amount.verified) == (Decimal(10), "corrected", True)
+
+
+def test_from_fields_treats_a_tax_lines_field_that_is_not_a_list_as_absent() -> None:
+    broken = ExtractedField(
+        field_name="tax_lines",
+        value={"value": None, "confidence": 0.5},
+        confidence=0.5,
+        needs_review=False,
+        reviewed_at=None,
+        review_action=None,
+        corrected_value=None,
+    )
+
+    assert ReconcileInput.from_fields(stored_100(tax_lines=broken)).tax_lines is None
+
+
+# v1 shape
+
+
+V2_ONLY_CHECKS = ("tax_lines_sum", "tax_line_math", "balance_math", "due_date_order")
+
+
+def test_a_v1_shaped_record_emits_no_v2_check_or_derived_value() -> None:
+    report = run(subtotal=100, tax=7, total=107, lines=[(1, 100, 100)])
+
+    assert not [c for c in report.checks if c.id.startswith(V2_ONLY_CHECKS)]
+    assert not [c for c in report.checks if c.id.split(":")[-1] in _V2_AMOUNTS]
+    assert report.derived == ()
+    total_math = check_of(report, "total_math")
+    assert total_math.formula == "subtotal + tax = total"
+    assert [t.operand.path for t in total_math.terms] == ["subtotal", "tax"]
+
+
+_V2_AMOUNTS = ("discount", "shipping", "tip", "amount_paid", "amount_due")
+
+
+# JSON
+
+
+def test_report_json_prints_iso_dates_and_the_rate_as_a_plain_coefficient() -> None:
+    report = run_v2(
+        subtotal=100,
+        tax=8.88,
+        total=108.88,
+        document_date="2025-02-01",
+        due_date="2025-03-01",
+        tax_lines=[("8.875", 100, 8.88)],
+    )
+
+    payload = report_to_json(report)
+
+    assert json.loads(json.dumps(payload)) == payload
+    assert payload["rules_version"] == "rules_v2"
+    order = next(c for c in payload["checks"] if c["id"] == "due_date_order")
+    assert [t["operand"]["value"] for t in order["terms"]] == ["2025-02-01", "2025-03-01"]
+    assert order["actual"] is None
+    line = next(c for c in payload["checks"] if c["id"] == "tax_line_math[0]")
+    assert line["terms"][0]["coef"] == "0.08875"
+    assert (line["expected"], line["actual"], line["tolerance"]) == ("8.875", "8.88", "0.01")
+    assert line["fields"][0] == "tax_lines[0].rate"
+
+
+# ---- rules_v2: readings and fallbacks ---------------------------------------------------
+
+
+def test_a_rate_only_tax_line_is_checked_on_the_net_amount_when_the_subtotal_includes_the_tax() -> None:
+    # 27.82 of gross items, 1.82 of it tax: 7% of the net 26.00.
+    report = run_v2(
+        lines=GROSS_LINES, subtotal=27.82, tax=1.82, total=27.82, tax_lines=[("7", None, 1.82)]
+    )
+
+    assert report.status == STATUS_PASS
+    assert report.suggestion is None
+    assert report.assumptions[-1] == (
+        "tax line 1 shows no base amount, so its amount is checked against the net amount "
+        "(subtotal less the tax)."
+    )
+    base = check_of(report, "tax_line_math[0]").terms[0].operand
+    assert (base.path, base.value, base.source) == ("tax_lines[0].base", Decimal(26), "computed")
+    assert check_of(report, "tax_line_math[0]").fields == (
+        "tax_lines[0].rate",
+        "subtotal",
+        "tax",
+        "tax_lines[0].amount",
+    )
+
+
+def test_a_rate_only_tax_line_that_misses_the_net_amount_fails_under_the_gross_reading() -> None:
+    # The true total 108 was read as 100, which the gross reading accepts; 8% of
+    # the net 92.00 is 7.36, not 8.00, so the tax line is what gives it away.
+    report = run_v2(subtotal=100, tax=8, total=100, tax_lines=[("8", None, 8)])
+
+    assert check_of(report, "total_math").formula == "subtotal = total (the total includes the tax)"
+    line = check_of(report, "tax_line_math[0]")
+    assert line.status == STATUS_FAIL
+    assert line.detail == (
+        "Tax line 1: 8% of the net amount (subtotal less the tax) 92.00 is 7.36, but the amount "
+        "is 8.00 (off by 0.64)."
+    )
+
+
+def test_the_net_amount_base_also_takes_the_discount_and_shipping() -> None:
+    # Items 108.00 including 8.00 tax, less 10.00 discount, plus 10.00 shipping,
+    # make 108.00; shipping is taxed too: 8% of 108 - 8 - 10 + 10 = 100.00.
+    report = run_v2(
+        lines=((1, 108, 108),),
+        subtotal=108,
+        discount=10,
+        shipping=10,
+        tax=8,
+        total=108,
+        tax_lines=[("8", None, 8)],
+    )
+
+    assert report.status == STATUS_PASS
+    assert report.assumptions[-1] == (
+        "tax line 1 shows no base amount, so its amount is checked against the net amount "
+        "(subtotal less the tax) less the discount plus shipping."
+    )
+
+
+def test_a_single_misread_does_not_pass_on_the_shipping_base_and_get_a_wrong_fix() -> None:
+    # Tax 8.00 is a misread of 7.20, but the shipping-inclusive base (100.00)
+    # happens to fit it. The total 107.20 is right: the only single change that
+    # satisfies the re-run on the first base is none, so nothing is suggested.
+    report = run_v2(
+        subtotal=100, discount=10, shipping=10, tax=8, total=107.2, tax_lines=[("8", None, 8)]
+    )
+
+    assert failing_ids(report) == ["total_math"]
+    assert check_of(report, "tax_line_math[0]").status == STATUS_PASS
+    assert report.suggestion is None
+
+
+def test_a_document_that_passes_on_the_first_base_keeps_its_suggestion() -> None:
+    report = run_v2(
+        subtotal=100, discount=15, shipping=8, tax=7.2, total=105.2, tax_lines=[("8", None, 7.2)]
+    )
+
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("discount", Decimal(10))
+
+
+def test_a_total_misread_as_the_subtotal_with_its_adjustments_passes_as_tax_included() -> None:
+    # Documented blind spot: the true total is 116.00 (100 + 8 tax + 8 shipping).
+    # Read as 108.00 it fits "subtotal + shipping = total, tax included".
+    report = run_v2(subtotal=100, tax=8, shipping=8, total=108)
+
+    assert report.status == STATUS_PASS
+    assert "prices include tax" in report.assumptions[0]
+    assert check_of(report, "total_math").formula == (
+        "subtotal + shipping = total (the total includes the tax)"
+    )
+
+
+def test_an_overpaid_documents_misread_amount_due_gets_its_negative_fix() -> None:
+    inp = v2_input(subtotal=100, tax=0, total=100, amount_paid=120, amount_due=-30)
+    reviewed = dataclasses.replace(inp, amount_paid=FieldInput(120, "approved", True))
+
+    report = reconcile(reviewed)
+
+    assert failing_ids(report) == ["balance_math"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("amount_due", Decimal(-20))
+    assert report.suggestion.current == Decimal(-30)
+
+
+def test_a_negative_header_amount_other_than_the_amount_due_is_never_suggested() -> None:
+    # Shipping would have to be -5 to balance this document; it is not offered.
+    report = run_v2(subtotal=100, tax=0, shipping=15, total=95)
+    reviewed = dataclasses.replace(
+        v2_input(subtotal=100, tax=0, shipping=15, total=95),
+        subtotal=FieldInput(100, "approved", True),
+        total=FieldInput(95, "approved", True),
+    )
+
+    assert failing_ids(report) == ["total_math"]
+    assert reconcile(reviewed).suggestion is None

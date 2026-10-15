@@ -486,7 +486,7 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 | claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 0.0% | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
 | claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 50.0% | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
 
-*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the arithmetic checks (app/reconcile.py, rules_v1) route to review, replayed from each run's stored answers whenever this table is rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
+*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the arithmetic checks (app/reconcile.py, rules_v2) route to review, replayed from each run's stored answers whenever this table is rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
 
 <!-- EVAL_TABLE:END -->
 
@@ -494,7 +494,7 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 The extraction eval asks how often a model misreads a document.
 This one asks what the arithmetic checks would do about it, without paying for a model run.
-Every label is a consistent document, and `rules_v1` passes all 25 unmutated.
+Every label is a consistent document, and `rules_v2` passes all 25 unmutated.
 The eval then breaks one printed amount at a time (subtotal, tax, total, and every line's quantity, unit price, and total) in the ways a reader gets digits wrong, and replays each broken document with full confidence, so only the arithmetic can notice.
 "Fix suggested" counts the cases where the engine proposes exactly the original value, and "Wrong fixes" counts any other suggestion; it never makes one.
 The misses are a total read as the subtotal on a document with tax, which looks like a tax-inclusive receipt and is the known blind spot.
@@ -512,7 +512,7 @@ The misses are a total read as the subtotal on a document with tax, which looks 
 | Wrong row read | total read as the subtotal | 120 | 96 (80.0%) | 96 (80.0%) | 96 (80.0%) | 0 | 0.00 |
 | All |  | 1628 | 1604 (98.5%) | 1604 (98.5%) | 804 (49.4%) | 0 | 0.17 |
 
-*All 25 labels pass rules_v1 unmutated; each row then breaks one printed amount (subtotal, tax, total, and every line's quantity, unit price, and total) in one way and replays the document with full confidence, so only the arithmetic can notice. Detected means a check fails. Field flagged means the broken field is routed to review because of a failing check. Fix suggested means the engine proposes exactly the original value for that field; Wrong fixes counts any other suggestion. Quantities and unit prices are never suggested, so those misreads are flagged but not fixed. Correct fields flagged is the mean number of other fields a mutation sends to review. Undetected: 24 wrong row read on total.*
+*All 25 labels pass rules_v2 unmutated; each row then breaks one printed amount (subtotal, tax, total, and every line's quantity, unit price, and total) in one way and replays the document with full confidence, so only the arithmetic can notice. Detected means a check fails. Field flagged means the broken field is routed to review because of a failing check. Fix suggested means the engine proposes exactly the original value for that field; Wrong fixes counts any other suggestion. Quantities and unit prices are never suggested, so those misreads are flagged but not fixed. Correct fields flagged is the mean number of other fields a mutation sends to review. Undetected: 24 wrong row read on total.*
 
 <!-- CHECKS_TABLE:END -->
 

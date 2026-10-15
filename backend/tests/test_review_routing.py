@@ -315,10 +315,75 @@ def test_a_suggestion_no_failing_check_names_falls_back_to_the_first_failing_che
         ("line_items[2].total", "line_items"),
         ("line_items[10].quantity", "line_items"),
         ("tax", "tax"),
+        ("tax_lines[1].amount", "tax_lines"),
+        ("tax_lines[0].rate", "tax_lines"),
+        ("amount_due", "amount_due"),
     ],
 )
 def test_an_operand_path_belongs_to_one_field(path: str, name: str) -> None:
     assert field_name_of(path) == name
+
+
+def stored_tax_lines(rows, confidence=0.99, **kwargs) -> ExtractedField:
+    """The tax_lines field stored the way line_items is: the array itself, a
+    leaf per cell."""
+    cells = [{key: leaf(cell, confidence) for key, cell in row.items()} for row in rows]
+    return ExtractedField(
+        field_name="tax_lines",
+        value=cells,
+        confidence=confidence,
+        needs_review=False,
+        reviewed_at=None,
+        review_action=None,
+        corrected_value=None,
+        **kwargs,
+    )
+
+
+def record_with_tax_lines(second_amount: float) -> list[ExtractedField]:
+    """One 100.00 line, tax 10.00 over two tax lines (6% and 4% of 100.00),
+    total 110.00."""
+    line = {"description": leaf("a"), "quantity": leaf(1), "unit_price": leaf(100.0), "total": leaf(100.0)}
+    return [
+        stored("line_items", [line]),
+        stored("subtotal", 100.0),
+        stored("tax", 10.0),
+        stored("total", 110.0),
+        stored("currency", "USD"),
+        stored_tax_lines(
+            [
+                {"label": "State", "rate": "6", "base": 100.0, "amount": 6.0},
+                {"label": "County", "rate": "4", "base": 100.0, "amount": second_amount},
+            ]
+        ),
+    ]
+
+
+def test_a_misread_tax_line_amount_flags_the_tax_lines_field() -> None:
+    # Line 2 reads 5.00: 4% of 100.00 is 4.00 and the amounts no longer add up to
+    # the tax. Only that amount fixes both checks, and its operand path
+    # `tax_lines[1].amount` belongs to the tax_lines field.
+    fields = record_with_tax_lines(5.0)
+    report = reconcile(ReconcileInput.from_fields(fields))
+    assert [c.id for c in report.failing_checks] == ["tax_lines_sum", "tax_line_math[1]"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax_lines[1].amount", Decimal(4))
+
+    table = route(fields, report, THRESHOLD)
+
+    assert flagged(table) == {"tax_lines": "reconciliation:tax_lines_sum"}
+
+
+def test_a_consistent_tax_lines_field_is_not_flagged() -> None:
+    fields = record_with_tax_lines(4.0)
+    report = reconcile(ReconcileInput.from_fields(fields))
+    assert [c.id for c in report.checks if c.id.startswith("tax_line")] == [
+        "tax_lines_sum",
+        "tax_line_math[0]",
+        "tax_line_math[1]",
+    ]
+
+    assert flagged(route(fields, report, THRESHOLD)) == {}
 
 
 # ---- The invariant ----------------------------------------------------------
@@ -430,7 +495,7 @@ async def test_refresh_stores_the_report_and_flags_the_culprit(db_session: Async
         )
     ).scalar_one()
     assert result.created is True
-    assert (row.status, row.rules_version) == ("fail", "rules_v1")
+    assert (row.status, row.rules_version) == ("fail", "rules_v2")
     assert row.report["suggestion"]["value"] == "45.25"
     assert row.report["status"] == "fail"
     fields = await fields_of(db_session, extraction_id)

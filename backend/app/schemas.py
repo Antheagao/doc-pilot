@@ -46,7 +46,7 @@ class ExtractedFieldOut(BaseModel):
     corrected_value: Any = None
 
 
-# The closed sets of rules_v1 (operand source: extracted, approved, corrected,
+# The closed sets of rules_v1 and rules_v2 (operand source: extracted, approved, corrected,
 # computed, assumed, included; check kind: equation, bound, presence, format;
 # status: pass, fail, skipped) are plain strings here, because the stored
 # report is read back by whatever rules version wrote it: a later version

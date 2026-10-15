@@ -9,6 +9,8 @@ tests/conftest.py makes every run draw the same examples."""
 import copy
 import dataclasses
 import json
+import re
+from datetime import date, timedelta
 from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 from hypothesis import assume, event, given
@@ -16,11 +18,13 @@ from hypothesis import strategies as st
 
 from app.money import currency_precision
 from app.reconcile import (
+    SOURCE_INCLUDED,
     STATUS_FAIL,
     STATUS_PASS,
     FieldInput,
     LineInput,
     ReconcileInput,
+    TaxLineInput,
     reconcile,
     report_to_json,
 )
@@ -76,21 +80,33 @@ def rounded_lines(inp: ReconcileInput) -> int:
     return sum((line.quantity * line.unit_price) % unit != 0 for line in inp.line_items)
 
 
+HEADER_AMOUNTS = (
+    "subtotal", "tax", "total", "discount", "shipping", "tip", "amount_paid", "amount_due",
+)
+
+
+def split_path(path: str) -> tuple[str, int, str]:
+    """`line_items[2].total` -> ("line_items", 2, "total")."""
+    name, rest = path.split("[")
+    index, key = rest.split("].")
+    return name, int(index), key
+
+
 def set_path(inp: ReconcileInput, path: str, value: Decimal) -> ReconcileInput:
     """The input with one number replaced, addressed the way checks name it."""
-    if path in ("subtotal", "tax", "total"):
+    if path in HEADER_AMOUNTS:
         return dataclasses.replace(inp, **{path: FieldInput(value)})
-    index, key = path[len("line_items[") :].split("].")
-    lines = list(inp.line_items)
-    lines[int(index)] = dataclasses.replace(lines[int(index)], **{key: value})
-    return dataclasses.replace(inp, line_items=tuple(lines))
+    name, index, key = split_path(path)
+    rows = list(getattr(inp, name))
+    rows[index] = dataclasses.replace(rows[index], **{key: value})
+    return dataclasses.replace(inp, **{name: tuple(rows)})
 
 
 def get_path(inp: ReconcileInput, path: str) -> Decimal:
-    if path in ("subtotal", "tax", "total"):
+    if path in HEADER_AMOUNTS:
         return getattr(inp, path).value
-    index, key = path[len("line_items[") :].split("].")
-    return getattr(inp.line_items[int(index)], key)
+    name, index, key = split_path(path)
+    return getattr(getattr(inp, name)[index], key)
 
 
 def reads_as_tax_included(inp: ReconcileInput) -> bool:
@@ -275,3 +291,134 @@ def test_a_total_misread_below_the_subtotal_is_the_only_fix_with_no_tax(inp, dat
     # A tax cannot be negative, so only the total can be the culprit.
     assert report.suggestion is not None
     assert (report.suggestion.path, report.suggestion.value) == ("total", subtotal)
+
+
+# ---- rules_v2 ---------------------------------------------------------------
+
+RATES = ["5", "6", "7.5", "8.875", "10"]
+
+
+@st.composite
+def consistent_v2_inputs(draw) -> ReconcileInput:
+    """A consistent document with the v2 extras: a discount, shipping, a tip,
+    tax lines (each on a printed base, or on none, in which case it is taxed on
+    the subtotal less the discount), a payment and an amount due, and dates."""
+    inp = draw(consistent_inputs())
+    unit = unit_of(inp.currency)
+    subtotal = inp.subtotal.value
+
+    def share(percent: int, of: Decimal) -> Decimal:
+        return (of * percent / 100).quantize(unit, rounding=ROUND_DOWN)
+
+    discount = draw(st.one_of(st.none(), st.integers(1, 25).map(lambda pct: share(pct, subtotal))))
+    shipping = draw(st.one_of(st.none(), st.integers(0, 400).map(lambda n: n * unit)))
+    tip = draw(st.one_of(st.none(), st.integers(0, 400).map(lambda n: n * unit)))
+    taxable = subtotal - (discount or 0)
+
+    tax_lines = []
+    for _ in range(draw(st.integers(0, 2))):
+        rate = draw(st.sampled_from(RATES))
+        printed = draw(st.booleans())
+        base = share(draw(st.integers(1, 100)), subtotal) if printed else taxable
+        amount = (Decimal(rate) / 100 * base).quantize(unit, rounding=ROUND_HALF_UP)
+        tax_lines.append(TaxLineInput("Tax", rate, base if printed else None, amount))
+
+    if tax_lines:
+        tax = sum((row.amount for row in tax_lines), Decimal(0))
+        tax_printed = draw(st.booleans())
+    else:
+        tax, tax_printed = inp.tax.value or Decimal(0), inp.tax.value is not None
+    total = subtotal - (discount or 0) + (shipping or 0) + tax + (tip or 0)
+
+    paid = due = None
+    mode = draw(st.sampled_from(["none", "both", "due only", "paid only"]))
+    if mode != "none":
+        paid_amount = share(draw(st.integers(0, 100)), total)
+        paid = paid_amount if mode in ("both", "paid only") else None
+        due = total - paid_amount if mode == "both" else total if mode == "due only" else None
+
+    issued = date(2025, 1, 1) + timedelta(days=draw(st.integers(0, 300)))
+    due_date = draw(st.one_of(st.none(), st.integers(0, 90).map(lambda n: issued + timedelta(days=n))))
+    return dataclasses.replace(
+        inp,
+        tax=FieldInput(tax if tax_printed else None),
+        total=FieldInput(total),
+        discount=FieldInput(discount),
+        shipping=FieldInput(shipping),
+        tip=FieldInput(tip),
+        amount_paid=FieldInput(paid),
+        amount_due=FieldInput(due),
+        document_date=FieldInput(issued.isoformat()),
+        due_date=FieldInput(None if due_date is None else due_date.isoformat()),
+        tax_lines=tuple(tax_lines) or None,
+    )
+
+
+def printed_v2_paths(inp: ReconcileInput) -> list[str]:
+    """The numbers a broken copy can be told apart from the original by. An
+    amount paid beside a derived amount due, and a derived tax, are not printed
+    and are left alone."""
+    paths = [f"line_items[{i}].total" for i in range(len(inp.line_items))]
+    paths += [name for name in HEADER_AMOUNTS if getattr(inp, name).value is not None]
+    if inp.amount_due.value is None:
+        paths = [path for path in paths if path != "amount_paid"]
+    for index, row in enumerate(inp.tax_lines or ()):
+        paths.append(f"tax_lines[{index}].amount")
+        if row.base is not None:
+            paths.append(f"tax_lines[{index}].base")
+    return paths
+
+
+@given(consistent_v2_inputs())
+def test_a_consistent_v2_document_never_fails(inp) -> None:
+    report = reconcile(inp)
+
+    assert report.status == STATUS_PASS, [c.detail for c in report.failing_checks]
+    assert report.suggestion is None
+    assert json.loads(json.dumps(report_to_json(report))) == report_to_json(report)
+
+
+@given(consistent_v2_inputs(), st.data())
+def test_breaking_one_v2_number_fails_a_check_naming_it(inp, data) -> None:
+    unit = unit_of(inp.currency)
+    path = data.draw(st.sampled_from(printed_v2_paths(inp)))
+    if path.endswith(".base"):
+        rate = Decimal(inp.tax_lines[int(path[len("tax_lines[") : path.index("]")])].rate)
+        # Moves rate x base by more than the one minor unit of slack.
+        shift = (3 * unit * 100 / rate).quantize(Decimal(1), rounding=ROUND_CEILING)
+    else:
+        shift = data.draw(st.integers(2 + rounded_lines(inp), 60)) * unit
+    broken = set_path(inp, path, get_path(inp, path) + shift * data.draw(st.sampled_from([1, -1])))
+
+    report = reconcile(broken)
+
+    included = any(
+        operand.source == SOURCE_INCLUDED for check in report.checks for operand in check.operands
+    )
+    assume(not included)  # a different, consistent reading (tax in the total, discount applied)
+    failing = [c.id for c in report.failing_checks]
+    assert any(path in c.fields for c in report.failing_checks), (path, shift, failing)
+
+
+V1_CHECK_ID = re.compile(
+    r"line_math\[\d+\]|lines_present|lines_sum|total_math|tax_rate"
+    r"|non_negative:(subtotal|tax|total)"
+    r"|format:(subtotal|tax|total|line_items\[\d+\]\.(quantity|unit_price|total))"
+)
+
+
+@given(consistent_inputs(), st.data())
+def test_a_v1_shaped_record_never_emits_a_v2_check_or_assumption(inp, data) -> None:
+    unit = unit_of(inp.currency)
+    path = data.draw(st.sampled_from(amount_paths(inp)))
+    shift = data.draw(st.integers(-60, 60)) * unit
+    broken = set_path(inp, path, get_path(inp, path) + shift)
+
+    report = reconcile(broken)
+
+    assert [c.id for c in report.checks if not V1_CHECK_ID.fullmatch(c.id)] == []
+    assert {d.path for d in report.derived} <= {"subtotal"} | {
+        f"line_items[{i}].total" for i in range(len(inp.line_items))
+    }
+    assert all("tax line" not in a and "payment" not in a and "discount" not in a for a in report.assumptions)
+    assert report.rules_version == "rules_v2"
