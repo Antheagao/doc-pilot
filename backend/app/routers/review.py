@@ -1,9 +1,9 @@
 """Human review queue endpoints.
 
 Fields are flagged needs_review=True with a review_reason: the model's
-confidence fell below Settings.review_threshold, or a failing arithmetic
-check names them (app/review_routing.py). This router exposes that set as
-a work queue:
+confidence fell below Settings.review_threshold, a failing arithmetic
+check names them, or the number in their evidence quote is not their value
+(app/review_routing.py). This router exposes that set as a work queue:
 
 - GET  /review/queue        -- pending fields (needs_review, not yet
                                reviewed), oldest extraction first, joined

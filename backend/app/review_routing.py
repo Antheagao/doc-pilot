@@ -1,8 +1,10 @@
 """Which fields a person has to look at: model doubt and failed arithmetic.
 
 A field is flagged `needs_review` for one reason, stored in `review_reason`:
-`confidence` (the model was unsure of it) or `reconciliation:<check_id>` (a
-failing check in app/reconcile.py names it). `route` is the pure rule that
+`confidence` (the model was unsure of it), `reconciliation:<check_id>` (a
+failing arithmetic check in app/reconcile.py names it), or `quote:<path>` (the
+number in the field's evidence quote is not its value; the check's id is
+already that text). `route` is the pure rule that
 turns a field set plus a reconciliation `Report` into those flags, and
 `refresh_reconciliation` is the one place that runs it against the database:
 the worker, the demo seed, the eval corpus, every review resolve, and
@@ -14,7 +16,8 @@ Routing, from scratch on every call (so a correction can clear what it fixed):
 1. A reviewed field (`reviewed_at` set) is frozen: its flag and reason keep
    whatever they were when a person resolved it. A person's word is never
    re-litigated by a later recomputation.
-2. For each failing check, in report order, the suspects are the field the
+2. For each failing check, quote checks first and then in report order, the
+   suspects are the field the
    report's suggestion targets, when there is one and nobody has reviewed it;
    otherwise every unreviewed field the check involves. An operand path such
    as `line_items[2].total` belongs to the `line_items` field, and
@@ -23,8 +26,10 @@ Routing, from scratch on every call (so a correction can clear what it fixed):
    misread and the other operands are not worth a person's time yet. After a
    person approves a value that still fails, no suggestion can target it, and
    the remaining operands are flagged instead.
-3. An unreviewed suspect is flagged with the first failing check that names it.
-   Any other unreviewed field is flagged `confidence` when its confidence is
+3. An unreviewed suspect is flagged with the first failing check that names it,
+   so a field blamed by both a quote check and an arithmetic check carries the
+   quote reason: it says what is wrong with that one value, where the
+   arithmetic only says the numbers do not add up. Any other unreviewed field is flagged `confidence` when its confidence is
    under the review threshold, and is not flagged otherwise.
 
 `needs_review` is true exactly when `review_reason` is set (a CHECK enforces it).
@@ -52,7 +57,14 @@ from app.models import (
     Reconciliation,
     reconciliation_reason,
 )
-from app.reconcile import ReconcileInput, Report, reconcile, report_to_json
+from app.reconcile import (
+    KIND_QUOTE,
+    Check,
+    ReconcileInput,
+    Report,
+    reconcile,
+    report_to_json,
+)
 
 _FIELD_NAME_RE = re.compile(r"[^.\[]+")
 
@@ -77,6 +89,12 @@ class Routing:
 NOT_FLAGGED = Routing(False, None)
 
 
+def _reason(check: Check) -> str:
+    """The review reason a failing check gives the fields it flags: a quote
+    check's id is already `quote:<path>`, an arithmetic check's is prefixed."""
+    return check.id if check.kind == KIND_QUOTE else reconciliation_reason(check.id)
+
+
 def route(
     fields: Iterable[ExtractedField], report: Report, review_threshold: float
 ) -> dict[str, Routing]:
@@ -89,7 +107,9 @@ def route(
     if suggested is not None and (suggested in reviewed or suggested not in names):
         suggested = None
 
-    failing = report.failing_checks
+    # A stable sort puts the quote checks first, so the reason a field gets is
+    # the quote's whenever one blames it.
+    failing = sorted(report.failing_checks, key=lambda check: check.kind != KIND_QUOTE)
     flagged: dict[str, Routing] = {}
     if suggested is not None and failing:
         # The suggestion fixes every failing check; the reason is the first
@@ -97,12 +117,12 @@ def route(
         culprit = next(
             (c for c in failing if suggested in {field_name_of(p) for p in c.fields}), failing[0]
         )
-        flagged[suggested] = Routing(True, reconciliation_reason(culprit.id))
+        flagged[suggested] = Routing(True, _reason(culprit))
     else:
         for check in failing:
             for name in dict.fromkeys(field_name_of(path) for path in check.fields):
                 if name in names and name not in reviewed:
-                    flagged.setdefault(name, Routing(True, reconciliation_reason(check.id)))
+                    flagged.setdefault(name, Routing(True, _reason(check)))
 
     routed: dict[str, Routing] = {}
     for field in fields:

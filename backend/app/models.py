@@ -43,10 +43,13 @@ JOB_KIND_JUDGE = "judge"
 # ExtractedField.review_reason values: why a field is flagged. 'confidence' is
 # the model's own doubt (confidence under Settings.review_threshold);
 # 'reconciliation:<check_id>' is a failed arithmetic check that names the field
-# (app/reconcile.py, routed by app/review_routing.py). NULL exactly when the
-# field is not flagged (ck_extracted_fields_review_reason_matches).
+# (app/reconcile.py, routed by app/review_routing.py); 'quote:<path>' is the
+# number in the field's evidence quote disagreeing with its value (the check id
+# is already that text). NULL exactly when the field is not flagged
+# (ck_extracted_fields_review_reason_matches).
 REVIEW_REASON_CONFIDENCE = "confidence"
 REVIEW_REASON_RECONCILIATION_PREFIX = "reconciliation:"
+REVIEW_REASON_QUOTE_PREFIX = "quote:"
 
 
 def reconciliation_reason(check_id: str) -> str:
@@ -140,7 +143,7 @@ class ExtractedField(Base):
         # reviewed_at IS NULL are the pending queue (see routers/review.py).
         Index("ix_extracted_fields_review_queue", "needs_review", "reviewed_at"),
         CheckConstraint(
-            "review_reason ~ '^(confidence|reconciliation:.+)$'",
+            "review_reason ~ '^(confidence|reconciliation:.+|quote:.+)$'",
             name="ck_extracted_fields_review_reason",
         ),
         # A reviewed field keeps needs_review (and its reason) as they were

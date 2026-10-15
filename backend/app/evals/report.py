@@ -103,8 +103,10 @@ _OPS_CAPTION = (
     "Caught by review is the share of incorrect fields whose confidence fell "
     "below that run's review_threshold -- the empirical case for the "
     "human-review queue; Caught by checks is the share of incorrect fields "
-    f"the arithmetic checks (app/reconcile.py, {RULES_VERSION}) route to "
-    "review, replayed from each run's stored answers whenever this table is "
+    "the deterministic checks route to review: the arithmetic (app/reconcile.py, "
+    f"{RULES_VERSION}) and, for a run whose answers carry evidence quotes, the "
+    "agreement of each value with the number in its quote (app/quotes.py), "
+    "replayed from each run's stored answers whenever this table is "
     "rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; "
     "latency is wall-clock p50/p95 per document.*"
 )

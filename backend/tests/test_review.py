@@ -590,10 +590,17 @@ def _leaf(value, confidence=0.99):
     return {"value": value, "confidence": confidence}
 
 
-async def _seed_016(db_session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, dict[str, ExtractedField]]:
+async def _seed_016(
+    db_session: AsyncSession,
+    *,
+    subtotal: float = 46.25,
+    total: float = 48.3,
+    quotes: dict[str, str] | None = None,
+) -> tuple[uuid.UUID, uuid.UUID, dict[str, ExtractedField]]:
     """The staged bakery receipt: lines 36.60 + 8.65 = 45.25, tax 3.05, total
     48.30, and a subtotal misread as 46.25 with confidence 0.68. Stored and
-    routed the way the worker does it."""
+    routed the way the worker does it. `quotes` gives header fields the
+    evidence quote a v2 extraction stores beside the value."""
     tool_input = {
         "vendor": _leaf("Bakery"),
         "document_date": _leaf("2025-03-01"),
@@ -613,9 +620,9 @@ async def _seed_016(db_session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, dic
                 },
             ]
         ),
-        "subtotal": _leaf(46.25, 0.68),
+        "subtotal": _leaf(subtotal, 0.68 if subtotal == 46.25 else 0.99),
         "tax": _leaf(3.05),
-        "total": _leaf(48.3),
+        "total": _leaf(total),
         "currency": _leaf("USD"),
     }
     document = Document(
@@ -638,6 +645,9 @@ async def _seed_016(db_session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, dic
     fields = build_extracted_fields(
         extraction.id, tool_input, THRESHOLD_SETTINGS.review_threshold, SCHEMA_V1
     )
+    for field in fields:
+        if field.field_name in (quotes or {}):
+            field.value = {**field.value, "evidence": {"page": 1, "quote": quotes[field.field_name]}}
     db_session.add_all(fields)
     await db_session.flush()
     await refresh_reconciliation(db_session, extraction.id, THRESHOLD_SETTINGS)
@@ -666,6 +676,46 @@ async def test_queue_item_carries_the_reason_the_failing_checks_and_the_suggesti
     assert item["checks"][0]["delta"] == "1.00"
     assert item["suggestion"]["path"] == "subtotal"
     assert (item["suggestion"]["value"], item["suggestion"]["current"]) == ("45.25", "46.25")
+
+
+async def test_queue_item_for_a_quote_reason_carries_the_quote_check_and_its_suggestion(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    _, extraction_id, _ = await _seed_016(
+        db_session, subtotal=45.25, total=49.3, quotes={"total": "TOTAL $48.30"}
+    )
+
+    queue = await _queue_for(client, extraction_id)
+
+    assert set(queue) == {"total"}
+    item = queue["total"]
+    assert item["review_reason"] == "quote:total"
+    assert [c["id"] for c in item["checks"]] == ["quote:total", "total_math"]
+    quote_check = item["checks"][0]
+    assert (quote_check["kind"], quote_check["status"]) == ("quote", "fail")
+    assert quote_check["detail"] == "The value is 49.30, but its quote shows 48.30."
+    assert quote_check["fields"] == ["total"]
+    assert item["suggestion"]["path"] == "total"
+    assert (item["suggestion"]["value"], item["suggestion"]["current"]) == ("48.30", "49.30")
+    assert item["suggestion"]["check_ids"] == ["quote:total", "total_math"]
+
+
+async def test_correcting_a_quote_flagged_field_clears_the_queue_and_keeps_the_reason(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document_id, extraction_id, fields = await _seed_016(
+        db_session, subtotal=45.25, total=49.3, quotes={"total": "TOTAL $48.30"}
+    )
+
+    response = await _correct(client, fields["total"], "48.30")
+
+    assert response.status_code == 200
+    assert response.json()["review_reason"] == "quote:total"  # frozen once reviewed
+    assert await _queue_for(client, extraction_id) == {}
+    extraction = (await client.get(f"/documents/{document_id}")).json()["extraction"]
+    assert extraction["reconciliation"]["status"] == "pass"
+    # A person reviewed the total, so its quote is no longer checked.
+    assert "quote:total" not in [c["id"] for c in extraction["reconciliation"]["checks"]]
 
 
 async def test_a_confidence_flag_has_no_checks_and_no_suggestion(

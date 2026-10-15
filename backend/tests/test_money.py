@@ -11,6 +11,7 @@ from app.money import (
     fits_minor_unit,
     parse_amount_input,
     parse_quantity_input,
+    printed_amounts,
     to_api_string,
     to_decimal,
     to_label_number,
@@ -261,3 +262,122 @@ def test_to_label_number_is_int_when_whole_else_float() -> None:
 @pytest.mark.parametrize("text", ["0.1", "10.8", "425.58", "999999999999.99", "0.005", "-46.25"])
 def test_label_numbers_round_trip(text) -> None:
     assert to_decimal(to_label_number(Decimal(text))) == Decimal(text)
+
+
+# ---- printed_amounts -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("$1,234.56", ["1234.56"]),
+        ("1.234,56 EUR", ["1234.56"]),
+        ("27,82 EUR", ["27.82"]),
+        ("45.25", ["45.25"]),
+        ("1,234,567.89", ["1234567.89"]),
+        ("1.234.567,89", ["1234567.89"]),
+        ("12,34,567.00", ["1234567.00"]),
+        ("1.234.567", ["1234567"]),
+        ("8", ["8"]),
+        ("USD 0.50", ["0.50"]),
+        ("0,123", ["0.123"]),
+        # Signs, parentheses, currency marks, and a closing full stop are not part of the number.
+        ("-$5.00", ["5.00"]),
+        ("(5.00)", ["5.00"]),
+        ("€ 12.00.", ["12.00"]),
+        ("8.875%", ["8.875"]),
+        ("7,5 %", ["7.5"]),
+        ("2 x 4.50 = 9.00", ["2", "4.50", "9.00"]),
+        ("Subtotal 5.00 ... 5.0 ... 5", ["5.00"]),
+    ],
+)
+def test_printed_amounts_reads_the_formats_a_document_prints(text: str, expected: list[str]) -> None:
+    assert printed_amounts(text) == tuple(Decimal(e) for e in expected)
+
+
+@pytest.mark.parametrize("text", ["1.234", "1,234", "Tax 8.875", "KWD 3,500"])
+def test_printed_amounts_gives_both_readings_of_an_ambiguous_number(text: str) -> None:
+    amounts = printed_amounts(text)
+
+    assert len(amounts) == 2
+    assert {a.as_tuple().exponent for a in amounts} == {-3, 0}
+    assert amounts[0] * 1000 == amounts[1]
+
+
+@pytest.mark.parametrize("text", ["", "   ", "no digits here", "n/a", "$", "-", "12.05.2024", "1.2.3", "1,23.45"])
+def test_printed_amounts_gives_nothing_for_text_without_an_amount(text: str) -> None:
+    assert printed_amounts(text) == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "USD 1 234,56",
+        "1\u00a0234,56 \u20ac",  # no-break space
+        "1\u202f234,56 \u20ac",  # narrow no-break space (fr-FR)
+        "1\u2009234,56",  # thin space
+        "CHF 1'234.56",
+        "CHF 1\u2019234.56",
+        "1 234.56",
+    ],
+)
+def test_printed_amounts_reads_space_and_apostrophe_grouping_as_one_number(text: str) -> None:
+    assert Decimal("1234.56") in printed_amounts(text)
+
+
+def test_printed_amounts_keeps_the_pieces_either_side_of_a_space_too() -> None:
+    # A space can also just separate two numbers, so any reading agreeing counts.
+    assert printed_amounts("1 234,56") == (Decimal(1), Decimal("1234.56"), Decimal("234.56"))
+    assert printed_amounts("Qty 2 345 pcs") == (Decimal(2), Decimal(2345), Decimal(345))
+    assert Decimal("1234567.89") in printed_amounts("1 234 567,89")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("1 2345", [1, 2345]), ("0 123", [0, 123]), ("1  234", [1, 234]), ("1 23", [1, 23])],
+)
+def test_printed_amounts_only_groups_a_space_before_exactly_three_digits(
+    text: str, expected: list[int]
+) -> None:
+    assert printed_amounts(text) == tuple(Decimal(e) for e in expected)
+
+
+@pytest.mark.parametrize(
+    ("text", "places", "expected"),
+    [
+        ("$1,000", 2, ["1000"]),
+        ("$1,000", 0, ["1000"]),
+        ("1.000", 2, ["1000"]),
+        ("1,234", 2, ["1234"]),
+        ("1.234", 2, ["1234"]),
+        ("$1,000", 3, ["1.000", "1000"]),
+        ("KWD 1,234", 3, ["1.234", "1234"]),
+        ("1,459 \u20ac/l", 6, ["1.459", "1459"]),
+        ("1,000", None, ["1.000", "1000"]),
+        # A head that cannot be a thousands group has only the decimal reading.
+        ("0,123", 2, ["0.123"]),
+        ("12345,678", 2, ["12345.678"]),
+        # Places do not touch a token whose reading is not in doubt.
+        ("1,234.56", 2, ["1234.56"]),
+        ("27,82", 2, ["27.82"]),
+    ],
+)
+def test_printed_amounts_uses_the_places_a_field_allows_to_read_an_ambiguous_number(
+    text: str, places: int | None, expected: list[str]
+) -> None:
+    assert printed_amounts(text, places) == tuple(Decimal(e) for e in expected)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("$.50", "0.50"), ("Total: .5", "0.5"), ("Total ........ 48.30", "48.30"), ("Due ,75", "0.75")],
+)
+def test_printed_amounts_reads_a_leading_separator_and_leader_dots(text: str, expected: str) -> None:
+    assert printed_amounts(text) == (Decimal(expected),)
+
+
+def test_printed_amounts_keeps_every_digit() -> None:
+    assert printed_amounts("0.000001 and 123456789012345678901234567890.123456") == (
+        Decimal("0.000001"),
+        Decimal("123456789012345678901234567890.123456"),
+    )

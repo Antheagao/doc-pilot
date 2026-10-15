@@ -10,9 +10,14 @@ eval labels, as the JSON number the label format wants (`to_label_number`).
 Nothing here rounds. A value with more digits than the currency's minor unit
 keeps them, so a model misreading `46.255` stays visible instead of becoming
 a plausible `46.26`; `fits_minor_unit` is how callers ask.
+
+Amounts as they are printed on a document ("$1,234.56", "1.234,56 EUR") are
+read by `printed_amounts`, which the value-quote check (app/quotes.py) uses to
+see what number a quote shows.
 """
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -70,6 +75,25 @@ _ECHO_LIMIT = 80
 # commas, non-ASCII digits, or bare ".5" and "5.": every accepted string means
 # exactly one number.
 _PLAIN_DECIMAL_RE = re.compile(r"-?\d+(\.\d+)?", re.ASCII)
+
+
+# One printed number: digit runs joined by single dots or commas (or, after a
+# leading separator, just the fraction: "$.50"), and whether a percent sign
+# follows. It must not continue a longer number, but may follow leader dots
+# ("Total ...... 48.30"). A trailing full stop ("total 5.") and a sign or
+# currency mark are not part of it.
+_PRINTED_NUMBER_RE = re.compile(
+    r"(?<!\d)(?<!\d[.,])(?:(\d+(?:[.,]\d+)*)|[.,](\d+))(\s*%)?", re.ASCII
+)
+_SEPARATOR_RE = re.compile(r"[.,]")
+# A number grouped by spaces (a space, no-break, narrow no-break, or thin space)
+# or by an apostrophe (Swiss), with an optional decimal part: "1 234,56",
+# "1'234.56".
+_GROUP_SEPARATORS = " \u00a0\u202f\u2009'\u2019"
+_GROUPED_NUMBER_RE = re.compile(
+    rf"(?<!\d)(?<!\d[.,])(\d{{1,3}}(?:[{_GROUP_SEPARATORS}]\d{{3}})+)(?:[.,](\d+))?(?!\d)",
+    re.ASCII,
+)
 
 
 class MoneyError(ValueError):
@@ -260,3 +284,89 @@ def to_label_number(d: Decimal) -> int | float:
     if d == d.to_integral_value():
         return int(d)
     return float(d)
+
+
+def _is_thousands_grouping(groups: Sequence[str]) -> bool:
+    """True when digit groups read as a grouped integer: a first group of one
+    to three digits (no leading zero), then groups of three (`1,234,567`) or
+    the Indian pattern of twos ending in a three (`12,34,567`)."""
+    first, rest = groups[0], groups[1:]
+    if not 1 <= len(first) <= 3 or first.startswith("0"):
+        return False
+    if all(len(group) == 3 for group in rest):
+        return True
+    return len(rest[-1]) == 3 and all(len(group) == 2 for group in rest[:-1])
+
+
+def _token_readings(token: str, *, percent: bool, places: int | None) -> list[Decimal]:
+    """Every number one printed token can mean; empty when it is none.
+
+    One separator is a decimal point (`8.875`, `27,82`) unless exactly three
+    digits follow a one-to-three digit head, where it may equally be a
+    thousands separator (`1.234`, `1,234`). Then both readings are returned,
+    except that a percentage is never grouped (`8.875%` is not 8875%) and a
+    field that allows fewer than three decimal places (`places`) cannot hold
+    the decimal one (`1,000` printed for a dollar amount is a thousand, not 1).
+    The same separator repeated is thousands grouping (`1.234.567`). Two kinds
+    mix as grouping then decimals, the last separator being the decimal point
+    (`1,234.56`, `1.234,56`). Anything else (a date such as `12.05.2024`) is not
+    an amount."""
+    separators = _SEPARATOR_RE.findall(token)
+    if not separators:
+        return [Decimal(token)]
+    groups = _SEPARATOR_RE.split(token)
+    if len(set(separators)) == 1:
+        if len(separators) > 1:
+            return [Decimal("".join(groups))] if _is_thousands_grouping(groups) else []
+        decimal = Decimal(f"{groups[0]}.{groups[1]}")
+        if len(groups[1]) != 3 or percent or not _is_thousands_grouping(groups):
+            return [decimal]
+        thousands = Decimal("".join(groups))
+        return [decimal, thousands] if places is None or places >= 3 else [thousands]
+    decimal_point = separators[-1]
+    whole, _, fraction = token.rpartition(decimal_point)
+    if decimal_point in whole:
+        return []
+    whole_groups = _SEPARATOR_RE.split(whole)
+    if not _is_thousands_grouping(whole_groups):
+        return []
+    return [Decimal(f"{''.join(whole_groups)}.{fraction}")]
+
+
+def printed_amounts(text: str, places: int | None = None) -> tuple[Decimal, ...]:
+    """The numbers a piece of printed text shows, as non-negative `Decimal`
+    magnitudes, in the order they appear and without repeats.
+
+    Reads EU comma decimals (`1.234,56 EUR`), US thousands separators
+    (`$1,234.56`), plain decimals (`8.875%`, `$.50`), and integers
+    (`2 x 4.50 = 9.00` gives 2, 4.50, and 9.00). Currency signs and codes, `%`,
+    minus signs, parentheses, and leader dots are not part of a number, so
+    `-$5.00` and `(5.00)` both give 5.00 and the caller decides what the sign
+    meant. A token that could be read two ways gives both readings (`1,234` is
+    1234 and 1.234) unless `places`, the decimal places the field being checked
+    allows, rules the decimal one out (see `_token_readings`); None keeps both.
+    A space or an apostrophe between groups of three digits is read as grouping
+    (`1 234,56`, `CHF 1'234.56`) in addition to the pieces on either side of it,
+    since a space can also just separate two numbers. No number gives `()`.
+    """
+    found: list[tuple[int, list[Decimal]]] = []
+    for match in _PRINTED_NUMBER_RE.finditer(text):
+        if match.group(2) is not None:
+            found.append((match.start(), [Decimal(f"0.{match.group(2)}")]))
+        else:
+            found.append(
+                (
+                    match.start(),
+                    _token_readings(match.group(1), percent=match.group(3) is not None, places=places),
+                )
+            )
+    for match in _GROUPED_NUMBER_RE.finditer(text):
+        groups = re.split(rf"[{_GROUP_SEPARATORS}]", match.group(1))
+        if _is_thousands_grouping(groups):
+            fraction = f".{match.group(2)}" if match.group(2) is not None else ""
+            found.append((match.start(), [Decimal("".join(groups) + fraction)]))
+    amounts: dict[Decimal, None] = {}
+    for _, readings in sorted(found, key=lambda entry: entry[0]):
+        for reading in readings:
+            amounts.setdefault(reading, None)
+    return tuple(amounts)

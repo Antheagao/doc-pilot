@@ -16,7 +16,7 @@
 | claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 0.0% | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
 | claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 50.0% | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
 
-*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the arithmetic checks (app/reconcile.py, rules_v2) route to review, replayed from each run's stored answers whenever this table is rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
+*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the deterministic checks route to review: the arithmetic (app/reconcile.py, rules_v2) and, for a run whose answers carry evidence quotes, the agreement of each value with the number in its quote (app/quotes.py), replayed from each run's stored answers whenever this table is rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
 
 ## Latest run: claude-haiku-4-5 / extract_v1 (2026-07-31T06:50:07.416732+00:00)
 

@@ -8,8 +8,12 @@ Caught by checks. `caught_by_review` asks how many wrong fields the model
 itself doubted; `caught_by_checks` asks how many the product would route to a
 person because a check in app/reconcile.py names them. It is the share of
 incorrect fields (the same denominator as `caught_by_review`) whose replayed
-`review_reason` starts with `reconciliation:`. A document that merely fails a
-check does not count: the check has to point at the wrong field. It is
+`review_reason` starts with `reconciliation:` or `quote:`, the two reasons a
+deterministic check gives (the quote check of app/quotes.py needs a run whose
+answers carry evidence quotes, so it adds nothing to a run without them;
+`flagged_by_quotes` and the `*_by_quotes` counts say how much of the total is
+the quotes'). A document that merely fails a check does not count: the check
+has to point at the wrong field. It is
 computed whenever a table is rendered, from the answers each artifact already
 stores, and never written back: the artifacts are what a model said and how it
 scored, and the rules version is part of the measurement, so a new rule moves
@@ -38,7 +42,7 @@ from typing import Any
 from app.evals.dataset import EvalCase
 from app.extraction import build_extracted_fields
 from app.extraction_fields import ARRAY_CELLS, SCHEMA_V1, SCHEMAS, ExtractionSchema
-from app.models import REVIEW_REASON_RECONCILIATION_PREFIX
+from app.models import REVIEW_REASON_QUOTE_PREFIX, REVIEW_REASON_RECONCILIATION_PREFIX
 from app.money import currency_precision, to_api_string, to_decimal, to_plain_string
 from app.reconcile import (
     RULES_VERSION,
@@ -116,10 +120,19 @@ def doc_routing(
     return _replay_doc(doc, review_threshold, schema)[1]
 
 
-def flagged_by_checks(routing: Routing) -> bool:
-    """True when a failing check, not the model's doubt, flagged the field."""
+def flagged_by_quotes(routing: Routing) -> bool:
+    """True when a quote that disagrees with its value flagged the field."""
     return routing.review_reason is not None and routing.review_reason.startswith(
-        REVIEW_REASON_RECONCILIATION_PREFIX
+        REVIEW_REASON_QUOTE_PREFIX
+    )
+
+
+def flagged_by_checks(routing: Routing) -> bool:
+    """True when a failing deterministic check, arithmetic or quote, not the
+    model's doubt, flagged the field."""
+    return flagged_by_quotes(routing) or (
+        routing.review_reason is not None
+        and routing.review_reason.startswith(REVIEW_REASON_RECONCILIATION_PREFIX)
     )
 
 
@@ -146,7 +159,9 @@ def failing_labels(cases: Sequence[EvalCase]) -> list[tuple[str, Report]]:
 class CheckMetrics:
     """What the checks do with one run's answers: documents that fail,
     incorrect fields a failing check flagged, and correct fields it flagged
-    as well (a check cannot always tell which operand is wrong)."""
+    as well (a check cannot always tell which operand is wrong). The checks are
+    the arithmetic and the quote agreement; `*_by_quotes` count the part of
+    each number that is the quotes' (they are included in it)."""
 
     rules_version: str
     n_docs: int
@@ -154,6 +169,8 @@ class CheckMetrics:
     n_incorrect: int
     n_caught_by_checks: int
     n_correct_flagged: int
+    n_caught_by_quotes: int = 0
+    n_correct_flagged_by_quotes: int = 0
 
     @property
     def caught_by_checks(self) -> float | None:
@@ -177,6 +194,7 @@ def check_metrics(run: Mapping[str, Any]) -> CheckMetrics | None:
         )
         return None
     n_docs = n_docs_failing = n_incorrect = n_caught = n_correct_flagged = 0
+    n_caught_by_quotes = n_correct_flagged_by_quotes = 0
     for doc in run["per_doc"]:
         if doc.get("status") != "scored" or "fields" not in doc:
             continue
@@ -185,15 +203,25 @@ def check_metrics(run: Mapping[str, Any]) -> CheckMetrics | None:
         n_docs_failing += report.status == STATUS_FAIL
         for name, field in doc["fields"].items():
             flagged = flagged_by_checks(routing[name])
+            by_quotes = flagged_by_quotes(routing[name])
             if field["correct"]:
                 n_correct_flagged += flagged
+                n_correct_flagged_by_quotes += by_quotes
             else:
                 n_incorrect += 1
                 n_caught += flagged
+                n_caught_by_quotes += by_quotes
     if n_docs == 0:
         return None
     return CheckMetrics(
-        RULES_VERSION, n_docs, n_docs_failing, n_incorrect, n_caught, n_correct_flagged
+        RULES_VERSION,
+        n_docs,
+        n_docs_failing,
+        n_incorrect,
+        n_caught,
+        n_correct_flagged,
+        n_caught_by_quotes,
+        n_correct_flagged_by_quotes,
     )
 
 

@@ -23,6 +23,7 @@ from app.evals.checks import (
     doc_routing,
     failing_labels,
     flagged_by_checks,
+    flagged_by_quotes,
     label_tool_input,
     reconcile_label,
     render_checks_markdown,
@@ -97,6 +98,8 @@ class TestCheckMetrics:
             n_correct_flagged=2,
         )
         assert metrics.caught_by_checks == 0.5
+        # The committed answers carry no evidence, so no quote check ran.
+        assert (metrics.n_caught_by_quotes, metrics.n_correct_flagged_by_quotes) == (0, 0)
         # Confidence caught none of them (the Ops table's 0.0%).
         assert run["summary"]["caught_by_review"] == 0.0
         assert _caught_fields(run) == {
@@ -130,6 +133,41 @@ class TestCheckMetrics:
 
         assert metrics.n_incorrect == 0
         assert metrics.caught_by_checks is None
+
+    def test_an_incorrect_line_cell_whose_quote_disagrees_is_caught_by_the_quote(self):
+        # Line item cells are stored as leaves, so an artifact that kept the
+        # model's evidence replays it; one misread line total here.
+        def cell(value, quote):
+            return {"value": value, "confidence": 1.0, "evidence": {"page": 1, "quote": quote}}
+
+        lines = [
+            {
+                "description": {"value": "a", "confidence": 1.0},
+                "quantity": cell(1, "1"),
+                "unit_price": cell(9.65, "9.65"),
+                "total": cell(9.65, "9.56"),
+            }
+        ]
+        run = {
+            "summary": {},
+            "prompt_version": "extract_v1",
+            "review_threshold": 0.8,
+            "per_doc": [
+                {
+                    "status": "scored",
+                    "fields": {
+                        "currency": {"actual": "USD", "confidence": 1.0, "correct": True},
+                        "line_items": {"actual": lines, "confidence": 1.0, "correct": False},
+                    },
+                }
+            ],
+        }
+
+        metrics = check_metrics(run)
+
+        assert (metrics.n_incorrect, metrics.n_caught_by_checks, metrics.n_caught_by_quotes) == (1, 1, 1)
+        assert (metrics.n_correct_flagged, metrics.n_correct_flagged_by_quotes) == (0, 0)
+        assert metrics.caught_by_checks == 1.0
 
     def test_a_run_without_a_summary_has_no_metrics(self):
         run = _haiku()
@@ -192,6 +230,24 @@ class TestReplay:
         assert report.status != "fail"
         assert routing["vendor"] == Routing(True, "confidence")
         assert not flagged_by_checks(routing["vendor"])
+
+    @pytest.mark.parametrize(
+        ("reason", "by_checks", "by_quotes"),
+        [
+            ("reconciliation:total_math", True, False),
+            ("quote:subtotal", True, True),
+            ("quote:line_items[2].total", True, True),
+            ("confidence", False, False),
+            (None, False, False),
+        ],
+    )
+    def test_both_deterministic_reasons_count_as_checks_and_only_quotes_as_quotes(
+        self, reason, by_checks, by_quotes
+    ):
+        routing = Routing(reason is not None, reason)
+
+        assert flagged_by_checks(routing) is by_checks
+        assert flagged_by_quotes(routing) is by_quotes
 
     def test_every_label_is_consistent(self):
         assert failing_labels(load_cases()) == []

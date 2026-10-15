@@ -24,6 +24,7 @@ from app.extraction import build_extracted_fields
 from app.extraction_fields import SCHEMA_V1
 from app.models import (
     REVIEW_REASON_CONFIDENCE,
+    REVIEW_REASON_QUOTE_PREFIX,
     Document,
     ExtractedField,
     Extraction,
@@ -42,7 +43,7 @@ from app.review_routing import (
 )
 
 THRESHOLD = 0.8
-REASON_PATTERN = re.compile(r"^(confidence|reconciliation:.+)$")
+REASON_PATTERN = re.compile(r"^(confidence|reconciliation:.+|quote:.+)$")
 FLAGGED_LINES_SUM = Routing(True, "reconciliation:lines_sum")
 FLAGGED_TOTAL_MATH = Routing(True, "reconciliation:total_math")
 
@@ -439,6 +440,99 @@ def test_the_reason_helper_builds_the_stored_text() -> None:
     assert reconciliation_reason("line_math[3]") == "reconciliation:line_math[3]"
 
 
+# ---- Quote checks ---------------------------------------------------------------
+
+
+def quoted(field: ExtractedField, quote: str | None) -> ExtractedField:
+    """The stored field with an evidence object on its leaf, as a v2 extraction
+    stores it (`build_extracted_fields` writes them from B4 on)."""
+    field.value = {**field.value, "evidence": {"page": 1, "quote": quote}}
+    return field
+
+
+def record_016_total_misread(quote: str) -> list[ExtractedField]:
+    """Lines and subtotal 45.25, tax 3.05, and a total read as 49.30 whose quote
+    says something else; `subtotal + tax = total` alone cannot say which of the
+    tax and the total is wrong."""
+    return record_016(
+        subtotal=stored("subtotal", 45.25),
+        total=quoted(stored("total", 49.3), quote),
+    )
+
+
+def test_a_field_blamed_by_a_quote_and_the_arithmetic_carries_the_quote_reason() -> None:
+    fields = record_016(subtotal=quoted(stored("subtotal", 46.25, 0.68), "Subtotal $45.25"))
+    report = reconcile(ReconcileInput.from_fields(fields))
+    assert [c.id for c in report.failing_checks] == ["quote:subtotal", "lines_sum", "total_math"]
+
+    table = route(fields, report, THRESHOLD)
+
+    # The quote's number is the suggestion, and the reason it gives is the quote's.
+    assert flagged(table) == {"subtotal": "quote:subtotal"}
+
+
+def test_the_quote_reason_wins_without_a_suggestion_and_the_other_operands_keep_theirs() -> None:
+    fields = record_016_total_misread("less 1.00 = 47.30")
+    report = reconcile(ReconcileInput.from_fields(fields))
+    assert report.suggestion is None
+    assert [c.id for c in report.failing_checks] == ["quote:total", "total_math"]
+
+    table = route(fields, report, THRESHOLD)
+
+    assert flagged(table) == {
+        "total": "quote:total",
+        "subtotal": "reconciliation:total_math",
+        "tax": "reconciliation:total_math",
+    }
+
+
+def test_the_quote_reason_does_not_depend_on_the_order_the_checks_are_listed_in() -> None:
+    fields = record_016_total_misread("less 1.00 = 47.30")
+    report = reconcile(ReconcileInput.from_fields(fields))
+    backwards = dataclasses.replace(report, checks=tuple(reversed(report.checks)))
+
+    assert route(fields, backwards, THRESHOLD) == route(fields, report, THRESHOLD)
+
+
+def test_a_quote_on_a_line_cell_flags_the_line_items_field() -> None:
+    rows = [dict(row) for row in LINES_016]
+    rows[1] = {**rows[1], "total": {**leaf(8.65), "evidence": {"page": 1, "quote": "9.65"}}}
+    fields = record_016(line_items=stored("line_items", rows), subtotal=stored("subtotal", 45.25))
+    report = reconcile(ReconcileInput.from_fields(fields))
+    # The quote's 9.65 would break lines_sum, which passes, so nothing is suggested.
+    assert [c.id for c in report.failing_checks] == ["quote:line_items[1].total"]
+    assert report.suggestion is None
+
+    table = route(fields, report, THRESHOLD)
+
+    assert flagged(table) == {"line_items": "quote:line_items[1].total"}
+
+
+def test_a_reviewed_field_is_not_blamed_by_its_quote() -> None:
+    subtotal = quoted(
+        stored("subtotal", 45.25, flag=Routing(True, "quote:subtotal"), action="approved"),
+        "Subtotal $45.52",
+    )
+    fields = record_016(subtotal=subtotal)
+    report = reconcile(ReconcileInput.from_fields(fields))
+    assert "quote:subtotal" not in [c.id for c in report.checks]
+
+    table = route(fields, report, THRESHOLD)
+
+    assert table["subtotal"] == Routing(True, "quote:subtotal")  # frozen as it was
+    assert flagged({n: r for n, r in table.items() if n != "subtotal"}) == {}
+
+
+def test_the_stored_quote_reason_is_the_check_id() -> None:
+    fields = record_016(subtotal=quoted(stored("subtotal", 46.25, 0.68), "Subtotal $45.25"))
+    report = reconcile(ReconcileInput.from_fields(fields))
+
+    reason = route(fields, report, THRESHOLD)["subtotal"].review_reason
+
+    assert reason == report.failing_checks[0].id
+    assert reason.startswith(REVIEW_REASON_QUOTE_PREFIX)
+
+
 # ---- refresh_reconciliation (database) ----------------------------------------
 
 SETTINGS = Settings(review_threshold=THRESHOLD)
@@ -568,3 +662,43 @@ async def test_the_database_refuses_an_unknown_reason(db_session: AsyncSession) 
     with pytest.raises(IntegrityError, match='"ck_extracted_fields_review_reason"'):
         await db_session.flush()
     await db_session.rollback()
+
+
+async def test_the_database_accepts_a_quote_reason_and_refuses_an_empty_one(
+    db_session: AsyncSession,
+) -> None:
+    extraction_id = await seed_extraction(db_session, tool_input_016())
+    tax = (await fields_of(db_session, extraction_id))["tax"]
+
+    tax.needs_review = True
+    tax.review_reason = "quote:tax"
+    await db_session.flush()
+
+    tax.review_reason = "quote:"
+    with pytest.raises(IntegrityError, match='"ck_extracted_fields_review_reason"'):
+        await db_session.flush()
+    await db_session.rollback()
+
+
+async def test_refresh_flags_a_field_whose_stored_quote_disagrees_and_stores_the_check(
+    db_session: AsyncSession,
+) -> None:
+    extraction_id = await seed_extraction(db_session, tool_input_016(subtotal=45.25, subtotal_confidence=0.99))
+    fields = await fields_of(db_session, extraction_id)
+    fields["total"].value = {**fields["total"].value, "value": 49.3, "evidence": {"page": 1, "quote": "TOTAL $48.30"}}
+    await db_session.flush()
+
+    result = await refresh_reconciliation(db_session, extraction_id, SETTINGS)
+
+    fields = await fields_of(db_session, extraction_id)
+    assert flagged({n: Routing(f.needs_review, f.review_reason) for n, f in fields.items()}) == {
+        "total": "quote:total"
+    }
+    stored_checks = {c["id"]: c for c in result.reconciliation.report["checks"]}
+    assert stored_checks["quote:total"]["kind"] == "quote"
+    assert stored_checks["quote:total"]["status"] == "fail"
+    assert result.reconciliation.report["suggestion"]["path"] == "total"
+    assert result.reconciliation.report["suggestion"]["value"] == "48.30"
+
+    # A second refresh changes nothing.
+    assert (await refresh_reconciliation(db_session, extraction_id, SETTINGS)).changes == ()

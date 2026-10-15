@@ -43,6 +43,15 @@ Rules (`RULES_VERSION`; a new rule or tolerance is a new version):
   finite, is at least MAX_AMOUNT, or has more decimals than allowed (the
   currency's minor unit for money, MAX_QUANTITY_DECIMALS for quantities and
   unit prices). Checks that need that value are skipped, with the reason.
+- `quote:<path>`: the number in the value's evidence quote equals the value
+  (app/quotes.py), for each numeric leaf that has an `evidence` key: the
+  header amounts, a line's quantity, unit price, and total, and a tax line's
+  rate, base, and amount. A mismatch means the model wrote a number it did not
+  read. A leaf with no `evidence` key (every v1 extraction) gets no check, and
+  neither does a null value, an unreadable one (it has its `format:` check), or
+  a field a person has reviewed. Evidence with no quote, or a zero whose quote
+  prints no number ("FREE"), gives a skipped check. These come right after the format checks, before the
+  arithmetic, and take part in no equation.
 
 Compatibility: a v1-shaped record (none of the v2 extras) gets exactly the
 `rules_v1` report apart from `rules_version`: the same checks, terms, formulas,
@@ -120,11 +129,26 @@ prices, rates, and bases are never suggested, and neither is a reviewed field.
 The re-runs use the ordinary rules unless the document already leans on an
 included reading, so a fix cannot succeed merely by making the document look
 tax-inclusive or discount-net.
+
+A failing quote check proposes the one number its quote prints (none when the
+quote prints several, or an ambiguous one such as `1,234` that the field's
+decimal places do not settle), with the sign of the current value, and goes
+through the same filter. A number only a quote proposed must also land on a
+check that can judge it, an equation that runs with the field in it; a field no
+equation constrains (an amount paid with no amount due) is flagged without a
+fix, so a reference number in its quote does not become one. That filter is what lets a
+quote settle an ambiguous equation: the quote's number survives only when the
+arithmetic then passes, and a competing arithmetic fix on another field is
+rejected because the quote check still fails. When a proposal is applied, the
+field keeps its quote only if the new value agrees with it; otherwise the quote
+is dropped, as it would be once a person corrected the field (a reviewed field
+has no quote check). So an arithmetic fix is not rejected merely because the
+model's wrong value and its quote misread the same digit.
 """
 
 import dataclasses
 import re
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -148,11 +172,14 @@ from app.money import (
     MoneyError,
     currency_precision,
     fits_minor_unit,
+    printed_amounts,
     shown_value,
     to_api_string,
     to_decimal,
     to_plain_string,
 )
+from app.quotes import STATUS_PASS as QUOTE_PASS
+from app.quotes import is_skipped, quote_agreement
 from app.records import field_value, leaf_value
 
 if TYPE_CHECKING:
@@ -169,6 +196,7 @@ KIND_EQUATION = "equation"
 KIND_BOUND = "bound"
 KIND_PRESENCE = "presence"
 KIND_FORMAT = "format"
+KIND_QUOTE = "quote"
 
 # Where an operand's value came from. The first three are a field's own state
 # (the model's answer, a reviewer's approval of it, a reviewer's correction);
@@ -206,6 +234,10 @@ _LINE_TOTAL_PATH_RE = re.compile(r"line_items\[\d+\]\.total")
 _TAX_LINE_AMOUNT_PATH_RE = re.compile(r"tax_lines\[\d+\]\.amount")
 _ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 _TAX_LINE_KEYS = ("label", "rate", "base", "amount")
+# The cells of a line item and of a tax line that are numbers (and so can carry
+# a quote), in the order their quote checks come.
+_LINE_NUMBER_KEYS = ("quantity", "unit_price", "total")
+_TAX_LINE_NUMBER_KEYS = ("rate", "base", "amount")
 
 # The header amounts a suggestion may name, and the ones a person only ever
 # reads as non-negative. A null tax or amount paid is counted as 0 and can make
@@ -227,6 +259,12 @@ def tax_line_math_id(index: int) -> str:
     return f"tax_line_math[{index}]"
 
 
+def quote_id(path: str) -> str:
+    """The id of the quote check for `path`, which is also the review reason of
+    the field it flags (`REVIEW_REASON_QUOTE_PREFIX` in app/models.py)."""
+    return f"quote:{path}"
+
+
 def line_path(index: int, key: str) -> str:
     """The path of one line item cell, such as `line_items[2].total`."""
     return f"line_items[{index}].{key}"
@@ -244,20 +282,28 @@ def tax_line_path(index: int, key: str) -> str:
 class FieldInput:
     """One field as the engine receives it: the raw value (anything JSON can
     hold, parsed and validated inside `reconcile`), where it came from, and
-    whether a person has reviewed it."""
+    whether a person has reviewed it. `has_evidence` is whether the leaf carried
+    an `evidence` key (v2; null counts), and `quote` the verbatim printed text
+    in it (None when there is none); a leaf with no `evidence` key (v1) is
+    checked against nothing."""
 
     value: Any = None
     source: str = SOURCE_EXTRACTED
     verified: bool = False
+    quote: str | None = None
+    has_evidence: bool = False
 
 
 @dataclass(frozen=True)
 class LineInput:
-    """One line item's raw cells. The description plays no part in the rules."""
+    """One line item's raw cells. The description plays no part in the rules.
+    `quotes` has a key for each cell whose leaf carried an evidence object, with
+    the quote in it (None when the object has none)."""
 
     quantity: Any = None
     unit_price: Any = None
     total: Any = None
+    quotes: Mapping[str, str | None] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -265,7 +311,8 @@ class TaxLineInput:
     """One tax line's raw cells. The rate is the printed percent as a plain
     decimal (`"8.875"` for 8.875%); the label plays no part in the rules. The
     tax lines are one field in storage, so every row carries that field's source
-    and verified flag."""
+    and verified flag. `quotes` is as on `LineInput`, for the rate, base, and
+    amount."""
 
     label: Any = None
     rate: Any = None
@@ -273,6 +320,7 @@ class TaxLineInput:
     amount: Any = None
     source: str = SOURCE_EXTRACTED
     verified: bool = False
+    quotes: Mapping[str, str | None] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -309,21 +357,25 @@ class ReconcileInput:
         def leaf(name: str) -> Any:
             return _coerce_leaf(tool.get(name))[0]
 
+        def amount(name: str) -> FieldInput:
+            has_evidence, quote = _leaf_evidence(tool.get(name))
+            return FieldInput(leaf(name), quote=quote, has_evidence=has_evidence)
+
         rows = leaf("line_items")
         tax_rows = leaf("tax_lines")
         return cls(
             currency=leaf("currency"),
-            subtotal=FieldInput(leaf("subtotal")),
-            tax=FieldInput(leaf("tax")),
-            total=FieldInput(leaf("total")),
+            subtotal=amount("subtotal"),
+            tax=amount("tax"),
+            total=amount("total"),
             line_items=(
                 tuple(_line_from_leaves(row) for row in rows) if isinstance(rows, list) else None
             ),
-            discount=FieldInput(leaf("discount")),
-            shipping=FieldInput(leaf("shipping")),
-            tip=FieldInput(leaf("tip")),
-            amount_paid=FieldInput(leaf("amount_paid")),
-            amount_due=FieldInput(leaf("amount_due")),
+            discount=amount("discount"),
+            shipping=amount("shipping"),
+            tip=amount("tip"),
+            amount_paid=amount("amount_paid"),
+            amount_due=amount("amount_due"),
             document_date=FieldInput(leaf("document_date")),
             due_date=FieldInput(leaf("due_date")),
             tax_lines=(
@@ -337,20 +389,30 @@ class ReconcileInput:
     def from_fields(cls, fields: Iterable["ExtractedField"]) -> "ReconcileInput":
         """From one extraction's stored fields, with `records.field_value`
         deciding the value (a reviewer's correction wins). A field is verified
-        when it has been reviewed; its source says how."""
+        when it has been reviewed; its source says how. The quotes are read from
+        the stored leaves, which keep the evidence the model gave."""
         by_name = {field.field_name: field for field in fields}
 
         def read(name: str) -> FieldInput:
             field = by_name.get(name)
             if field is None:
                 return FieldInput()
-            return FieldInput(field_value(field), _stored_source(field), field.reviewed_at is not None)
+            has_evidence, quote = _leaf_evidence(field.value)
+            return FieldInput(
+                field_value(field),
+                _stored_source(field),
+                field.reviewed_at is not None,
+                quote,
+                has_evidence,
+            )
 
         currency = by_name.get("currency")
         lines = by_name.get("line_items")
         rows = field_value(lines) if lines is not None else None
+        line_quotes = _stored_cell_quotes(lines, _LINE_NUMBER_KEYS)
         tax_lines = by_name.get("tax_lines")
         tax_rows = _stored_tax_line_rows(tax_lines)
+        tax_quotes = _stored_cell_quotes(tax_lines, _TAX_LINE_NUMBER_KEYS)
         tax_source = _stored_source(tax_lines) if tax_lines is not None else SOURCE_EXTRACTED
         tax_verified = tax_lines is not None and tax_lines.reviewed_at is not None
         return cls(
@@ -359,7 +421,9 @@ class ReconcileInput:
             tax=read("tax"),
             total=read("total"),
             line_items=(
-                tuple(_line_from_plain(row) for row in rows) if isinstance(rows, list) else None
+                tuple(_line_from_plain(row, _quotes_at(line_quotes, i)) for i, row in enumerate(rows))
+                if isinstance(rows, list)
+                else None
             ),
             lines_source=_stored_source(lines) if lines is not None else SOURCE_EXTRACTED,
             lines_verified=lines is not None and lines.reviewed_at is not None,
@@ -371,11 +435,51 @@ class ReconcileInput:
             document_date=read("document_date"),
             due_date=read("due_date"),
             tax_lines=(
-                tuple(_tax_line_from_plain(row, tax_source, tax_verified) for row in tax_rows)
+                tuple(
+                    _tax_line_from_plain(row, tax_source, tax_verified, _quotes_at(tax_quotes, i))
+                    for i, row in enumerate(tax_rows)
+                )
                 if isinstance(tax_rows, list)
                 else None
             ),
         )
+
+
+def _leaf_evidence(raw: Any) -> tuple[bool, str | None]:
+    """Whether a raw leaf carries evidence, and the quote in it. A leaf has
+    evidence when it has an `evidence` key, so `evidence: null` (the model had
+    nothing to cite) is a leaf without a quote, where a v1 leaf has no key at
+    all. A quote that is not text counts as no quote, and the evidence is judged
+    apart from the leaf's value, which `_coerce_leaf` reads."""
+    if not isinstance(raw, dict) or "evidence" not in raw:
+        return False, None
+    evidence = raw["evidence"]
+    quote = evidence.get("quote") if isinstance(evidence, dict) else None
+    return True, quote if isinstance(quote, str) else None
+
+
+def _cell_quotes(item: Any, keys: Sequence[str]) -> dict[str, str | None]:
+    """The quote of each cell of a raw row whose leaf carries an evidence
+    object."""
+    if not isinstance(item, dict):
+        return {}
+    found = {key: _leaf_evidence(item.get(key)) for key in keys}
+    return {key: quote for key, (has_evidence, quote) in found.items() if has_evidence}
+
+
+def _stored_cell_quotes(
+    field: "ExtractedField | None", keys: Sequence[str]
+) -> list[dict[str, str | None]] | None:
+    """`_cell_quotes` for each row of a stored array field, in row order. None
+    when there is no stored array to read them from: a corrected field's rows
+    are a person's, and have no quotes."""
+    if field is None or field.review_action == "corrected" or not isinstance(field.value, list):
+        return None
+    return [_cell_quotes(item, keys) for item in field.value]
+
+
+def _quotes_at(quotes: list[dict[str, str | None]] | None, index: int) -> dict[str, str | None]:
+    return quotes[index] if quotes is not None and index < len(quotes) else {}
 
 
 def _line_from_leaves(item: Any) -> LineInput:
@@ -385,13 +489,14 @@ def _line_from_leaves(item: Any) -> LineInput:
         quantity=_coerce_leaf(item.get("quantity"))[0],
         unit_price=_coerce_leaf(item.get("unit_price"))[0],
         total=_coerce_leaf(item.get("total"))[0],
+        quotes=_cell_quotes(item, _LINE_NUMBER_KEYS),
     )
 
 
-def _line_from_plain(row: Any) -> LineInput:
+def _line_from_plain(row: Any, quotes: Mapping[str, str | None]) -> LineInput:
     if not isinstance(row, dict):
         return LineInput()
-    return LineInput(row.get("quantity"), row.get("unit_price"), row.get("total"))
+    return LineInput(row.get("quantity"), row.get("unit_price"), row.get("total"), quotes)
 
 
 def _tax_line_from_leaves(item: Any) -> TaxLineInput:
@@ -402,14 +507,23 @@ def _tax_line_from_leaves(item: Any) -> TaxLineInput:
         rate=_coerce_leaf(item.get("rate"))[0],
         base=_coerce_leaf(item.get("base"))[0],
         amount=_coerce_leaf(item.get("amount"))[0],
+        quotes=_cell_quotes(item, _TAX_LINE_NUMBER_KEYS),
     )
 
 
-def _tax_line_from_plain(row: Any, source: str, verified: bool) -> TaxLineInput:
+def _tax_line_from_plain(
+    row: Any, source: str, verified: bool, quotes: Mapping[str, str | None]
+) -> TaxLineInput:
     if not isinstance(row, dict):
         return TaxLineInput(source=source, verified=verified)
     return TaxLineInput(
-        row.get("label"), row.get("rate"), row.get("base"), row.get("amount"), source, verified
+        row.get("label"),
+        row.get("rate"),
+        row.get("base"),
+        row.get("amount"),
+        source,
+        verified,
+        quotes,
     )
 
 
@@ -587,12 +701,25 @@ class _TaxLine:
     amount: Operand
 
 
+@dataclass(frozen=True)
+class _Quoted:
+    """A numeric leaf that carried an evidence object: its operand (value None
+    when absent or unusable), the quote in the object (None when it has none),
+    and the decimal places the leaf allows, which settle how its quote's
+    ambiguous numbers are read."""
+
+    operand: Operand
+    quote: str | None
+    places: int
+
+
 @dataclass
 class _Parsed:
     """The input after parsing: operands with Decimal values (None when absent
     or unusable) plus the format failures found on the way. The two dates are
     operands with `date` values; one that is printed but not a date is in
-    `undated` (and has no format check)."""
+    `undated` (and has no format check). `quoted` lists, in check order, the
+    leaves that carried evidence."""
 
     minor_units: int
     subtotal: Operand
@@ -610,6 +737,7 @@ class _Parsed:
     lines_source: str
     lines_verified: bool
     tax_lines: list[_TaxLine]
+    quoted: list[_Quoted]
     format_checks: list[Check]
     unreadable: set[str]
     undated: set[str]
@@ -703,12 +831,16 @@ def _parse(inp: ReconcileInput, minor_units: int) -> _Parsed:
     format_checks: list[Check] = []
     unreadable: set[str] = set()
     undated: set[str] = set()
+    quoted: list[_Quoted] = []
 
     def header(name: str) -> Operand:
         field: FieldInput = getattr(inp, name)
-        return _read(
+        operand = _read(
             name, field.value, field.source, field.verified, minor_units, format_checks, unreadable
         )
+        if field.has_evidence:
+            quoted.append(_Quoted(operand, field.quote, minor_units))
+        return operand
 
     subtotal, tax, total = header("subtotal"), header("tax"), header("total")
     discount, shipping, tip = header("discount"), header("shipping"), header("tip")
@@ -730,6 +862,8 @@ def _parse(inp: ReconcileInput, minor_units: int) -> _Parsed:
                 format_checks,
                 unreadable,
             )
+            if key in line.quotes:
+                quoted.append(_Quoted(cells[key], line.quotes[key], places))
         lines.append(_Line(cells["quantity"], cells["unit_price"], cells["total"]))
     tax_lines = []
     for index, row in enumerate(inp.tax_lines or ()):
@@ -748,6 +882,8 @@ def _parse(inp: ReconcileInput, minor_units: int) -> _Parsed:
                 format_checks,
                 unreadable,
             )
+            if key in row.quotes:
+                quoted.append(_Quoted(cells[key], row.quotes[key], places))
         tax_lines.append(_TaxLine(index, cells["rate"], cells["base"], cells["amount"]))
     return _Parsed(
         minor_units=minor_units,
@@ -766,6 +902,7 @@ def _parse(inp: ReconcileInput, minor_units: int) -> _Parsed:
         lines_source=inp.lines_source,
         lines_verified=inp.lines_verified,
         tax_lines=tax_lines,
+        quoted=quoted,
         format_checks=format_checks,
         unreadable=unreadable,
         undated=undated,
@@ -870,6 +1007,40 @@ def _judgement(
         fields=fields,
         all_operands_verified=verified,
     )
+
+
+def _quote_checks(p: _Parsed) -> list[Check]:
+    """quote:<path> for each leaf that carried an evidence object. Nothing is
+    emitted for a value that is absent or unreadable (the format check already
+    says so) or that a person has reviewed: their word replaces the model's
+    quote. A quote that is missing is a skipped check; everything else is
+    judged by `quote_agreement`."""
+    checks = []
+    for entry in p.quoted:
+        operand = entry.operand
+        if operand.value is None or operand.verified:
+            continue
+        # Amounts print to the currency's places; a quantity or a percent as is.
+        plain = operand.path.endswith((".quantity", ".rate"))
+        verdict = quote_agreement(
+            operand.value,
+            entry.quote,
+            places=entry.places,
+            minor_units=None if plain else p.minor_units,
+        )
+        holds = None if is_skipped(verdict) else verdict.status == QUOTE_PASS
+        checks.append(
+            _judgement(
+                quote_id(operand.path),
+                KIND_QUOTE,
+                f"{operand.path} equals the number in its quote",
+                [operand],
+                None,
+                holds,
+                verdict.detail,
+            )
+        )
+    return checks
 
 
 def _line_checks(p: _Parsed, derived: list[Derived]) -> list[Check]:
@@ -1483,6 +1654,7 @@ def _run(
         assumptions.extend(base_assumptions)
         checks = [
             *p.format_checks,
+            *_quote_checks(p),
             _lines_present_check(p),
             *line_checks,
             lines_sum,
@@ -1565,17 +1737,67 @@ def _solve(check: Check, path: str) -> Decimal | None:
         return None
 
 
-def _with_value(inp: ReconcileInput, path: str, value: Decimal) -> ReconcileInput:
+def _quote_of(inp: ReconcileInput, path: str) -> tuple[bool, str | None]:
+    """Whether the leaf at `path` carried an evidence object, and its quote."""
     if path in _HEADER_MONEY_PATHS:
-        return dataclasses.replace(inp, **{path: dataclasses.replace(getattr(inp, path), value=value)})
+        field: FieldInput = getattr(inp, path)
+        return field.has_evidence, field.quote
+    if path.startswith("tax_lines["):
+        index = int(path[len("tax_lines[") : path.index("]")])
+        quotes = (inp.tax_lines or ())[index].quotes
+    else:
+        index = int(path[len("line_items[") : path.index("]")])
+        quotes = (inp.line_items or ())[index].quotes
+    key = path.rpartition(".")[2]
+    return key in quotes, quotes.get(key)
+
+
+def _requoted(
+    quotes: Mapping[str, str | None], key: str, value: Decimal, places: int
+) -> dict[str, str | None]:
+    """The cell quotes after `key` is set to `value`: the quote stays only when
+    the new value agrees with it, else it goes, as it would when a person
+    corrected the cell."""
+    kept = dict(quotes)
+    if key in kept and quote_agreement(value, kept[key], places=places).status != QUOTE_PASS:
+        del kept[key]
+    return kept
+
+
+def _with_value(inp: ReconcileInput, path: str, value: Decimal, places: int) -> ReconcileInput:
+    """The input with one suggestable amount replaced. `places` are the decimal
+    places such an amount allows (the currency's minor unit)."""
+    if path in _HEADER_MONEY_PATHS:
+        field: FieldInput = getattr(inp, path)
+        agrees = (
+            field.has_evidence
+            and quote_agreement(value, field.quote, places=places).status == QUOTE_PASS
+        )
+        return dataclasses.replace(
+            inp,
+            **{
+                path: dataclasses.replace(
+                    field,
+                    value=value,
+                    quote=field.quote if agrees else None,
+                    has_evidence=agrees,
+                )
+            },
+        )
     if path.startswith("tax_lines["):
         index = int(path[len("tax_lines[") : path.index("]")])
         tax_lines = list(inp.tax_lines or ())
-        tax_lines[index] = dataclasses.replace(tax_lines[index], amount=value)
+        tax_lines[index] = dataclasses.replace(
+            tax_lines[index],
+            amount=value,
+            quotes=_requoted(tax_lines[index].quotes, "amount", value, places),
+        )
         return dataclasses.replace(inp, tax_lines=tuple(tax_lines))
     index = int(path[len("line_items[") : path.index("]")])
     lines = list(inp.line_items or ())
-    lines[index] = dataclasses.replace(lines[index], total=value)
+    lines[index] = dataclasses.replace(
+        lines[index], total=value, quotes=_requoted(lines[index].quotes, "total", value, places)
+    )
     return dataclasses.replace(inp, line_items=tuple(lines))
 
 
@@ -1589,20 +1811,41 @@ def _fixes_everything(before: Report, after: Report) -> bool:
 
 def _suggest(inp: ReconcileInput, report: Report) -> Suggestion | None:
     proposals: dict[tuple[str, Decimal], Operand] = {}
+    # The proposals only a quote made: each also has to land on an equation that
+    # can judge it (see below).
+    quote_only: set[tuple[str, Decimal]] = set()
+
+    def propose(operand: Operand, value: Decimal | None, *, from_quote: bool = False) -> None:
+        if value is None or not fits_minor_unit(value, report.minor_units):
+            return
+        if value == operand.value or (value < 0 and _never_negative(operand.path)):
+            return
+        key = (operand.path, value)
+        if from_quote and key not in proposals:
+            quote_only.add(key)
+        elif not from_quote:
+            quote_only.discard(key)
+        proposals.setdefault(key, operand)
+
     for check in report.failing_checks:
+        if check.kind == KIND_QUOTE:
+            operand = check.terms[0].operand
+            if _is_candidate(operand):
+                # The one number the quote prints, signed as the value is: the
+                # quote shows magnitudes ("(5.00)" is a discount line of -5.00).
+                numbers = printed_amounts(_quote_of(inp, operand.path)[1] or "", report.minor_units)
+                if len(numbers) == 1:
+                    propose(
+                        operand, -numbers[0] if operand.value < 0 else numbers[0], from_quote=True
+                    )
+            continue
         if check.kind != KIND_EQUATION:
             continue
         for operand in check.operands:
-            if not _is_candidate(operand):
-                continue
-            # An equation loose because of rounding has no exact solution; the
-            # re-run below judges it instead.
-            value = _solve(check, operand.path)
-            if value is None or not fits_minor_unit(value, report.minor_units):
-                continue
-            if value == operand.value or (value < 0 and _never_negative(operand.path)):
-                continue
-            proposals.setdefault((operand.path, value), operand)
+            if _is_candidate(operand):
+                # An equation loose because of rounding has no exact solution; the
+                # re-run below judges it instead.
+                propose(operand, _solve(check, operand.path))
     # A fix has to work under the ordinary rules, unless this document already
     # leans on a tax-included reading: otherwise changing the tax could "fix" a
     # document by making it look tax-inclusive. The same goes for the second
@@ -1613,14 +1856,24 @@ def _suggest(inp: ReconcileInput, report: Report) -> Suggestion | None:
     keep_included = any(
         operand.source == SOURCE_INCLUDED for check in report.checks for operand in check.operands
     )
-    survivors = [
-        (key, operand)
-        for key, operand in proposals.items()
-        if _fixes_everything(
-            report,
-            _run(_with_value(inp, *key), allow_included=keep_included, allow_fallbacks=False),
+    def survives(key: tuple[str, Decimal]) -> bool:
+        after = _run(
+            _with_value(inp, *key, report.minor_units),
+            allow_included=keep_included,
+            allow_fallbacks=False,
         )
-    ]
+        if not _fixes_everything(report, after):
+            return False
+        # A number from a quote alone must also be one the arithmetic can
+        # confirm: with no equation to judge the field (an amount paid with no
+        # amount due), any figure in its quote, a reference number say, would
+        # become the fix.
+        return key not in quote_only or any(
+            check.kind == KIND_EQUATION and check.status != STATUS_SKIPPED and key[0] in check.fields
+            for check in after.checks
+        )
+
+    survivors = [(key, operand) for key, operand in proposals.items() if survives(key)]
     if len(survivors) != 1 or survivors[0][1].source == SOURCE_ASSUMED:
         return None
     (path, value), operand = survivors[0]

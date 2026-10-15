@@ -137,6 +137,101 @@ def test_a_consistent_document_never_fails(inp) -> None:
     assert json.loads(json.dumps(report_to_json(report))) == report_to_json(report)
 
 
+# ---- Quotes printed the way real documents print them -----------------------
+
+# (group separator, decimal separator, prefix, suffix) of each style.
+PRINT_STYLES = {
+    "us": (",", ".", "$", ""),
+    "eu": (".", ",", "", " EUR"),
+    "space": ("\u00a0", ",", "", " \u20ac"),
+    "narrow": ("\u202f", ",", "", " \u20ac"),
+    "swiss": ("'", ".", "CHF ", ""),
+    "plain": ("", ".", "Total: ", ""),
+}
+
+
+def printed(value: Decimal, style: str, parens: bool) -> str:
+    """The text a document prints for `value`: every digit it carries, grouped
+    and decorated in one of PRINT_STYLES, a negative as "(5.00)" or "-$5.00"."""
+    group, point, prefix, suffix = PRINT_STYLES[style]
+    whole, _, fraction = format(abs(value), "f").partition(".")
+    body = f"{int(whole):,}".replace(",", group) + (f"{point}{fraction}" if fraction else "")
+    text = f"{prefix}{body}{suffix}"
+    if value >= 0:
+        return text
+    return f"({text})" if parens else f"-{text}"
+
+
+@st.composite
+def quoted_inputs(draw) -> ReconcileInput:
+    """A consistent document in which every printed amount and line cell carries
+    a faithful quote, in one style drawn per document."""
+    inp = draw(consistent_inputs())
+    style = draw(st.sampled_from(sorted(PRINT_STYLES)))
+    parens = draw(st.booleans())
+
+    def field(f: FieldInput) -> FieldInput:
+        if f.value is None:
+            return f
+        return dataclasses.replace(f, quote=printed(f.value, style, parens), has_evidence=True)
+
+    lines = tuple(
+        dataclasses.replace(
+            line,
+            quotes={
+                key: printed(getattr(line, key), style, parens)
+                for key in ("quantity", "unit_price", "total")
+            },
+        )
+        for line in inp.line_items
+    )
+    return dataclasses.replace(
+        inp,
+        subtotal=field(inp.subtotal),
+        tax=field(inp.tax),
+        total=field(inp.total),
+        line_items=lines,
+    )
+
+
+def with_value_keeping_quote(inp: ReconcileInput, path: str, value: Decimal) -> ReconcileInput:
+    """`set_path` that leaves the quote as it was printed."""
+    if path in HEADER_AMOUNTS:
+        return dataclasses.replace(inp, **{path: dataclasses.replace(getattr(inp, path), value=value)})
+    name, index, key = split_path(path)
+    rows = list(getattr(inp, name))
+    rows[index] = dataclasses.replace(rows[index], **{key: value})
+    return dataclasses.replace(inp, **{name: tuple(rows)})
+
+
+@given(quoted_inputs())
+def test_faithful_quotes_in_any_print_style_never_fail_a_check(inp) -> None:
+    report = reconcile(inp)
+
+    quote_checks = [c for c in report.checks if c.id.startswith("quote:")]
+    assert quote_checks
+    assert report.status == STATUS_PASS, [(c.id, c.detail) for c in report.failing_checks]
+    assert {c.status for c in quote_checks} == {STATUS_PASS}
+
+
+@given(quoted_inputs(), st.data())
+def test_a_value_that_differs_from_its_faithful_quote_fails_the_quote_check_and_is_fixed_by_it(
+    inp, data
+) -> None:
+    unit = unit_of(inp.currency)
+    path = data.draw(st.sampled_from(amount_paths(inp)))
+    original = get_path(inp, path)
+    shift = data.draw(st.integers(1, 60)) * unit * data.draw(st.sampled_from([1, -1]))
+    perturbed = original + shift
+    assume((perturbed < 0) == (original < 0))
+
+    report = reconcile(with_value_keeping_quote(inp, path, perturbed))
+
+    assert f"quote:{path}" in [c.id for c in report.failing_checks]
+    assert report.suggestion is not None, (path, shift, [c.id for c in report.failing_checks])
+    assert (report.suggestion.path, report.suggestion.value) == (path, original)
+
+
 @given(consistent_inputs(), st.data())
 def test_perturbing_one_amount_beyond_its_tolerance_fails_a_check_naming_it(inp, data) -> None:
     unit = unit_of(inp.currency)

@@ -31,7 +31,7 @@ Load the global `design-principles` guide for the rules; this file holds what ex
 - A model call reuses `_build_client`, `_classify_api_error`, `_ensure_model_priced`, and `PRICING_PER_MTOK` from `extraction.py`, loads a versioned file from `backend/prompts/`, opens a `model_call_span`, and stores its cost on a row that `budget.spent_today_usd` sums.
 - A model-touching feature ships with an eval before it ships to the demo.
 - Arithmetic over money never goes to a model ("the model reads, code computes", `FUTURE.md`).
-- Reconciliation (Batch A): `app/money.py` (exact decimals), `app/reconcile.py` (pure rules and report), `app/review_routing.py` (`route` is the pure flag table; `refresh_reconciliation` is the only database writer and every path that creates or resolves fields calls it); `scripts/reconcile_all.py` backfills old extractions (`--dry-run` previews).
+- Reconciliation (Batch A): `app/money.py` (exact decimals, and `printed_amounts` for numbers as a document prints them), `app/reconcile.py` (pure rules and report, including the `quote:<path>` checks), `app/quotes.py` (does the number in a value's evidence quote equal the value), `app/review_routing.py` (`route` is the pure flag table; `refresh_reconciliation` is the only database writer and every path that creates or resolves fields calls it); `scripts/reconcile_all.py` backfills old extractions (`--dry-run` previews).
 - Planned (`FUTURE.md`): `app/grounding.py` behind an `OcrProvider` (Batch C), `/reports/totals` (Batch D); Batch 0 adds `app/demo_seed.py` and `scripts/demos/`.
 
 ## Environment variables
