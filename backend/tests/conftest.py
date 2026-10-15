@@ -55,8 +55,12 @@ if engine.url.database != TEST_DATABASE_URL.database:
 
 # Property tests (tests/test_reconcile_properties.py) draw the same examples on
 # every run, so a failure reproduces on CI and a green run is repeatable; no
-# deadline, because a slow shared runner is not a bug.
-hypothesis_settings.register_profile("doc-pilot", derandomize=True, deadline=None)
+# deadline, because a slow shared runner is not a bug. A failing property stops
+# at its first minimal failure (report_multiple_bugs=False) instead of shrinking
+# every distinct failure it finds, which takes minutes on a wide strategy.
+hypothesis_settings.register_profile(
+    "doc-pilot", derandomize=True, deadline=None, report_multiple_bugs=False
+)
 hypothesis_settings.load_profile("doc-pilot")
 
 # Serializes parallel pytest runs against one server: only one creates and

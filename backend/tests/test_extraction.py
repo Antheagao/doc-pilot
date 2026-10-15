@@ -1525,12 +1525,13 @@ def _v2_response(tool_input: dict) -> _FakeMessage:
     return _FakeMessage("tool_use", [_FakeToolUseBlock(tool_input)], _FakeUsage(1000, 500))
 
 
-async def _persist(db_session: AsyncSession, tmp_path, monkeypatch, tool_input: dict):
+async def _persist(db_session: AsyncSession, tmp_path, monkeypatch, tool_input: dict, **document):
     """Run process_document_job on a fake v2 response; returns the stored
-    extraction and its fields by name."""
+    extraction and its fields by name. `document` overrides the uploaded file
+    (see _make_document); the default is a PNG."""
     _use_prompt_version(monkeypatch, "extract_v2")
     _patch_client(monkeypatch, _v2_response(tool_input))
-    document = await _make_document(db_session, tmp_path)
+    document = await _make_document(db_session, tmp_path, **document)
     job = await _make_job(db_session, document.id)
     await process_document_job(db_session, job)
     await db_session.flush()
@@ -1698,6 +1699,13 @@ def test_bad_evidence_becomes_none(bad_evidence) -> None:
     assert _coerce_evidence({"value": 5, "confidence": 0.9, "evidence": bad_evidence}) is None
 
 
+def test_evidence_with_no_page_keeps_its_quote() -> None:
+    assert _coerce_evidence({"evidence": {"page": None, "quote": " Total $5.00 "}}) == {
+        "page": None,
+        "quote": "Total $5.00",
+    }
+
+
 def test_good_evidence_is_kept_with_the_quote_stripped() -> None:
     kept = _coerce_evidence({"evidence": {"page": 3, "quote": "  Total $5.00 \n", "extra": 1}})
 
@@ -1712,11 +1720,11 @@ async def test_bad_evidence_is_stored_as_none_not_as_a_violation(
     db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tool_input = v2_tool_input()
-    tool_input["vendor"]["evidence"] = {"page": "1", "quote": "Acme Corp"}
-    tool_input["subtotal"]["evidence"] = {"page": 1, "quote": "x" * 500}
-    tool_input["total"]["evidence"] = {"page": True, "quote": "Total $102.20"}
+    tool_input["vendor"]["evidence"] = {"page": 1, "quote": "x" * 500}
+    tool_input["subtotal"]["evidence"] = {"page": 1, "quote": "   "}
+    tool_input["total"]["evidence"] = {"page": 1}
     tool_input["tax"]["evidence"] = {"page": 1, "quote": 7.2}
-    tool_input["tax_lines"]["value"][0]["amount"]["evidence"] = {"page": 0, "quote": "7.20"}
+    tool_input["tax_lines"]["value"][0]["amount"]["evidence"] = "7.20"
 
     assert _schema_violations(tool_input, SCHEMA_V2) == []
     _, fields = await _persist(db_session, tmp_path, monkeypatch, tool_input)
@@ -1726,6 +1734,176 @@ async def test_bad_evidence_is_stored_as_none_not_as_a_violation(
         assert fields[name].value["value"] == tool_input[name]["value"]
     assert fields["tax_lines"].value[0]["amount"]["evidence"] is None
     assert fields["tax_lines"].value[0]["amount"]["value"] == 7.2
+
+
+# --- evidence pages through the single-call path (B5) -----------------------
+#
+# A bad page is not a bad quote: the quote is still printed text the checks can
+# read, so only the page is dropped. An image is one page, so its evidence is on
+# page 1 whatever the model wrote.
+
+
+async def test_an_image_stores_every_evidence_page_as_1(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool_input = v2_tool_input()
+    tool_input["vendor"]["evidence"]["page"] = 7
+    tool_input["subtotal"]["evidence"]["page"] = "3"
+    tool_input["total"]["evidence"]["page"] = None
+    tool_input["tax"]["evidence"]["page"] = True
+    tool_input["amount_paid"]["evidence"]["page"] = 0
+    tool_input["tax_lines"]["value"][0]["amount"]["evidence"]["page"] = 4
+    tool_input["line_items"]["value"][0]["total"]["evidence"]["page"] = 2
+
+    extraction, fields = await _persist(db_session, tmp_path, monkeypatch, tool_input)
+
+    for name in ("vendor", "subtotal", "total", "tax", "amount_paid"):
+        assert fields[name].value["evidence"]["page"] == 1
+        assert extraction.raw_response[name]["evidence"]["page"] == 1
+    assert fields["vendor"].value["evidence"]["quote"] == "Acme Corp"
+    assert fields["tax_lines"].value[0]["amount"]["evidence"]["page"] == 1
+    assert fields["line_items"].value[0]["total"]["evidence"]["page"] == 1
+    # A null evidence stays null: there is no quote to put on a page.
+    assert fields["tip"].value["evidence"] is None
+    assert extraction.raw_response["tip"]["evidence"] is None
+
+
+def _pdf_of_pages(count: int) -> bytes:
+    writer = PdfWriter()
+    for _ in range(count):
+        writer.add_blank_page(width=72, height=72)
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+async def test_a_single_call_pdf_drops_a_page_it_does_not_have_and_keeps_the_quote(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_prompt_version(monkeypatch, "extract_v2")
+    tool_input = v2_tool_input()
+    tool_input["vendor"]["evidence"]["page"] = 2
+    tool_input["subtotal"]["evidence"]["page"] = 9
+    tool_input["discount"]["evidence"]["page"] = 0
+    tool_input["shipping"]["evidence"]["page"] = "1"
+    tool_input["tax"]["evidence"]["page"] = True
+    tool_input["total"]["evidence"]["page"] = None
+    tool_input["tax_lines"]["value"][0]["amount"]["evidence"]["page"] = 9
+    tool_input["tax_lines"]["value"][0]["base"]["evidence"]["page"] = 2
+    _patch_client(monkeypatch, _v2_response(tool_input))
+    document = await _make_document(
+        db_session, tmp_path, filename="two.pdf", mime_type="application/pdf", content=_pdf_of_pages(2)
+    )
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    extraction = (
+        await db_session.execute(select(Extraction).where(Extraction.document_id == document.id))
+    ).scalars().one()
+    fields = {
+        f.field_name: f
+        for f in (
+            await db_session.execute(
+                select(ExtractedField).where(ExtractedField.extraction_id == extraction.id)
+            )
+        ).scalars()
+    }
+    assert fields["vendor"].value["evidence"] == {"page": 2, "quote": "Acme Corp"}
+    assert fields["subtotal"].value["evidence"] == {"page": None, "quote": "Subtotal $100.00"}
+    for name in ("discount", "shipping", "tax", "total"):
+        assert fields[name].value["evidence"]["page"] is None
+        assert fields[name].value["evidence"]["quote"] == tool_input[name]["evidence"]["quote"]
+    cells = fields["tax_lines"].value[0]
+    assert cells["amount"]["evidence"] == {"page": None, "quote": "State tax 8% on 90.00 7.20"}
+    assert cells["base"]["evidence"]["page"] == 2
+    assert extraction.raw_response["subtotal"]["evidence"] == {
+        "page": None,
+        "quote": "Subtotal $100.00",
+    }
+    # The quotes still read: a page-less quote is checked like any other.
+    reconciliation = (
+        await db_session.execute(
+            select(Reconciliation).where(Reconciliation.extraction_id == extraction.id)
+        )
+    ).scalar_one()
+    statuses = {c["id"]: c["status"] for c in reconciliation.report["checks"] if c["kind"] == "quote"}
+    assert statuses["quote:subtotal"] == "pass"
+    assert "skipped" not in statuses.values()
+
+
+@pytest.mark.parametrize("bad_page", [0, -1, "1", 9, True, 1.5, None])
+async def test_a_payment_field_stores_the_same_evidence_page_as_any_other_field(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch, bad_page
+) -> None:
+    """The card rule rebuilds the payment leaves; it must not judge the page
+    itself, or a bad page would cost them their quote and not the others."""
+
+    def with_bad_page() -> dict:
+        tool_input = v2_tool_input()
+        for name in ("vendor", "payment_method", "payment_card_last4"):
+            tool_input[name]["evidence"]["page"] = bad_page
+        return tool_input
+
+    _, on_image = await _persist(db_session, tmp_path, monkeypatch, with_bad_page())
+    for name in ("payment_method", "payment_card_last4"):
+        assert on_image[name].value["evidence"]["page"] == 1
+        assert on_image[name].value["evidence"]["quote"] == v2_tool_input()[name]["evidence"]["quote"]
+        assert on_image[name].value["evidence"] == {
+            **on_image["vendor"].value["evidence"],
+            "quote": v2_tool_input()[name]["evidence"]["quote"],
+        }
+
+    _, on_pdf = await _persist(
+        db_session,
+        tmp_path,
+        monkeypatch,
+        with_bad_page(),
+        filename="two.pdf",
+        mime_type="application/pdf",
+        content=_pdf_of_pages(2),
+    )
+    for name in ("payment_method", "payment_card_last4"):
+        assert on_pdf[name].value["evidence"]["page"] is None
+        assert on_pdf[name].value["evidence"]["quote"] == v2_tool_input()[name]["evidence"]["quote"]
+    assert on_pdf["vendor"].value["evidence"]["page"] is None
+
+
+async def test_the_repair_call_echoes_what_the_model_wrote_and_the_repaired_page_is_fixed(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_prompt_version(monkeypatch, "extract_v2")
+    first = v2_tool_input()
+    first["vendor"]["evidence"]["page"] = 7
+    first["po_number"] = "PO-77"  # a bare scalar: one violation
+    repaired = v2_tool_input()
+    repaired["vendor"]["evidence"] = {"page": 9, "quote": "Acme Corp (repaired)"}
+    fake_client = _patch_client_side_effect(
+        monkeypatch,
+        [
+            _FakeMessage("tool_use", [_FakeToolUseBlock(first, tool_use_id="toolu_1")], _FakeUsage(10, 5)),
+            _FakeMessage("tool_use", [_FakeToolUseBlock(repaired, tool_use_id="toolu_2")], _FakeUsage(10, 5)),
+        ],
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    assert fake_client.messages.create.await_count == 2
+    echoed = fake_client.messages.create.await_args_list[1].kwargs["messages"][1]["content"][0]["input"]
+    assert echoed["vendor"]["evidence"]["page"] == 7
+    extraction = (
+        await db_session.execute(select(Extraction).where(Extraction.document_id == document.id))
+    ).scalars().one()
+    # The stored extraction is the repaired one, with its page fixed.
+    assert extraction.raw_response["vendor"]["evidence"] == {
+        "page": 1,
+        "quote": "Acme Corp (repaired)",
+    }
+    assert extraction.raw_response["po_number"]["evidence"]["page"] == 1
 
 
 async def test_a_malformed_v2_leaf_loses_its_evidence_with_its_value(
@@ -2149,19 +2327,20 @@ def test_the_v2_budget_stays_under_the_sdk_nonstreaming_limit() -> None:
     assert SCHEMA_V2.max_tokens == 4 * SCHEMA_V1.max_tokens
 
 
-def test_a_chunked_v2_pdf_drops_scalar_evidence_until_the_merge_carries_it() -> None:
-    """Pins today's behavior so that B5, which makes the merge carry each
-    winner's evidence and page, changes it deliberately."""
+def test_a_chunked_v2_pdf_keeps_the_winners_scalar_evidence_with_its_chunks_page() -> None:
     pages = [v2_tool_input(), v2_tool_input()]
 
     merged = merge_page_tool_inputs(pages, SCHEMA_V2)
 
-    assert "evidence" not in merged["subtotal"]
+    # Both pages agree at the same confidence: an amount goes to the latest page.
+    assert merged["subtotal"]["evidence"] == {"page": 2, "quote": "Subtotal $100.00"}
+    # A header field goes to the earliest.
+    assert merged["vendor"]["evidence"] == {"page": 1, "quote": "Acme Corp"}
     fields = {f.field_name: f for f in build_extracted_fields(uuid.uuid4(), merged, 0.8, SCHEMA_V2)}
-    assert fields["subtotal"].value["evidence"] is None
+    assert fields["subtotal"].value["evidence"] == {"page": 2, "quote": "Subtotal $100.00"}
     assert fields["subtotal"].value["value"] == 100.0
     report = reconcile(ReconcileInput.from_fields(fields.values()))
     quote_checks = [c for c in report.checks if c.kind == "quote" and c.id == "quote:subtotal"]
-    assert [c.status for c in quote_checks] == ["skipped"]
-    # The cells of the concatenated arrays do keep theirs.
-    assert fields["tax_lines"].value[0]["amount"]["evidence"] is not None
+    assert [c.status for c in quote_checks] == ["pass"]
+    # The concatenated arrays' cells cite the chunk each row came from.
+    assert [row["amount"]["evidence"]["page"] for row in fields["tax_lines"].value] == [1, 2]

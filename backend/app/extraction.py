@@ -225,32 +225,96 @@ def _compute_cost_usd(model: str, input_tokens: int, output_tokens: int) -> floa
 MAX_EVIDENCE_PAGE = 10_000
 
 
-def _coerce_evidence(raw_leaf: Any) -> dict[str, Any] | None:
-    """The `{"page", "quote"}` evidence of one raw leaf, or None.
-
-    Evidence is untrusted like the rest of the leaf (see _coerce_leaf), and a
-    half-right citation is worse than none, so it is all or nothing: a dict
-    whose page is an int from 1 to MAX_EVIDENCE_PAGE (a bool is not a page) and whose quote
-    is text that is non-empty once stripped and at most EVIDENCE_QUOTE_MAX_CHARS
-    long is kept, with the quote stripped. Anything else, including a missing
-    key, becomes None. It reads only the "evidence" key: whether the leaf's
-    value and confidence are usable is _coerce_leaf's question.
-    """
-    if not isinstance(raw_leaf, dict):
-        return None
-    evidence = raw_leaf.get("evidence")
+def _evidence_quote(evidence: Any) -> str | None:
+    """The quote of one raw evidence object, stripped, or None unless it is
+    text that is non-empty once stripped and at most EVIDENCE_QUOTE_MAX_CHARS
+    long."""
     if not isinstance(evidence, dict):
         return None
-    page = evidence.get("page")
     quote = evidence.get("quote")
-    if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= MAX_EVIDENCE_PAGE:
-        return None
     if not isinstance(quote, str):
         return None
     quote = quote.strip()
     if not quote or len(quote) > EVIDENCE_QUOTE_MAX_CHARS:
         return None
+    return quote
+
+
+def _coerce_evidence(raw_leaf: Any) -> dict[str, Any] | None:
+    """The `{"page", "quote"}` evidence of one raw leaf, or None.
+
+    Evidence is untrusted like the rest of the leaf (see _coerce_leaf), and a
+    half-right citation is worse than none, so it is all or nothing: a dict
+    whose quote passes _evidence_quote and whose page is an int from 1 to
+    MAX_EVIDENCE_PAGE (a bool is not a page) is kept, with the quote stripped.
+    The page key must be there, and its value may be None, which is how
+    extraction records a quote whose page the model got wrong (see
+    _evidence_page): the quote is still checkable, only its place is unknown.
+    The missing-key rule is reachable only from the seed, replay, and
+    correction paths: on the model path _paged_leaf always adds the key.
+    Anything else, including a missing key, becomes None. It reads only the
+    "evidence" key: whether the leaf's value and confidence are usable is
+    _coerce_leaf's question.
+    """
+    if not isinstance(raw_leaf, dict):
+        return None
+    evidence = raw_leaf.get("evidence")
+    quote = _evidence_quote(evidence)
+    if quote is None:
+        return None
+    if "page" not in evidence:
+        return None
+    page = evidence["page"]
+    if page is not None and (
+        isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= MAX_EVIDENCE_PAGE
+    ):
+        return None
     return {"page": page, "quote": quote}
+
+
+def _evidence_page(page: Any, page_count: int | None) -> int | None:
+    """The page an evidence object is stored with, given how many pages the
+    document the model saw has. `page_count` None means an image, which is one
+    page whatever the model wrote, so the page is 1. For a PDF the model's page
+    is kept when it is an int from 1 to `page_count` and is None otherwise: a
+    page the document does not have is a wrong citation, not a wrong quote, so
+    the quote stays and the place is dropped."""
+    if page_count is None:
+        return 1
+    if isinstance(page, int) and not isinstance(page, bool) and 1 <= page <= page_count:
+        return page
+    return None
+
+
+def _paged_leaf(leaf: Any, page_count: int | None) -> Any:
+    """One leaf, and the cells of the rows its value holds when it is an array,
+    with the page of each evidence object that is an object set by
+    _evidence_page. Anything that is not an evidence object (null, a bare
+    scalar, a missing key) is left for _coerce_evidence to judge."""
+    if not isinstance(leaf, dict):
+        return leaf
+    paged = leaf
+    evidence = leaf.get("evidence")
+    if isinstance(evidence, dict):
+        paged = {**paged, "evidence": {**evidence, "page": _evidence_page(evidence.get("page"), page_count)}}
+    value = leaf.get("value")
+    if isinstance(value, list):
+        rows = [
+            {key: _paged_leaf(cell, page_count) for key, cell in row.items()}
+            if isinstance(row, dict)
+            else row
+            for row in value
+        ]
+        paged = {**paged, "value": rows}
+    return paged
+
+
+def _with_evidence_pages(tool_input: Any, schema: ExtractionSchema, page_count: int | None) -> Any:
+    """`tool_input` with the page of every evidence object set by
+    _evidence_page; a schema without evidence (v1) is returned as it is."""
+    if not schema.evidence or not isinstance(tool_input, dict):
+        return tool_input
+    return {name: _paged_leaf(leaf, page_count) for name, leaf in tool_input.items()}
 
 
 # --- PII: no more than the last four digits of a card or account number ------
@@ -282,8 +346,8 @@ def _masked_payment_leaf(name: str, leaf: Any) -> dict[str, Any] | None:
     digit runs masked (payment_method) or the last four digits
     (payment_card_last4), and anything else, a list or an object holding the
     number, is null; `confidence` is kept only as a number; `evidence` is
-    checked as _coerce_evidence does, with its quote masked; every other key is
-    dropped. A leaf missing value or confidence stays missing it, so
+    rebuilt as {page, quote} when its quote is usable (see _evidence_quote),
+    with the quote masked, and is null otherwise; every other key is dropped. A leaf missing value or confidence stays missing it, so
     _leaf_is_malformed still reports it. A leaf that is not an object is
     dropped (None), which is the same violation as a bare scalar.
     """
@@ -302,10 +366,15 @@ def _masked_payment_leaf(name: str, leaf: Any) -> dict[str, Any] | None:
         except (TypeError, ValueError, OverflowError):
             pass  # left out: the leaf then fails _leaf_is_malformed as before
     if "evidence" in leaf:
-        evidence = _coerce_evidence(leaf)
-        if evidence is not None:
-            evidence = {**evidence, "quote": mask_digit_runs(evidence["quote"])}
-        masked["evidence"] = evidence
+        # Page-agnostic like _swept_evidence: the page is fixed on the model
+        # path by _with_evidence_pages, and judged by _coerce_evidence when the
+        # leaf is stored.
+        quote = _evidence_quote(leaf["evidence"])
+        masked["evidence"] = (
+            None
+            if quote is None
+            else {"page": leaf["evidence"].get("page"), "quote": mask_digit_runs(quote)}
+        )
     return masked
 
 
@@ -482,18 +551,50 @@ def _values_disagree(a: Any, b: Any) -> bool:
     return a != b
 
 
-def _merge_scalar_leaf(candidates: list[tuple[int, Any, float]], *, tie_break: str) -> dict[str, Any]:
-    """Merge one scalar field's per-page (page_index, value, confidence)
-    candidates -- already read defensively via _coerce_leaf, so a
+def _chunk_evidence(raw_leaf: Any, page_idx: int) -> dict[str, Any] | None:
+    """The evidence of one page's raw scalar leaf, cited to the page it came
+    from. Each chunk call saw a single page, so whatever page the model wrote
+    is replaced by `page_idx + 1`; only the quote is taken from the model. A
+    malformed leaf has no evidence, like its value (see _coerce_leaf)."""
+    if _leaf_is_malformed(raw_leaf):
+        return None
+    quote = _evidence_quote(raw_leaf.get("evidence"))
+    return None if quote is None else {"page": page_idx + 1, "quote": quote}
+
+
+def _chunk_cell(cell: Any, page: int) -> Any:
+    """One cell of an array row from the chunk that read `page`, with its
+    evidence cited to that page (see _chunk_evidence). A cell with no
+    evidence key is returned as it is."""
+    if not isinstance(cell, dict) or "evidence" not in cell:
+        return cell
+    quote = _evidence_quote(cell["evidence"])
+    return {**cell, "evidence": None if quote is None else {"page": page, "quote": quote}}
+
+
+def _merge_scalar_leaf(
+    candidates: list[tuple[int, Any, float, dict[str, Any] | None]],
+    *,
+    tie_break: str,
+    evidence: bool,
+) -> dict[str, Any]:
+    """Merge one scalar field's per-page (page_index, value, confidence,
+    evidence) candidates -- already read defensively via _coerce_leaf, so a
     malformed leaf on any page has already degraded to
-    (page_index, None, 0.0) by the time it reaches here -- into a single
+    (page_index, None, 0.0, None) by the time it reaches here -- into a single
     {"value", "confidence"} leaf, shape-identical to a single-call leaf.
+    With `evidence` the leaf also carries the winning candidate's evidence
+    (already cited to its page, see _chunk_evidence); when the winner has none,
+    that of the most confident candidate with the same value that does, and
+    None when there is no such candidate; without `evidence` the leaf has no
+    evidence key at all.
 
     All-null (every candidate's value is None): the merged leaf's value
     is None, confidence is the MINIMUM confidence across every
     candidate (including the null ones) -- an absent field should land
     low-confidence and route to review, not look artificially confident
-    just because no page actually reported anything wrong.
+    just because no page actually reported anything wrong. Its evidence is
+    None: there is no value to cite.
 
     Otherwise: pick the highest-confidence NON-null candidate; ties
     (equal confidence) are broken by `tie_break` ("earliest" or
@@ -505,22 +606,45 @@ def _merge_scalar_leaf(candidates: list[tuple[int, Any, float]], *, tie_break: s
     """
     non_null = [c for c in candidates if c[1] is not None]
     if not non_null:
-        return {"value": None, "confidence": min((c[2] for c in candidates), default=0.0)}
+        merged: dict[str, Any] = {
+            "value": None,
+            "confidence": min((c[2] for c in candidates), default=0.0),
+        }
+        if evidence:
+            merged["evidence"] = None
+        return merged
 
-    best_confidence = max(c[2] for c in non_null)
-    tied = [c for c in non_null if c[2] == best_confidence]
-    winner = (min if tie_break == "earliest" else max)(tied, key=lambda c: c[0])
+    def most_confident(pool: list[tuple[int, Any, float, dict[str, Any] | None]]):
+        best_confidence = max(c[2] for c in pool)
+        tied = [c for c in pool if c[2] == best_confidence]
+        return (min if tie_break == "earliest" else max)(tied, key=lambda c: c[0])
+
+    winner = most_confident(non_null)
 
     base_value = non_null[0][1]
     disagreement = any(_values_disagree(base_value, c[1]) for c in non_null[1:])
 
     confidence = min(winner[2], MERGE_CONFLICT_CONFIDENCE) if disagreement else winner[2]
-    return {"value": winner[1], "confidence": confidence}
+    merged = {"value": winner[1], "confidence": confidence}
+    if evidence:
+        merged["evidence"] = winner[3]
+        if winner[3] is None:
+            # The winner has nothing to cite: borrow the quote of the most
+            # confident candidate that read the same value and has one. The
+            # value and confidence stay the winner's.
+            cited = [
+                c for c in non_null if c[3] is not None and not _values_disagree(winner[1], c[1])
+            ]
+            if cited:
+                merged["evidence"] = most_confident(cited)[3]
+    return merged
 
 
-def _merge_line_items(page_line_items: list[tuple[Any, float]]) -> dict[str, Any]:
-    """Merge per-page (value, confidence) candidates for the "line_items"
-    leaf (already read via _coerce_leaf) into one leaf: every page's
+def _merge_line_items(
+    page_line_items: list[tuple[int, Any, float]], *, evidence: bool
+) -> dict[str, Any]:
+    """Merge per-page (page_index, value, confidence) candidates for an array
+    field (already read via _coerce_leaf) into one leaf: every page's
     array that actually IS a list is concatenated in page order, and
     the merged confidence is the MINIMUM confidence across only the
     pages that contributed a list -- a page whose line_items leaf was
@@ -528,11 +652,21 @@ def _merge_line_items(page_line_items: list[tuple[Any, float]]) -> dict[str, Any
     drag the confidence down either. If no page produced a list at all,
     returns {"value": [], "confidence": 0.0} so the field routes to
     review like any other all-null field.
+
+    With `evidence`, each cell of a page's rows cites that page (_chunk_cell):
+    the cell keeps its quote and takes the page of the chunk it came from.
     """
     concatenated: list[Any] = []
     contributing_confidences: list[float] = []
-    for value, confidence in page_line_items:
+    for page_idx, value, confidence in page_line_items:
         if isinstance(value, list):
+            if evidence:
+                value = [
+                    {key: _chunk_cell(cell, page_idx + 1) for key, cell in row.items()}
+                    if isinstance(row, dict)
+                    else row
+                    for row in value
+                ]
             concatenated.extend(value)
             contributing_confidences.append(confidence)
 
@@ -555,37 +689,50 @@ def merge_page_tool_inputs(
     earliest or the latest page, all-null uses min confidence,
     disagreement caps confidence at MERGE_CONFLICT_CONFIDENCE).
 
+    Under a schema with evidence, a scalar leaf carries its winning page's
+    evidence (or an agreeing page's, when the winner has none) and an array's
+    cells carry their own, every one cited to the page index + 1 of the chunk
+    it came from, whatever page the model wrote: each chunk call saw one page,
+    so the chunk is the only page that can be right.
+    A v1 merge has no evidence and is unchanged.
+
     Every page's tool_input is untrusted the same way a single
     response's is (see the module docstring / _coerce_leaf): a
     non-dict page_input, or one missing/mangling a field entirely,
     degrades that page's contribution to (None, 0.0) via _coerce_leaf
     rather than raising.
     """
-    array_candidates: dict[str, list[tuple[Any, float]]] = {
+    array_candidates: dict[str, list[tuple[int, Any, float]]] = {
         field.name: [] for field in schema.fields if field.kind == "array"
     }
-    scalar_candidates: dict[str, list[tuple[int, Any, float]]] = {
+    scalar_candidates: dict[str, list[tuple[int, Any, float, dict[str, Any] | None]]] = {
         field.name: [] for field in schema.fields if field.kind != "array"
     }
 
     for page_idx, page_input in enumerate(page_inputs):
         for field_name, array_field_candidates in array_candidates.items():
             raw_array = page_input.get(field_name) if isinstance(page_input, dict) else None
-            array_field_candidates.append(_coerce_leaf(raw_array))
+            array_value, array_confidence = _coerce_leaf(raw_array)
+            array_field_candidates.append((page_idx, array_value, array_confidence))
 
         for field_name, candidates in scalar_candidates.items():
             raw_leaf = page_input.get(field_name) if isinstance(page_input, dict) else None
             value, confidence = _coerce_leaf(raw_leaf)
-            candidates.append((page_idx, value, confidence))
+            leaf_evidence = _chunk_evidence(raw_leaf, page_idx) if schema.evidence else None
+            candidates.append((page_idx, value, confidence, leaf_evidence))
 
     merged: dict[str, Any] = {}
     for field in schema.fields:
         if field.kind == "array":
-            merged[field.name] = _merge_line_items(array_candidates[field.name])
+            merged[field.name] = _merge_line_items(
+                array_candidates[field.name], evidence=schema.evidence
+            )
         else:
             assert field.merge_tie_break is not None  # every scalar field has one
             merged[field.name] = _merge_scalar_leaf(
-                scalar_candidates[field.name], tie_break=field.merge_tie_break
+                scalar_candidates[field.name],
+                tie_break=field.merge_tie_break,
+                evidence=schema.evidence,
             )
 
     return merged
@@ -856,10 +1003,16 @@ async def _extract_one_block(
     settings: Settings,
     document_block: dict[str, Any],
     schema: ExtractionSchema,
+    page_count: int | None,
 ) -> _PageResult:
     """Send ONE document content block (a whole image/PDF for the
     single-call path, or a single PDF page for the H6 chunked path)
     through record_extraction and return the result.
+
+    `page_count` is how many pages the block has, None for an image. Under a
+    schema with evidence it fixes every evidence page the model wrote
+    (_evidence_page): an image's evidence is on page 1, a PDF's is kept when
+    it is a page the block has and is None otherwise, with the quote kept.
 
     This is every step extract_document used to run inline, factored
     out unchanged so the single-call and per-page chunked paths share
@@ -945,7 +1098,8 @@ async def _extract_one_block(
     # Masked before anything else sees it: the repair prompt below, the
     # stored raw_response, the chunk provenance, and the eval artifacts are all
     # built from tool_input, so none of them can hold a full card number.
-    tool_input = mask_card_data(tool_use_block.input)
+    model_input = mask_card_data(tool_use_block.input)
+    tool_input = _with_evidence_pages(model_input, schema, page_count)
     violations = _schema_violations(tool_input, schema)
     repaired = False
     total_input_tokens = response.usage.input_tokens
@@ -986,7 +1140,7 @@ async def _extract_one_block(
                                     "type": "tool_use",
                                     "id": tool_use_block.id,
                                     "name": tool_use_block.name,
-                                    "input": tool_input,
+                                    "input": model_input,
                                 }
                             ],
                         },
@@ -1039,7 +1193,9 @@ async def _extract_one_block(
                     repair_response.stop_reason,
                 )
             else:
-                repair_tool_input = mask_card_data(repair_tool_use_block.input)
+                repair_tool_input = _with_evidence_pages(
+                    mask_card_data(repair_tool_use_block.input), schema, page_count
+                )
                 repair_violations = _schema_violations(repair_tool_input, schema)
                 if len(repair_violations) < len(violations):
                     tool_input = repair_tool_input
@@ -1108,7 +1264,9 @@ async def _extract_chunked_pdf(
     for page_num, page_pdf_bytes in enumerate(page_pdfs, start=1):
         document_block = _encode_document_block(page_pdf_bytes, PDF_MIME_TYPE, "document")
         try:
-            page_result = await _extract_one_block(client, settings, document_block, schema)
+            page_result = await _extract_one_block(
+                client, settings, document_block, schema, page_count=1
+            )
         except ExtractionError as exc:
             exc.input_tokens = total_input_tokens + (exc.input_tokens or 0)
             exc.output_tokens = total_output_tokens + (exc.output_tokens or 0)
@@ -1190,6 +1348,12 @@ async def extract_document(
     whole document on the single-call path, once per page on the
     chunked path), never across the whole extract_document call.
 
+    Evidence pages (schema v2): whatever page the model cites is fixed on
+    the way out of _extract_one_block -- 1 for an image, None for a page the
+    PDF does not have (the quote is kept) -- and the chunked path cites each
+    scalar and cell to the chunk it came from (merge_page_tool_inputs), so a
+    stored page is always one the document has.
+
     Page counting: only relevant to PDFs. The file's bytes are read
     exactly once (_read_document_bytes) regardless of which path ends
     up handling the document -- the single-call PDF path reuses those
@@ -1232,11 +1396,15 @@ async def extract_document(
             return await _extract_chunked_pdf(raw_bytes, settings, schema)
 
         document_block = _encode_document_block(raw_bytes, mime_type, "document")
+        evidence_page_count: int | None = page_count
     else:
         document_block = await _build_document_block(path, mime_type)
+        evidence_page_count = None
 
     client = _build_client(settings)
-    page_result = await _extract_one_block(client, settings, document_block, schema)
+    page_result = await _extract_one_block(
+        client, settings, document_block, schema, page_count=evidence_page_count
+    )
 
     return ExtractionResult(
         tool_input=page_result.tool_input,

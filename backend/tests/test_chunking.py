@@ -9,14 +9,18 @@ single-call suite -- and so that suite's "must pass UNMODIFIED" claim
 in the task notes is easy to verify by diffing.
 """
 
+import json
 from io import BytesIO
 from unittest.mock import AsyncMock
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from v2_samples import leaf as v2_leaf
 
 from app import extraction as extraction_module
 from app.config import Settings
@@ -24,12 +28,13 @@ from app.extraction import (
     MERGE_CONFLICT_CONFIDENCE,
     ModelRefusalError,
     NonRetryableExtractionError,
+    _evidence_quote,
     extract_document,
     merge_page_tool_inputs,
     process_document_job,
 )
-from app.extraction_fields import SCHEMA_V1
-from app.models import Document, ExtractedField, Extraction, Job
+from app.extraction_fields import SCHEMA_V1, SCHEMA_V2
+from app.models import Document, ExtractedField, Extraction, Job, Reconciliation
 from app.pdf import count_pdf_pages, split_pdf_pages
 
 # --- shared fixtures / fakes -------------------------------------------
@@ -347,6 +352,303 @@ def test_malformed_leaf_within_an_otherwise_valid_page_degrades() -> None:
     assert merged["subtotal"]["confidence"] == pytest.approx(0.9)
 
 
+# The v1 merge output, captured from the merge before evidence existed (B5).
+# Four pages: a tie and a conflict, a page of bare scalars, a malformed leaf, a
+# non-row in line_items, and a cell that carries an evidence key a v1 merge must
+# leave exactly as it came. The comparison is of the serialized text, so key
+# order and number types count.
+_V1_MERGE_GOLDEN = (
+    '{"vendor": {"value": "Acme Corp", "confidence": 0.9}, '
+    '"document_date": {"value": "2026-01-01", "confidence": 0.5}, '
+    '"line_items": {"value": ['
+    '{"description": {"value": "Widget", "confidence": 0.9}, "quantity": {"value": 1, "confidence": 0.9}, '
+    '"unit_price": {"value": 10.0, "confidence": 0.9}, "total": {"value": 10.0, "confidence": 0.9}}, '
+    '{"description": {"value": "Gadget", "confidence": 0.8}, "quantity": {"value": 2, "confidence": 0.8}, '
+    '"unit_price": {"value": 3.0, "confidence": 0.8}, "total": {"value": 6.0, "confidence": 0.8}}, '
+    '"not a row", '
+    '{"description": {"value": "Doohickey", "confidence": 0.9, "evidence": {"page": 7, "quote": "x"}}}'
+    '], "confidence": 0.7}, '
+    '"subtotal": {"value": 10.004, "confidence": 0.9}, '
+    '"tax": {"value": 2.0, "confidence": 0.5}, '
+    '"total": {"value": 12.0, "confidence": 0.5}, '
+    '"currency": {"value": "USD", "confidence": 0.95}}'
+)
+
+
+def test_the_v1_merge_output_is_byte_identical_to_the_one_before_evidence() -> None:
+    page0 = _minimal_page(
+        vendor=_leaf("Acme Corp", 0.9),
+        document_date=_leaf("2026-01-01", 0.8),
+        currency=_leaf("USD", 0.7),
+        subtotal=_leaf(10.0, 0.9),
+        tax=_leaf(1.0, 0.6),
+        total=_leaf(11.0, 0.9),
+        line_items=_leaf(
+            [
+                {
+                    "description": _leaf("Widget", 0.9),
+                    "quantity": _leaf(1, 0.9),
+                    "unit_price": _leaf(10.0, 0.9),
+                    "total": _leaf(10.0, 0.9),
+                }
+            ],
+            0.9,
+        ),
+    )
+    page1 = _minimal_page(
+        vendor=_leaf("ACME corp ", 0.9),
+        document_date=_leaf("2026-01-02", 0.8),
+        currency=_leaf("USD", 0.95),
+        subtotal=_leaf(10.004, 0.9),
+        tax=_leaf(2.0, 0.6),
+        total=_leaf(12.0, 0.9),
+        line_items=_leaf(
+            [
+                {
+                    "description": _leaf("Gadget", 0.8),
+                    "quantity": _leaf(2, 0.8),
+                    "unit_price": _leaf(3.0, 0.8),
+                    "total": _leaf(6.0, 0.8),
+                },
+                "not a row",
+            ],
+            0.7,
+        ),
+    )
+    page2 = {"vendor": "bare scalar", "subtotal": {"value": 9.0}, "line_items": None, "extra": 1}
+    page3 = _minimal_page(
+        total=_leaf(12.0, 0.9),
+        tax=_leaf(None, 0.1),
+        line_items=_leaf(
+            [
+                {
+                    "description": {
+                        "value": "Doohickey",
+                        "confidence": 0.9,
+                        "evidence": {"page": 7, "quote": "x"},
+                    }
+                }
+            ],
+            0.95,
+        ),
+    )
+
+    merged = merge_page_tool_inputs([page0, page1, page2, page3], SCHEMA_V1)
+
+    assert json.dumps(merged) == _V1_MERGE_GOLDEN
+
+
+# --- merge_page_tool_inputs: evidence pages under schema v2 (B5) -------------
+#
+# Each chunk call saw one page, so a winner's evidence is cited to its chunk,
+# whatever page the model wrote.
+
+
+def _blank_v2_page(**overrides) -> dict:
+    """A v2 page tool_input with every leaf null and no evidence, overridden
+    per field by kwargs."""
+    page = {
+        field.name: {"value": [], "confidence": 0.9}
+        if field.kind == "array"
+        else v2_leaf(None)
+        for field in SCHEMA_V2.fields
+    }
+    page.update(overrides)
+    return page
+
+
+def test_a_winners_evidence_takes_the_page_of_its_chunk_not_the_one_the_model_wrote() -> None:
+    pages = [_blank_v2_page() for _ in range(7)]
+    pages[1]["invoice_number"] = v2_leaf("INV-2", "Invoice # INV-2", page=1)
+    pages[5]["total"] = v2_leaf(12.0, "Total $12.00", page=1)
+
+    merged = merge_page_tool_inputs(pages, SCHEMA_V2)
+
+    assert merged["invoice_number"]["evidence"] == {"page": 2, "quote": "Invoice # INV-2"}
+    assert merged["total"]["evidence"] == {"page": 6, "quote": "Total $12.00"}
+
+
+def test_the_tie_break_and_the_conflict_cap_still_pick_the_winner_and_its_page() -> None:
+    pages = [_blank_v2_page() for _ in range(3)]
+    pages[0]["vendor"] = v2_leaf("Acme", "Acme", page=3)
+    pages[2]["vendor"] = v2_leaf("Acme Inc", "Acme Inc", page=1)
+    pages[0]["subtotal"] = v2_leaf(10.0, "Subtotal 10.00")
+    pages[2]["subtotal"] = v2_leaf(11.0, "Subtotal 11.00")
+
+    merged = merge_page_tool_inputs(pages, SCHEMA_V2)
+
+    # A tie between pages 1 and 3 goes to the earliest for a header field, the latest for an amount.
+    assert merged["vendor"] == {
+        "value": "Acme",
+        "confidence": MERGE_CONFLICT_CONFIDENCE,
+        "evidence": {"page": 1, "quote": "Acme"},
+    }
+    assert merged["subtotal"] == {
+        "value": 11.0,
+        "confidence": MERGE_CONFLICT_CONFIDENCE,
+        "evidence": {"page": 3, "quote": "Subtotal 11.00"},
+    }
+
+
+def test_a_winner_without_a_usable_quote_and_an_all_null_field_have_null_evidence() -> None:
+    pages = [_blank_v2_page() for _ in range(2)]
+    pages[0]["vendor"] = {"value": "Acme", "confidence": 0.9, "evidence": None}
+    pages[1]["tax"] = {"value": 1.0, "confidence": 0.9, "evidence": {"page": 2, "quote": "  "}}
+    pages[1]["total"] = {"value": 2.0, "confidence": 0.9}  # no evidence key at all
+    pages[1]["discount"] = {"value": 3.0, "evidence": {"page": 2, "quote": "Discount 3.00"}}  # malformed
+
+    merged = merge_page_tool_inputs(pages, SCHEMA_V2)
+
+    assert merged["vendor"]["evidence"] is None
+    assert merged["tax"]["evidence"] is None
+    assert merged["total"]["evidence"] is None
+    assert merged["discount"] == {"value": None, "confidence": 0.0, "evidence": None}
+    assert merged["tip"] == {"value": None, "confidence": 0.95, "evidence": None}
+
+
+def test_a_winner_with_no_quote_borrows_the_quote_of_the_best_agreeing_chunk() -> None:
+    pages = [_blank_v2_page() for _ in range(4)]
+    pages[0]["total"] = v2_leaf(12.0, "Total $12.00", confidence=0.7)
+    pages[1]["total"] = v2_leaf(12.0, None, confidence=0.99)  # the winner: nothing to cite
+    pages[2]["total"] = v2_leaf(12.0, "Amount due $12.00", confidence=0.8)
+    pages[3]["total"] = v2_leaf(13.0, "Total $13.00", confidence=0.95)  # disagrees: never borrowed from
+
+    merged = merge_page_tool_inputs(pages, SCHEMA_V2)
+
+    assert merged["total"] == {
+        "value": 12.0,
+        "confidence": MERGE_CONFLICT_CONFIDENCE,  # the page 4 disagreement still caps it
+        "evidence": {"page": 3, "quote": "Amount due $12.00"},
+    }
+
+
+def test_a_winner_that_has_a_quote_keeps_it_over_a_more_confident_neighbour_without_one() -> None:
+    pages = [_blank_v2_page() for _ in range(2)]
+    pages[0]["total"] = v2_leaf(12.0, "Total $12.00", confidence=0.9)
+    pages[1]["total"] = v2_leaf(12.0, None, confidence=0.8)
+
+    merged = merge_page_tool_inputs(pages, SCHEMA_V2)
+
+    assert merged["total"]["evidence"] == {"page": 1, "quote": "Total $12.00"}
+
+
+def test_two_chunks_that_agree_with_the_winner_unquoted_leave_null_evidence() -> None:
+    pages = [_blank_v2_page() for _ in range(2)]
+    pages[0]["total"] = v2_leaf(12.0, None, confidence=0.9)
+    pages[1]["total"] = v2_leaf(13.0, "Total $13.00", confidence=0.5)
+
+    merged = merge_page_tool_inputs(pages, SCHEMA_V2)
+
+    assert merged["total"]["value"] == 12.0
+    assert merged["total"]["evidence"] is None
+
+
+def test_concatenated_cells_cite_the_chunk_their_row_came_from() -> None:
+    def row(name: str, quote: str, claimed_page: int) -> dict:
+        return {"description": v2_leaf(name, quote, page=claimed_page), "total": v2_leaf(1.0)}
+
+    pages = [_blank_v2_page() for _ in range(3)]
+    pages[0]["line_items"] = {"value": [row("A", "A 1.00", 1)], "confidence": 0.9}
+    pages[2]["line_items"] = {
+        "value": [row("B", "B 1.00", 1), row("C", "C 1.00", 9), "not a row"],
+        "confidence": 0.8,
+    }
+
+    merged = merge_page_tool_inputs(pages, SCHEMA_V2)
+
+    rows = merged["line_items"]["value"]
+    assert [r["description"]["evidence"]["page"] for r in rows[:3]] == [1, 3, 3]
+    assert [r["description"]["evidence"]["quote"] for r in rows[:3]] == ["A 1.00", "B 1.00", "C 1.00"]
+    assert rows[3] == "not a row"
+    assert rows[0]["total"]["evidence"] is None  # null evidence stays null
+    assert merged["line_items"]["confidence"] == pytest.approx(0.8)
+
+
+# Every value is one of a few lowercase tokens, so two leaves that agree (the
+# merge's rule for borrowing a quote) are equal and the tests below can compare
+# with ==.
+_values = st.sampled_from([None, 1, 2, "a", "b"])
+_page_claims = st.one_of(
+    st.none(), st.integers(-5, 25), st.booleans(), st.floats(allow_nan=False), st.text(max_size=3)
+)
+_quotes = st.one_of(st.none(), st.integers(), st.text(alphabet="ab ", max_size=6))
+_evidence_objects = st.one_of(
+    st.none(),
+    st.text(max_size=5),
+    st.fixed_dictionaries({"page": _page_claims, "quote": _quotes}),
+    st.fixed_dictionaries({"quote": _quotes}),
+)
+_leaves = st.one_of(
+    st.fixed_dictionaries(
+        {"value": _values, "confidence": st.sampled_from([0.2, 0.5, 0.9]), "evidence": _evidence_objects}
+    ),
+    st.fixed_dictionaries({"value": _values, "confidence": st.sampled_from([0.2, 0.9])}),
+    st.text(max_size=3),
+    st.none(),
+)
+_rows = st.one_of(
+    st.just("not a row"), st.fixed_dictionaries({"description": _leaves, "total": _leaves})
+)
+_ARRAY_NAMES = [f.name for f in SCHEMA_V2.fields if f.kind == "array"]
+_SCALAR_NAMES = [f.name for f in SCHEMA_V2.fields if f.kind != "array"]
+# Every page carries an array (a page without one cannot expose a cell that
+# cites the wrong page) and one or two scalars; everything else is null.
+_v2_pages = st.builds(
+    lambda array_name, rows, scalars: _blank_v2_page(
+        **{array_name: {"value": rows, "confidence": 0.9}}, **scalars
+    ),
+    st.sampled_from(_ARRAY_NAMES),
+    st.lists(_rows, max_size=2),
+    st.dictionaries(st.sampled_from(_SCALAR_NAMES), _leaves, min_size=1, max_size=2),
+)
+
+
+@given(pages=st.lists(_v2_pages, min_size=1, max_size=6))
+def test_every_merged_evidence_cites_a_page_that_holds_its_quote(pages: list) -> None:
+    """A merged quote is cited to a real page of the document, and that page's
+    own chunk holds the same value with the same quote."""
+    merged = merge_page_tool_inputs(pages, SCHEMA_V2)
+
+    def cited_page(evidence, where: str) -> int:
+        page = evidence["page"]
+        assert isinstance(page, int) and not isinstance(page, bool), f"{where}: page {page!r}"
+        assert 1 <= page <= len(pages), f"{where}: page {page} of {len(pages)}"
+        assert evidence["quote"] and isinstance(evidence["quote"], str), f"{where}: quote"
+        return page
+
+    for name in _SCALAR_NAMES:
+        leaf = merged[name]
+        if leaf["evidence"] is None:
+            continue
+        assert leaf["value"] is not None, f"{name}: evidence on a null value"
+        page = cited_page(leaf["evidence"], name)
+        source = pages[page - 1][name]
+        assert isinstance(source, dict), f"{name}: page {page} holds no leaf"
+        assert source["value"] == leaf["value"], f"{name}: page {page} read another value"
+        assert _evidence_quote(source.get("evidence")) == leaf["evidence"]["quote"], (
+            f"{name}: page {page} has another quote"
+        )
+
+    for name in _ARRAY_NAMES:
+        assert "evidence" not in merged[name]
+        for i, row in enumerate(merged[name]["value"]):
+            if not isinstance(row, dict):
+                continue
+            for key, cell in row.items():
+                if not (isinstance(cell, dict) and cell.get("evidence") is not None):
+                    continue
+                where = f"{name}[{i}].{key}"
+                page = cited_page(cell["evidence"], where)
+                source_rows = pages[page - 1][name]["value"]
+                assert any(
+                    isinstance(r, dict)
+                    and isinstance(r[key], dict)
+                    and r[key].get("value") == cell.get("value")
+                    and _evidence_quote(r[key].get("evidence")) == cell["evidence"]["quote"]
+                    for r in source_rows
+                ), f"{where}: page {page} holds no such cell"
+
+
 # --- end-to-end process_document_job: chunked PDF path ---------------------
 
 
@@ -516,6 +818,106 @@ async def test_chunked_pdf_extraction_persists_merged_result(
 
     await db_session.refresh(document)
     assert document.status == "extracted"
+
+
+async def test_a_chunked_v2_extraction_cites_each_chunk_and_its_quote_checks_run(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        extraction_module,
+        "get_settings",
+        lambda: Settings(
+            extraction_model="claude-sonnet-5",
+            review_threshold=0.8,
+            extraction_prompt_version="extract_v2",
+        ),
+    )
+    document = await _make_document(
+        db_session,
+        tmp_path,
+        filename="seven.pdf",
+        mime_type="application/pdf",
+        content=_build_multipage_pdf(7),
+    )
+    job = await _make_job(db_session, document.id)
+
+    # Each page is a one-page PDF to the model, so every page cites page 1.
+    pages = [_blank_v2_page() for _ in range(7)]
+    pages[0]["vendor"] = v2_leaf("Acme Corp", "Acme Corp")
+    pages[0]["currency"] = v2_leaf("USD", "USD")
+    pages[1]["invoice_number"] = v2_leaf("INV-2", "Invoice # INV-2")
+    pages[2]["line_items"] = {
+        "value": [
+            {
+                "description": v2_leaf("Widget", "Widget"),
+                "quantity": v2_leaf(1, "1 x Widget"),
+                "unit_price": v2_leaf(100.0, "Widget 1 x 100.00"),
+                "total": v2_leaf(100.0, "Widget 100.00"),
+            }
+        ],
+        "confidence": 0.9,
+    }
+    pages[6]["subtotal"] = v2_leaf(100.0, "Subtotal $100.00")
+    pages[6]["tax"] = v2_leaf(8.0, "Tax $8.00")
+    pages[6]["total"] = v2_leaf(108.0, "Total $108.00")
+    pages[6]["tax_lines"] = {
+        "value": [
+            {
+                "label": v2_leaf("Sales tax", "Sales tax 8% 8.00"),
+                "rate": v2_leaf(8, "Sales tax 8% 8.00"),
+                "base": v2_leaf(100.0, "Sales tax 8% on 100.00"),
+                "amount": v2_leaf(8.0, "Sales tax 8% 8.00"),
+            }
+        ],
+        "confidence": 0.9,
+    }
+    fake_client = _patch_client_side_effect(
+        monkeypatch,
+        [
+            _FakeMessage("tool_use", [_FakeToolUseBlock(page, tool_use_id=f"toolu_{i}")], _FakeUsage(10, 5))
+            for i, page in enumerate(pages)
+        ],
+    )
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    assert fake_client.messages.create.await_count == 7
+    extraction = (
+        await db_session.execute(select(Extraction).where(Extraction.document_id == document.id))
+    ).scalars().one()
+    assert extraction.prompt_version == "extract_v2"
+    raw = extraction.raw_response
+    assert raw["invoice_number"]["evidence"] == {"page": 2, "quote": "Invoice # INV-2"}
+    assert raw["line_items"]["value"][0]["total"]["evidence"] == {"page": 3, "quote": "Widget 100.00"}
+    assert raw["total"]["evidence"] == {"page": 7, "quote": "Total $108.00"}
+    # The per-chunk provenance keeps what each one-page call said.
+    assert raw["_chunks"][1]["tool_input"]["invoice_number"]["evidence"]["page"] == 1
+
+    fields = {
+        f.field_name: f
+        for f in (
+            await db_session.execute(
+                select(ExtractedField).where(ExtractedField.extraction_id == extraction.id)
+            )
+        ).scalars()
+    }
+    assert fields["vendor"].value["evidence"] == {"page": 1, "quote": "Acme Corp"}
+    assert fields["invoice_number"].value["evidence"] == {"page": 2, "quote": "Invoice # INV-2"}
+    assert fields["subtotal"].value["evidence"] == {"page": 7, "quote": "Subtotal $100.00"}
+    assert fields["line_items"].value[0]["description"]["evidence"]["page"] == 3
+    assert fields["tax_lines"].value[0]["amount"]["evidence"]["page"] == 7
+
+    reconciliation = (
+        await db_session.execute(
+            select(Reconciliation).where(Reconciliation.extraction_id == extraction.id)
+        )
+    ).scalar_one()
+    quote_checks = {c["id"]: c["status"] for c in reconciliation.report["checks"] if c["kind"] == "quote"}
+    for check_id in ("quote:subtotal", "quote:tax", "quote:total"):
+        assert quote_checks[check_id] == "pass"
+    assert "skipped" not in quote_checks.values()
+    assert reconciliation.status == "pass"
 
 
 async def test_pdf_over_page_limit_raises_before_any_api_call(
