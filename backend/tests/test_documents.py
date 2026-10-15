@@ -4,6 +4,7 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from v2_samples import seed_v2
 
 from app.models import Document, ExtractedField, Extraction, Job
 from app.routers.documents import MAX_UPLOAD_SIZE
@@ -248,3 +249,42 @@ async def test_get_document_pads_to_the_document_currency(
     assert await total_of(no_currency) == "7.00"
     # More digits than the currency allows are kept, so a misread shows.
     assert await total_of(extra_digits) == "46.255"
+
+
+async def test_get_document_serves_a_v2_extraction_as_decimal_strings_with_evidence(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document_id, _, _ = await seed_v2(db_session)
+
+    body = (await client.get(f"/documents/{document_id}")).json()["extraction"]
+    fields = {f["field_name"]: f for f in body["fields"]}
+
+    assert body["prompt_version"] == "extract_v2"
+    assert len(fields) == 20
+    # Only the value turns into a decimal string; confidence and evidence stay.
+    assert fields["discount"]["value"] == {
+        "value": "10.00",
+        "confidence": 0.95,
+        "evidence": {"page": 1, "quote": "Discount -$10.00"},
+    }
+    assert fields["amount_due"]["value"]["value"] == "52.20"
+    assert fields["tip"]["value"] == {"value": None, "confidence": 0.95, "evidence": None}
+    assert fields["payment_card_last4"]["value"]["value"] == "4242"
+    assert fields["due_date"]["value"]["value"] == "2026-01-31"
+    row = fields["tax_lines"]["value"][0]
+    assert row["label"]["value"] == "State tax"
+    assert row["rate"] == {
+        "value": "8",
+        "confidence": 0.95,
+        "evidence": {"page": 1, "quote": "State tax 8% on 90.00 7.20"},
+    }
+    assert row["base"]["value"] == "90.00"
+    assert row["amount"]["value"] == "7.20"
+    line = fields["line_items"]["value"][0]
+    assert line["quantity"]["value"] == "2"
+    assert line["total"] == {
+        "value": "100.00",
+        "confidence": 0.95,
+        "evidence": {"page": 1, "quote": "Widget 100.00"},
+    }
+    assert fields["tax_lines"]["corrected_value"] is None

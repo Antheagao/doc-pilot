@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
+from v2_samples import seed_v2
 
 from app.config import Settings
 from app.extraction import build_extracted_fields
@@ -35,6 +36,7 @@ async def _seed_field(
     confidence: float = 0.5,
     needs_review: bool = True,
     filename: str = "receipt.png",
+    prompt_version: str = "extract_v1",
 ) -> ExtractedField:
     """Create a document -> extraction -> single field chain and return
     the field. Defaults produce a pending review-queue entry."""
@@ -49,7 +51,7 @@ async def _seed_field(
 
     extraction = Extraction(
         document_id=document.id,
-        prompt_version="extract_v1",
+        prompt_version=prompt_version,
         model="claude-sonnet-5",
         raw_response={},
         input_tokens=100,
@@ -853,3 +855,220 @@ async def test_an_unreadable_stored_report_costs_only_its_own_context(
     body = detail_response.json()["extraction"]
     assert body["reconciliation"] is None
     assert len(body["fields"]) == 7
+
+
+# ---- Schema v2 fields: tax lines, the payment, and the card-number rule -------
+
+
+async def test_correct_tax_lines_stores_canonical_strings(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    _, extraction_id, fields = await seed_v2(db_session)
+    rows = [
+        {"label": "State tax", "rate": "8.875", "base": 90, "amount": "7.99"},
+        {"label": None, "rate": 0, "base": None, "amount": "0"},
+    ]
+
+    response = await _correct(client, fields["tax_lines"], rows)
+
+    assert response.status_code == 200
+    assert response.json()["corrected_value"] == [
+        {"label": "State tax", "rate": "8.875", "base": "90.00", "amount": "7.99"},
+        {"label": None, "rate": "0", "base": None, "amount": "0.00"},
+    ]
+    # The reconciliation reads the correction: 7.99 no longer adds up to the tax.
+    report = (
+        await db_session.execute(
+            select(Reconciliation.report).where(Reconciliation.extraction_id == extraction_id)
+        )
+    ).scalar_one()
+    assert any(check["id"] == "tax_lines_sum" and check["status"] == "fail" for check in report["checks"])
+
+
+@pytest.mark.parametrize(
+    "rows, fragment",
+    [
+        ([{"label": "x", "rate": 8, "base": 1, "amount": 1, "extra": 1}], "exactly the keys"),
+        ([{"label": "x", "rate": 8, "base": 1}], "exactly the keys"),
+        (["nope"], "Tax line 1 must be an object"),
+        ({"label": "x"}, "Tax lines must be a list"),
+        ([{"label": 3, "rate": 8, "base": 1, "amount": 1}], "Tax line 1 label must be text"),
+        ([{"label": "x", "rate": "100.5", "base": 1, "amount": 1}], "Tax line 1 rate: "),
+        ([{"label": "x", "rate": -1, "base": 1, "amount": 1}], "Tax line 1 rate: "),
+        ([{"label": "x", "rate": "8.1234567", "base": 1, "amount": 1}], "too many decimal places"),
+        ([{"label": "x", "rate": "8%", "base": 1, "amount": 1}], "Tax line 1 rate: "),
+        ([{"label": "x", "rate": 8, "base": "1.005", "amount": 1}], "Tax line 1 base: "),
+        ([{"label": "x", "rate": 8, "base": 1, "amount": "7.999"}], "Tax line 1 amount: "),
+    ],
+)
+async def test_correct_tax_lines_rejects_a_malformed_row(
+    client: AsyncClient, db_session: AsyncSession, rows, fragment: str
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    response = await _correct(client, fields["tax_lines"], rows)
+
+    assert response.status_code == 422
+    assert fragment in response.json()["detail"]
+
+
+async def test_a_tax_rate_of_exactly_100_and_six_places_is_accepted(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    response = await _correct(
+        client, fields["tax_lines"], [{"label": "x", "rate": "100", "base": 1, "amount": 1}]
+    )
+    assert response.status_code == 200
+
+    other = (await seed_v2(db_session))[2]
+    response = await _correct(
+        client, other["tax_lines"], [{"label": "x", "rate": "0.123456", "base": 1, "amount": 1}]
+    )
+    assert response.json()["corrected_value"][0]["rate"] == "0.123456"
+
+
+async def test_correct_the_new_money_fields_follows_the_currency(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    ok = await _correct(client, fields["discount"], 12.5)
+    assert ok.status_code == 200
+    assert ok.json()["corrected_value"] == "12.50"
+
+    bad = await _correct(client, fields["shipping"], "5.005")
+    assert bad.status_code == 422
+    assert "decimal places" in bad.json()["detail"]
+
+
+async def test_due_date_and_the_ids_are_stored_as_sent(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    due = await _correct(client, fields["due_date"], "2026-02-15")
+    assert due.json()["corrected_value"] == "2026-02-15"
+    number = await _correct(client, fields["invoice_number"], "INV-0043")
+    assert number.json()["corrected_value"] == "INV-0043"
+
+
+@pytest.mark.parametrize("bad", ["424", "42424", "4242 ", "42a2", "٤٢٤٢", 4242, "", "VISA 4242", "4242\n"])
+async def test_a_card_last4_that_is_not_four_digits_is_a_422(
+    client: AsyncClient, db_session: AsyncSession, bad
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    response = await _correct(client, fields["payment_card_last4"], bad)
+
+    assert response.status_code == 422
+    assert "four digits" in response.json()["detail"]
+
+
+async def test_a_card_last4_of_four_digits_or_null_is_accepted(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+    assert (await _correct(client, fields["payment_card_last4"], "0042")).json()["corrected_value"] == "0042"
+
+    other = (await seed_v2(db_session))[2]
+    response = await _correct(client, other["payment_card_last4"], None)
+    assert response.status_code == 200
+    assert response.json()["corrected_value"] is None
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "VISA 4111 1111 1111 1111",
+        "4111111111111111",
+        "VISA 4111-1111-1111-1111",
+        "acct 12345",
+        "ACH 1234-5678-9012-3",
+        "Auth 123456",
+    ],
+)
+async def test_a_payment_method_with_a_long_digit_run_is_a_422(
+    client: AsyncClient, db_session: AsyncSession, bad: str
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    response = await _correct(client, fields["payment_method"], bad)
+
+    assert response.status_code == 422
+    assert "card or account number" in response.json()["detail"]
+    stored = await db_session.get(ExtractedField, fields["payment_method"].id)
+    await db_session.refresh(stored)
+    assert stored.reviewed_at is None
+
+
+@pytest.mark.parametrize("good", ["VISA", "Mastercard ending 4242", "Check #1234", None, "ACH"])
+async def test_a_payment_method_without_a_long_digit_run_is_accepted(
+    client: AsyncClient, db_session: AsyncSession, good
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    response = await _correct(client, fields["payment_method"], good)
+
+    assert response.status_code == 200
+    assert response.json()["corrected_value"] == good
+
+
+async def test_a_v1_extraction_still_corrects_line_items_as_before(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    fields = await _seed_receipt(db_session, flagged=("line_items",))
+
+    response = await _correct(
+        client,
+        fields["line_items"],
+        [{"description": "x", "quantity": 1, "unit_price": 1, "total": 1}],
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("bad", [4111111111111111, 4111111111111111.0, ["VISA"], {"brand": "VISA"}, True, 0])
+async def test_a_payment_method_that_is_not_text_is_a_422(
+    client: AsyncClient, db_session: AsyncSession, bad
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    response = await _correct(client, fields["payment_method"], bad)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "A payment method is text or null, such as VISA or Cash."
+
+
+@pytest.mark.parametrize(
+    "ok",
+    ["Paid 2026-10-15 by VISA", "Invoice 2026-10-15", "Cash $1,234.56", "Call 555-123-4567"],
+)
+async def test_a_payment_method_with_dates_amounts_or_a_phone_number_is_accepted(
+    client: AsyncClient, db_session: AsyncSession, ok: str
+) -> None:
+    _, _, fields = await seed_v2(db_session)
+
+    response = await _correct(client, fields["payment_method"], ok)
+
+    assert response.status_code == 200
+    assert response.json()["corrected_value"] == ok
+
+
+async def test_an_extraction_with_an_unknown_prompt_version_is_still_served_and_reviewable(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    field = await _seed_field(db_session, prompt_version="labels")
+
+    queue = (await client.get("/review/queue")).json()
+    assert str(field.id) in {item["field_id"] for item in queue}
+
+    detail = await db_session.get(Extraction, field.extraction_id)
+    document = await client.get(f"/documents/{detail.document_id}")
+    assert document.status_code == 200
+    assert document.json()["extraction"]["prompt_version"] == "labels"
+
+    resolved = await _correct(client, field, "Acme Corp")
+    assert resolved.status_code == 200
+    assert resolved.json()["corrected_value"] == "Acme Corp"

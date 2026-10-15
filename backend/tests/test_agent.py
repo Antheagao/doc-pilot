@@ -11,6 +11,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from v2_samples import seed_v2
 
 from app.agent import loop as loop_module
 from app.agent import tools as tools_module
@@ -42,7 +43,7 @@ from app.evals.corpus import seed_labeled_corpus
 from app.evals.dataset import load_cases
 from app.evals.retrieval import load_gold_corpus
 from app.main import app
-from app.records import DocumentRecord
+from app.records import DocumentRecord, load_records
 from app.retrieval.embeddings import HashingEmbedder, get_embedder
 from app.retrieval.indexing import ChunkingConfig
 from app.routers.ask import get_anthropic_client
@@ -213,6 +214,91 @@ def test_sums_and_lines_use_each_currencys_digits() -> None:
     assert lines["subtotal"] == "subtotal: 1364"
     assert lines["line_items[0]"] == "line item: Tea, qty 2, unit price 682, line total 1364"
     assert dict(record_lines(_record(46.2)))["total"] == "total: 46.20"
+
+
+def test_a_v1_records_lines_are_exactly_the_v1_lines() -> None:
+    record = DocumentRecord(
+        uuid.uuid4(),
+        "r.png",
+        {
+            "vendor": "Acme",
+            "document_date": "2026-01-01",
+            "currency": "EUR",
+            "subtotal": "10.5",
+            "tax": None,
+            "total": 12,
+            "line_items": [
+                {"description": "Tea", "quantity": 2, "unit_price": 5.25, "total": 10.5},
+                {"description": None, "quantity": None, "unit_price": None, "total": None},
+            ],
+        },
+        ["total", "tax"],
+    )
+
+    assert record.prompt_version == "extract_v1"
+    assert record_lines(record) == [
+        ("vendor", "vendor: Acme"),
+        ("document_date", "date: 2026-01-01"),
+        ("currency", "currency: EUR"),
+        ("subtotal", "subtotal: 10.50"),
+        ("tax", "tax: not shown"),
+        ("total", "total: 12.00"),
+        ("line_items[0]", "line item: Tea, qty 2, unit price 5.25, line total 10.50"),
+        ("line_items[1]", "line item: item"),
+        ("review_status", "note: not yet human-reviewed and low-confidence: total, tax"),
+    ]
+
+
+def test_a_v2_record_without_the_new_fields_has_exactly_the_v1_lines() -> None:
+    fields = {"vendor": "Acme", "document_date": None, "currency": "USD", "total": 5}
+    v1 = DocumentRecord(uuid.uuid4(), "r.png", dict(fields), [])
+    # The v2 fields it lacks, whether absent or null, add no line.
+    v2 = DocumentRecord(
+        uuid.uuid4(),
+        "r.png",
+        {**fields, "invoice_number": None, "tax_lines": [], "discount": None},
+        [],
+        "extract_v2",
+    )
+
+    assert record_lines(v2) == record_lines(v1)
+
+
+async def test_a_v2_record_adds_a_line_for_each_v2_field_it_has(db_session: AsyncSession) -> None:
+    document_id, _, _ = await seed_v2(db_session)
+
+    (record,) = await load_records(db_session, [document_id])
+
+    assert record.prompt_version == "extract_v2"
+    assert record_lines(record) == [
+        ("vendor", "vendor: Acme Corp"),
+        ("document_date", "date: 2026-01-01"),
+        ("currency", "currency: USD"),
+        ("subtotal", "subtotal: 100.00"),
+        ("tax", "tax: 7.20"),
+        ("total", "total: 102.20"),
+        ("line_items[0]", "line item: Widget, qty 2, unit price 50.00, line total 100.00"),
+        ("invoice_number", "invoice_number: INV-0042"),
+        ("po_number", "po_number: PO-77"),
+        ("vendor_tax_id", "vendor_tax_id: 12-3456789"),
+        ("due_date", "due_date: 2026-01-31"),
+        ("payment_terms", "payment_terms: Net 30"),
+        ("payment_method", "payment_method: VISA"),
+        ("payment_card_last4", "payment_card_last4: 4242"),
+        ("discount", "discount: 10.00"),
+        ("shipping", "shipping: 5.00"),
+        ("tax_lines[0]", "tax line: State tax, rate 8%, base 90.00, amount 7.20"),
+        ("amount_paid", "amount_paid: 50.00"),
+        ("amount_due", "amount_due: 52.20"),
+    ]
+
+
+async def test_the_labeled_corpus_loads_as_v1_records(db_session: AsyncSession) -> None:
+    _, ids = await _seed(db_session)
+
+    records = await load_records(db_session, list(ids.values()))
+
+    assert {record.prompt_version for record in records} == {"extract_v1"}
 
 
 async def test_search_documents_returns_line_level_citable_results(
@@ -1036,3 +1122,26 @@ def test_ask_client_is_built_once_per_process(monkeypatch: pytest.MonkeyPatch) -
 
     assert first is second and built == [1]
     assert ask_module.get_anthropic_client(Settings(anthropic_api_key=None)) is None
+
+
+def test_a_tax_rate_prints_without_trailing_zeros() -> None:
+    record = DocumentRecord(
+        uuid.uuid4(),
+        "r.png",
+        {
+            "currency": "USD",
+            "tax_lines": [
+                {"label": "State", "rate": 8.0, "base": "90", "amount": 7.2},
+                {"label": "City", "rate": "8.875", "base": None, "amount": None},
+                {"label": None, "rate": "n/a", "base": None, "amount": None},
+            ],
+        },
+        [],
+        "extract_v2",
+    )
+
+    lines = dict(record_lines(record))
+
+    assert lines["tax_lines[0]"] == "tax line: State, rate 8%, base 90.00, amount 7.20"
+    assert lines["tax_lines[1]"] == "tax line: City, rate 8.875%"
+    assert lines["tax_lines[2]"] == "tax line: tax, rate n/a%"

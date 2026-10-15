@@ -56,7 +56,10 @@ async def seed_labeled_corpus(
         await session.flush()
         extraction = Extraction(
             document_id=document.id,
-            prompt_version="labels",
+            # The label is v1-shaped (see below), and readers pick a schema
+            # by prompt version, which must be a registered one; the model
+            # name marks the extraction as gold.
+            prompt_version=SCHEMA_V1.prompt_version,
             model=GOLD_MODEL,
             raw_response={},
             input_tokens=0,

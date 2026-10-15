@@ -44,6 +44,7 @@ from app.records import (
     minor_units_for,
     normalize_correction,
     precision_for,
+    schema_for_stored,
 )
 from app.review_routing import (
     failing_checks_for,
@@ -128,6 +129,7 @@ async def list_review_queue(
                     field.field_name,
                     field.value,
                     minor_units_for(currencies.get(extraction.id)),
+                    schema_for_stored(extraction.prompt_version),
                 ),
                 currency=currency_code(currencies.get(extraction.id)),
                 confidence=field.confidence,
@@ -189,6 +191,15 @@ async def resolve_field(
             detail="action 'correct' requires a corrected_value (null is allowed)",
         )
 
+    # Corrections and the served field follow the schema the field was
+    # extracted under.
+    prompt_version = (
+        await session.execute(
+            select(Extraction.prompt_version).where(Extraction.id == extraction_id)
+        )
+    ).scalar_one()
+    schema = schema_for_stored(prompt_version)
+
     corrected_value = None
     if payload.action == "correct":
         currency = (await currency_fields(session, [field.extraction_id])).get(
@@ -196,7 +207,7 @@ async def resolve_field(
         )
         try:
             corrected_value = normalize_correction(
-                field.field_name, payload.corrected_value, precision_for(currency)
+                field.field_name, payload.corrected_value, precision_for(currency), schema
             )
         except MoneyError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -220,4 +231,4 @@ async def resolve_field(
     currency = (await currency_fields(session, [field.extraction_id])).get(
         field.extraction_id
     )
-    return field_to_out(field, minor_units_for(currency))
+    return field_to_out(field, minor_units_for(currency), schema)

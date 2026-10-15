@@ -6,9 +6,9 @@ row plus one ExtractedField row per top-level field. This module is the
 real `process_document_job` handler wired into app.worker (see
 app/worker.py).
 
-Prompt versioning: the extraction prompt lives in prompts/extract_v1.md as
-a plain file, not inline in code, so future prompt iterations are versioned
-by filename (extract_v2.md, ...) and eval results can be tied to a specific
+Prompt versioning: the extraction prompts live in prompts/ (extract_v1.md,
+extract_v2.md) as plain files, not inline in code, so prompt iterations are
+versioned by filename and eval results can be tied to a specific
 prompt_version string. Each version has an ExtractionSchema
 (app/extraction_fields.py) holding its prompt, repair prompt, field list,
 and token budget; every function below that reads or writes extracted
@@ -41,6 +41,7 @@ from starlette.concurrency import run_in_threadpool
 from app.config import Settings, get_settings
 from app.extraction_fields import (
     ARRAY_CELLS,
+    EVIDENCE_QUOTE_MAX_CHARS,
     ExtractionSchema,
     record_extraction_tool,
     schema_for,
@@ -54,6 +55,7 @@ from app.models import (
     Job,
 )
 from app.pdf import count_pdf_pages, split_pdf_pages
+from app.pii import digits_of, mask_card_numbers, mask_digit_runs
 from app.telemetry import current_traceparent, model_call_span, record_model_response
 
 logger = logging.getLogger(__name__)
@@ -216,6 +218,180 @@ def _compute_cost_usd(model: str, input_tokens: int, output_tokens: int) -> floa
             f"no pricing entry for model {model!r}; add it to PRICING_PER_MTOK"
         ) from None
     return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+
+
+# No document has more pages than this; a page beyond it is junk, not a citation
+# (the extraction limits are far lower, see Settings.pdf_max_pages).
+MAX_EVIDENCE_PAGE = 10_000
+
+
+def _coerce_evidence(raw_leaf: Any) -> dict[str, Any] | None:
+    """The `{"page", "quote"}` evidence of one raw leaf, or None.
+
+    Evidence is untrusted like the rest of the leaf (see _coerce_leaf), and a
+    half-right citation is worse than none, so it is all or nothing: a dict
+    whose page is an int from 1 to MAX_EVIDENCE_PAGE (a bool is not a page) and whose quote
+    is text that is non-empty once stripped and at most EVIDENCE_QUOTE_MAX_CHARS
+    long is kept, with the quote stripped. Anything else, including a missing
+    key, becomes None. It reads only the "evidence" key: whether the leaf's
+    value and confidence are usable is _coerce_leaf's question.
+    """
+    if not isinstance(raw_leaf, dict):
+        return None
+    evidence = raw_leaf.get("evidence")
+    if not isinstance(evidence, dict):
+        return None
+    page = evidence.get("page")
+    quote = evidence.get("quote")
+    if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= MAX_EVIDENCE_PAGE:
+        return None
+    if not isinstance(quote, str):
+        return None
+    quote = quote.strip()
+    if not quote or len(quote) > EVIDENCE_QUOTE_MAX_CHARS:
+        return None
+    return {"page": page, "quote": quote}
+
+
+# --- PII: no more than the last four digits of a card or account number ------
+#
+# The prompt asks the model to write only the last four digits, but a prompt
+# is not a control, so the rule is enforced here on every tool_input before
+# anything stores or logs it (_extract_one_block and build_extracted_fields).
+# Review corrections get the same rule as a 422 (app/records.py).
+
+PAYMENT_CARD_FIELD = "payment_card_last4"
+PAYMENT_METHOD_FIELD = "payment_method"
+_PAYMENT_FIELDS = (PAYMENT_METHOD_FIELD, PAYMENT_CARD_FIELD)
+
+
+def _last_four_digits(value: Any) -> str | None:
+    """The last four digits of a payment_card_last4 value, or None when it has
+    fewer than four digits (or is not text or a number at all)."""
+    if isinstance(value, bool) or not isinstance(value, str | int):
+        return None
+    digits = digits_of(str(value))
+    return digits[-4:] if len(digits) >= 4 else None
+
+
+def _masked_payment_leaf(name: str, leaf: Any) -> dict[str, Any] | None:
+    """One payment leaf rebuilt from the keys it is allowed to have.
+
+    A payment leaf is the one place a card number is likely to be, so nothing
+    the model sent is carried over by default: `value` is text with its long
+    digit runs masked (payment_method) or the last four digits
+    (payment_card_last4), and anything else, a list or an object holding the
+    number, is null; `confidence` is kept only as a number; `evidence` is
+    checked as _coerce_evidence does, with its quote masked; every other key is
+    dropped. A leaf missing value or confidence stays missing it, so
+    _leaf_is_malformed still reports it. A leaf that is not an object is
+    dropped (None), which is the same violation as a bare scalar.
+    """
+    if not isinstance(leaf, dict):
+        return None
+    masked: dict[str, Any] = {}
+    if "value" in leaf:
+        value = leaf["value"]
+        if name == PAYMENT_CARD_FIELD:
+            masked["value"] = _last_four_digits(value)
+        else:
+            masked["value"] = mask_digit_runs(value) if isinstance(value, str) else None
+    if "confidence" in leaf:
+        try:
+            masked["confidence"] = float(leaf["confidence"])
+        except (TypeError, ValueError, OverflowError):
+            pass  # left out: the leaf then fails _leaf_is_malformed as before
+    if "evidence" in leaf:
+        evidence = _coerce_evidence(leaf)
+        if evidence is not None:
+            evidence = {**evidence, "quote": mask_digit_runs(evidence["quote"])}
+        masked["evidence"] = evidence
+    return masked
+
+
+def mask_payment_fields(tool_input: Any) -> Any:
+    """`tool_input` with the card number kept to its last four digits.
+
+    payment_card_last4 is cut to its last four digits (null when it holds
+    fewer), and any long digit run (see app/pii.py) in payment_method and in
+    either payment field's evidence quote becomes "****" plus its last four
+    ("VISA 4111 1111 1111 1111" becomes "VISA ****1111"). Both leaves are
+    rebuilt from allowed keys only (_masked_payment_leaf), so a number cannot
+    ride in an unexpected shape or key. Other fields are not touched here: an
+    invoice number may be sixteen digits long. Returns a new dict when a payment
+    field is present and the input itself when there is none (v1 has no payment
+    fields), so a caller can always use the result.
+    """
+    if not isinstance(tool_input, dict):
+        return tool_input
+    present = [name for name in _PAYMENT_FIELDS if name in tool_input]
+    if not present:
+        return tool_input
+    masked = dict(tool_input)
+    for name in present:
+        masked[name] = _masked_payment_leaf(name, tool_input[name])
+    return masked
+
+
+def _swept_evidence(evidence: Any) -> Any:
+    """An evidence object with a card number masked out of its quote. Rebuilt
+    as {page, quote}: a quote that is not text, or an extra key, could hold the
+    number, so neither is kept. None and a non-object (nothing usable, see
+    _coerce_evidence) become None."""
+    if not isinstance(evidence, dict):
+        return None
+    quote = evidence.get("quote")
+    return {
+        "page": evidence.get("page"),
+        "quote": mask_card_numbers(quote) if isinstance(quote, str) else None,
+    }
+
+
+def _swept_leaf(leaf: Any) -> Any:
+    """One leaf, and the cells of the rows its value holds when it is an array,
+    with card numbers masked out of their evidence quotes. A leaf with no
+    evidence key (v1) is returned as it is."""
+    if not isinstance(leaf, dict):
+        return leaf
+    swept = leaf
+    if "evidence" in leaf:
+        evidence = _swept_evidence(leaf["evidence"])
+        if evidence != leaf["evidence"]:
+            swept = {**swept, "evidence": evidence}
+    value = leaf.get("value")
+    if isinstance(value, list):
+        rows = [
+            {key: _swept_leaf(cell) for key, cell in row.items()} if isinstance(row, dict) else row
+            for row in value
+        ]
+        if rows != value:
+            swept = {**swept, "value": rows}
+    return swept
+
+
+def mask_evidence_quotes(tool_input: Any) -> Any:
+    """`tool_input` with each card number masked out of every evidence quote,
+    whatever the field.
+
+    A quote is the printed line a value came from, and the line that shows the
+    amount paid often shows the card as well ("VISA 4111 1111 1111 1111
+    APPROVED $50.00"). The rule is the Luhn-checked one (app/pii.py,
+    mask_card_numbers): a run of 13 to 19 digits that is a card number becomes
+    "****" plus its last four, and an order reference that is not one is left
+    alone. Quotes only, never values: a sixteen-digit invoice number stays
+    whole. Returns the input itself when nothing changes.
+    """
+    if not isinstance(tool_input, dict):
+        return tool_input
+    swept = {name: _swept_leaf(leaf) for name, leaf in tool_input.items()}
+    return swept if swept != tool_input else tool_input
+
+
+def mask_card_data(tool_input: Any) -> Any:
+    """Every card-number rule on one tool_input: the payment fields first
+    (mask_payment_fields), then the quote sweep (mask_evidence_quotes). Safe to
+    apply twice, and a no-op on a v1 tool_input."""
+    return mask_evidence_quotes(mask_payment_fields(tool_input))
 
 
 def _leaf_is_malformed(raw: Any) -> bool:
@@ -431,16 +607,20 @@ def _schema_violations(tool_input: dict[str, Any], schema: ExtractionSchema) -> 
     A violation path is bare `field_name` for a missing or malformed
     top-level leaf (missing and malformed collapse to the same path --
     a field can't be both), or `line_items.value[<idx>].<subfield>` for
-    a malformed/missing sub-leaf of one line item. Uses
+    a malformed/missing sub-leaf of one row of an array field (`tax_lines`
+    has its own cells, see ARRAY_CELLS). A leaf's evidence is never a
+    violation: a bad citation degrades to none (_coerce_evidence) and is not
+    worth a repair call. Uses
     _leaf_is_malformed as the single source of truth for "malformed" so
     this can never disagree with what _coerce_leaf actually rejects.
 
-    line_items is special-cased: if its OWN leaf is malformed, that's
-    the one violation for it and there's nothing to descend into (no
-    {"value": [...]} shape exists yet). Only when its leaf is
-    well-formed AND `value` is an actual list do we walk each item's
-    four sub-leaves; a non-dict item degrades to "every sub-leaf
-    missing" the same way _leaf_is_malformed(None) would.
+    An array field (line_items, tax_lines) is special-cased: if its OWN
+    leaf is malformed, that's the one violation for it and there's
+    nothing to descend into (no {"value": [...]} shape exists yet). Only
+    when its leaf is well-formed AND `value` is an actual list do we walk
+    each item's sub-leaves (ARRAY_CELLS lists them); a non-dict item
+    degrades to "every sub-leaf missing" the same way
+    _leaf_is_malformed(None) would.
 
     Returns the FULL, untruncated list -- callers use its true length for
     both the repair-acceptance comparison (extract_document: "strictly
@@ -762,7 +942,10 @@ async def _extract_one_block(
             ),
         )
 
-    tool_input = tool_use_block.input
+    # Masked before anything else sees it: the repair prompt below, the
+    # stored raw_response, the chunk provenance, and the eval artifacts are all
+    # built from tool_input, so none of them can hold a full card number.
+    tool_input = mask_card_data(tool_use_block.input)
     violations = _schema_violations(tool_input, schema)
     repaired = False
     total_input_tokens = response.usage.input_tokens
@@ -856,9 +1039,10 @@ async def _extract_one_block(
                     repair_response.stop_reason,
                 )
             else:
-                repair_violations = _schema_violations(repair_tool_use_block.input, schema)
+                repair_tool_input = mask_card_data(repair_tool_use_block.input)
+                repair_violations = _schema_violations(repair_tool_input, schema)
                 if len(repair_violations) < len(violations):
-                    tool_input = repair_tool_use_block.input
+                    tool_input = repair_tool_input
                     violations = repair_violations
                     repaired = True
                 else:
@@ -1069,6 +1253,31 @@ async def extract_document(
     )
 
 
+def _stored_leaf(raw: Any, schema: ExtractionSchema) -> dict[str, Any]:
+    """One scalar or cell leaf as stored: {value, confidence}, plus the
+    evidence when the schema's leaves carry it. A malformed leaf degrades to
+    nothing at all, evidence included (see _coerce_leaf)."""
+    value, confidence = _coerce_leaf(raw)
+    leaf: dict[str, Any] = {"value": value, "confidence": confidence}
+    if schema.evidence:
+        leaf["evidence"] = None if _leaf_is_malformed(raw) else _coerce_evidence(raw)
+    return leaf
+
+
+def _stored_array_rows(array_name: str, value: Any, schema: ExtractionSchema) -> list[dict[str, Any]]:
+    """The rows of an array field as stored under schema v2: every row has
+    every cell of ARRAY_CELLS, each a leaf of its own with its own evidence,
+    and a row or cell that is not usable is a null leaf rather than missing."""
+    rows = value if isinstance(value, list) else []
+    return [
+        {
+            cell: _stored_leaf(row.get(cell) if isinstance(row, dict) else None, schema)
+            for cell in ARRAY_CELLS[array_name]
+        }
+        for row in rows
+    ]
+
+
 def build_extracted_fields(
     extraction_id: uuid.UUID,
     tool_input: dict,
@@ -1080,7 +1289,18 @@ def build_extracted_fields(
     get needs_review with the reason "confidence" (the reconciliation can flag
     more afterwards, see app/review_routing.py). Shared by the worker and the demo seed so a replayed
     extraction is persisted exactly as a live one would be.
+
+    A schema without evidence (v1) stores the model's rows as they came; one
+    with evidence (v2) stores {value, confidence, evidence} leaves, and an
+    array's rows cell by cell (_stored_array_rows), the shape
+    reconcile.ReconcileInput.from_fields reads. An array's own evidence is not
+    kept: its cells carry the evidence that matters.
+
+    The tool_input goes through the card-number rule first (mask_card_data), so
+    every writer of fields (the worker, the demo seed, a replay) stores the same
+    masked data whether or not it came through _extract_one_block.
     """
+    tool_input = mask_card_data(tool_input)
     fields = []
     for field in schema.fields:
         value, confidence = _coerce_leaf(tool_input.get(field.name))
@@ -1090,7 +1310,12 @@ def build_extracted_fields(
             # lives in the confidence column below). Every other
             # field is a scalar leaf, so the reconstructed
             # {"value", "confidence"} object is stored.
-            field_value: Any = value if isinstance(value, list) else []
+            if schema.evidence:
+                field_value: Any = _stored_array_rows(field.name, value, schema)
+            else:
+                field_value = value if isinstance(value, list) else []
+        elif schema.evidence:
+            field_value = _stored_leaf(tool_input.get(field.name), schema)
         else:
             field_value = {"value": value, "confidence": confidence}
         low_confidence = confidence < review_threshold

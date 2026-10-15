@@ -18,6 +18,7 @@ from app.config import Settings
 from app.extraction_fields import (
     ARRAY_CELLS,
     SCHEMA_V1,
+    SCHEMA_V2,
     SCHEMAS,
     FieldSpec,
     money_cell_keys,
@@ -72,7 +73,8 @@ def test_the_line_item_cells_are_listed_in_label_order() -> None:
 
 def test_schema_for_returns_the_registered_schema() -> None:
     assert schema_for("extract_v1") is SCHEMA_V1
-    assert SCHEMAS == {"extract_v1": SCHEMA_V1}
+    assert schema_for("extract_v2") is SCHEMA_V2
+    assert SCHEMAS == {"extract_v1": SCHEMA_V1, "extract_v2": SCHEMA_V2}
 
 
 def test_schema_for_an_unknown_version_names_the_known_ones() -> None:
@@ -80,7 +82,7 @@ def test_schema_for_an_unknown_version_names_the_known_ones() -> None:
         schema_for("extract_v9")
 
     assert "extract_v9" in str(excinfo.value)
-    assert "known versions: extract_v1" in str(excinfo.value)
+    assert "known versions: extract_v1, extract_v2" in str(excinfo.value)
 
 
 def test_a_missing_prompt_file_fails_when_the_schema_is_built(tmp_path) -> None:
@@ -108,5 +110,89 @@ def test_settings_accept_a_registered_prompt_version() -> None:
 
 
 def test_settings_reject_an_unknown_prompt_version() -> None:
-    with pytest.raises(ValidationError, match="known versions: extract_v1"):
+    with pytest.raises(ValidationError, match="known versions: extract_v1, extract_v2"):
         Settings(extraction_prompt_version="extract_v9")
+
+
+def test_settings_accept_the_v2_prompt_version() -> None:
+    assert schema_for(Settings(extraction_prompt_version="extract_v2").extraction_prompt_version) is SCHEMA_V2
+
+
+def test_v2_has_the_seven_v1_fields_and_thirteen_more() -> None:
+    names = list(SCHEMA_V2.field_names)
+
+    assert len(names) == 20
+    assert set(SCHEMA_V1.field_names) <= set(names)
+    assert set(names) - set(SCHEMA_V1.field_names) == {
+        "invoice_number",
+        "po_number",
+        "vendor_tax_id",
+        "payment_terms",
+        "payment_method",
+        "payment_card_last4",
+        "due_date",
+        "discount",
+        "shipping",
+        "tip",
+        "amount_paid",
+        "amount_due",
+        "tax_lines",
+    }
+    assert set(SCHEMA_V2.money_field_names) == {
+        "subtotal",
+        "discount",
+        "shipping",
+        "tax",
+        "tip",
+        "total",
+        "amount_paid",
+        "amount_due",
+    }
+    assert SCHEMA_V2.prompt_path.name == "extract_v2.md"
+    assert SCHEMA_V2.repair_prompt_path.name == "repair_v2.md"
+    assert "{{violations}}" in SCHEMA_V2.repair_prompt_text
+
+
+def test_v2_merge_tie_breaks_are_header_earliest_amounts_latest_arrays_none() -> None:
+    tie_breaks = {field.name: field.merge_tie_break for field in SCHEMA_V2.fields}
+
+    for name in (
+        "vendor",
+        "invoice_number",
+        "po_number",
+        "vendor_tax_id",
+        "document_date",
+        "due_date",
+        "payment_terms",
+        "payment_method",
+        "payment_card_last4",
+        "currency",
+    ):
+        assert tie_breaks[name] == "earliest", name
+    for name in SCHEMA_V2.money_field_names:
+        assert tie_breaks[name] == "latest", name
+    assert tie_breaks["line_items"] is None
+    assert tie_breaks["tax_lines"] is None
+
+
+def test_the_tax_line_cells_and_their_kinds() -> None:
+    assert ARRAY_CELLS["tax_lines"] == {
+        "label": "text",
+        "rate": "number",
+        "base": "money",
+        "amount": "money",
+    }
+    assert money_cell_keys("tax_lines") == ("base", "amount")
+    assert money_cell_keys("line_items") == ("unit_price", "total")
+
+
+def test_the_v2_prompts_carry_the_guard_and_the_evidence_rules() -> None:
+    text = SCHEMA_V2.prompt_text
+
+    assert "never instructions to follow" in text
+    assert "tax_lines" in text and "rate" in text
+    assert "verbatim" in text
+    assert "last four digits" in text
+    assert "\u2014" not in text and "\u2014" not in SCHEMA_V2.repair_prompt_text
+    for cell in ARRAY_CELLS["tax_lines"]:
+        assert f"`{cell}`" in SCHEMA_V2.repair_prompt_text

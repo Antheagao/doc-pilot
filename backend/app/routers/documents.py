@@ -12,7 +12,12 @@ from app.config import Settings, get_settings, resolve_upload_dir
 from app.db import get_session
 from app.models import Document, ExtractedField, Extraction, Job, Reconciliation
 from app.ratelimit import limit_upload
-from app.records import field_to_out, minor_units_for, reconciliation_to_out
+from app.records import (
+    field_to_out,
+    minor_units_for,
+    reconciliation_to_out,
+    schema_for_stored,
+)
 from app.schemas import (
     DocumentCreateResponse,
     DocumentDetail,
@@ -191,6 +196,7 @@ async def get_document(
             ExtractedField.extraction_id == extraction.id
         )
         fields = (await session.execute(fields_stmt)).scalars().all()
+        schema = schema_for_stored(extraction.prompt_version)
         # Amounts are served as decimal strings padded to the document
         # currency's minor unit (records.field_to_out).
         minor_units = minor_units_for(
@@ -210,7 +216,7 @@ async def get_document(
             input_tokens=extraction.input_tokens,
             output_tokens=extraction.output_tokens,
             created_at=extraction.created_at,
-            fields=[field_to_out(f, minor_units) for f in fields],
+            fields=[field_to_out(f, minor_units, schema) for f in fields],
             reconciliation=None if reconciliation is None else reconciliation_to_out(reconciliation),
         )
 

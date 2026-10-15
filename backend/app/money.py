@@ -68,6 +68,11 @@ MAX_AMOUNT = Decimal(10) ** 12
 # a line's quantity times its unit price stays exact in `Decimal`.
 MAX_QUANTITY_DECIMALS = 6
 
+# Most decimal places a tax rate (a printed percent) may carry: 8.875 needs
+# three, and six keeps rate times base exact in `Decimal`.
+MAX_RATE_DECIMALS = 6
+MAX_RATE_PERCENT = Decimal(100)
+
 # Longest stretch of a rejected value echoed back in an error message.
 _ECHO_LIMIT = 80
 
@@ -272,6 +277,24 @@ def parse_quantity_input(raw: str | float) -> Decimal:
             f"{shown_value(raw)} is too large; quantities must be below {MAX_AMOUNT:,}."
         )
     return quantity
+
+
+def parse_rate_input(raw: str | float) -> Decimal:
+    """Parse a tax rate a person typed, or a client sent, as the printed
+    percent (`8.875` for 8.875%): at most MAX_RATE_DECIMALS decimal places and
+    between 0 and 100 inclusive. Not tied to a currency."""
+    rate = to_decimal(raw)
+    if not fits_minor_unit(rate, MAX_RATE_DECIMALS):
+        raise MoneyError(
+            f"{shown_value(raw)} has too many decimal places; "
+            f"rates allow at most {MAX_RATE_DECIMALS}."
+        )
+    if not 0 <= rate <= MAX_RATE_PERCENT:
+        raise MoneyError(
+            f"{shown_value(raw)} is not a rate between 0 and {MAX_RATE_PERCENT}; "
+            "write the printed percent, such as 8.875 for 8.875%."
+        )
+    return rate
 
 
 def to_label_number(d: Decimal) -> int | float:

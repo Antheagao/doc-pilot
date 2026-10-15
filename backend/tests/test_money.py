@@ -11,6 +11,7 @@ from app.money import (
     fits_minor_unit,
     parse_amount_input,
     parse_quantity_input,
+    parse_rate_input,
     printed_amounts,
     to_api_string,
     to_decimal,
@@ -381,3 +382,17 @@ def test_printed_amounts_keeps_every_digit() -> None:
         Decimal("0.000001"),
         Decimal("123456789012345678901234567890.123456"),
     )
+
+
+def test_parse_rate_input_takes_the_printed_percent() -> None:
+    assert parse_rate_input("8.875") == Decimal("8.875")
+    assert parse_rate_input(8) == Decimal(8)
+    assert parse_rate_input(" 0 ") == Decimal(0)
+    assert parse_rate_input("100") == Decimal(100)
+    assert parse_rate_input("0.123456") == Decimal("0.123456")
+
+
+@pytest.mark.parametrize("bad", ["100.000001", "-0.5", 101, "8.1234567", "8%", "", True, None, "NaN"])
+def test_parse_rate_input_refuses_what_is_not_a_percent(bad) -> None:
+    with pytest.raises(MoneyError):
+        parse_rate_input(bad)

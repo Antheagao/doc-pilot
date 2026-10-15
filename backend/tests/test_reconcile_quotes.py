@@ -6,12 +6,16 @@ they are stored (`from_fields`). The v1 behavior, with no evidence anywhere, is
 pinned by the golden fixture in test_reconcile.py. No database, no network.
 """
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from v2_samples import v2_tool_input
 
 from app.evals.dataset import load_cases
+from app.extraction import build_extracted_fields
+from app.extraction_fields import SCHEMA_V2
 from app.models import ExtractedField
 from app.reconcile import (
     KIND_QUOTE,
@@ -695,3 +699,66 @@ def test_faithful_quotes_never_flag_a_label_and_change_no_other_check(quote_of) 
         assert {c.status for c in quote_checks} == {STATUS_PASS}, case.doc_id
         assert [c for c in with_quotes.checks if c.kind != KIND_QUOTE] == list(without.checks), case.doc_id
         assert with_quotes.status == without.status == STATUS_PASS
+
+
+# ---- A persisted v2 extraction ------------------------------------------------
+
+
+def persisted(tool_input):
+    """The fields the worker stores for a v2 tool_input, as from_fields reads
+    them."""
+    return build_extracted_fields(uuid.uuid4(), tool_input, 0.8, SCHEMA_V2)
+
+
+def test_a_persisted_v2_extraction_reconciles_and_runs_the_quote_checks() -> None:
+    report = reconcile(ReconcileInput.from_fields(persisted(v2_tool_input())))
+
+    assert report.status == STATUS_PASS
+    quote_checks = [check for check in report.checks if check.kind == KIND_QUOTE]
+    assert {check.id for check in quote_checks} >= {
+        "quote:subtotal",
+        "quote:discount",
+        "quote:shipping",
+        "quote:tax",
+        "quote:total",
+        "quote:amount_paid",
+        "quote:amount_due",
+        "quote:tax_lines[0].amount",
+        "quote:line_items[0].total",
+    }
+    assert all(check.status == STATUS_PASS for check in quote_checks)
+    # The stored tax line reads back with its cells, so the tax checks ran too.
+    assert check_of(report, "tax_lines_sum").status == STATUS_PASS
+    assert check_of(report, "tax_line_math[0]").status == STATUS_PASS
+
+
+def test_a_persisted_and_a_direct_v2_input_reconcile_identically() -> None:
+    tool_input = v2_tool_input()
+
+    direct = reconcile(ReconcileInput.from_tool_input(tool_input))
+    stored_report = reconcile(ReconcileInput.from_fields(persisted(tool_input)))
+
+    assert report_to_json(stored_report) == report_to_json(direct)
+
+
+def test_a_persisted_v2_misread_is_caught_by_its_quote_and_by_the_arithmetic() -> None:
+    tool_input = v2_tool_input()
+    tool_input["tax_lines"]["value"][0]["amount"]["value"] = 7.9  # quote still says 7.20
+    tool_input["shipping"]["evidence"] = {"page": 1, "quote": "Shipping $6.00"}
+
+    report = reconcile(ReconcileInput.from_fields(persisted(tool_input)))
+
+    failing = failing_ids(report)
+    assert "quote:tax_lines[0].amount" in failing
+    assert "quote:shipping" in failing
+    assert "tax_lines_sum" in failing
+
+
+def test_a_persisted_leaf_whose_evidence_was_dropped_has_no_quote_check() -> None:
+    tool_input = v2_tool_input()
+    tool_input["subtotal"]["evidence"] = {"page": 0, "quote": "Subtotal $999.00"}  # dropped as bad
+
+    report = reconcile(ReconcileInput.from_fields(persisted(tool_input)))
+
+    assert check_of(report, "quote:subtotal").status == STATUS_SKIPPED
+    assert report.status == STATUS_PASS

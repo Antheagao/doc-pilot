@@ -32,8 +32,9 @@ from app.money import (
     currency_precision,
     to_api_string,
     to_decimal,
+    to_plain_string,
 )
-from app.records import DocumentRecord, load_records
+from app.records import DocumentRecord, load_records, schema_for_stored
 from app.retrieval.embeddings import Embedder
 from app.retrieval.search import search
 
@@ -232,6 +233,47 @@ def _money(value: Any, minor_units: int) -> str:
         return str(value)
 
 
+def _plain_number(value: Any) -> str:
+    """A rate or quantity without trailing zeros (8.0 prints as 8). A value that
+    is not a plain number is shown as it is stored."""
+    try:
+        return to_plain_string(to_decimal(value))
+    except MoneyError:
+        return str(value)
+
+
+def _tax_line_text(row: Any, minor_units: int) -> str:
+    """One tax line as a sentence part: its label, then the cells it has."""
+    cells = row if isinstance(row, dict) else {}
+    parts = [str(cells.get("label") or "tax")]
+    if cells.get("rate") is not None:
+        parts.append(f"rate {_plain_number(cells['rate'])}%")
+    if cells.get("base") is not None:
+        parts.append(f"base {_money(cells['base'], minor_units)}")
+    if cells.get("amount") is not None:
+        parts.append(f"amount {_money(cells['amount'], minor_units)}")
+    return ", ".join(parts)
+
+
+def _v2_lines(record: DocumentRecord, minor_units: int) -> list[tuple[str, str]]:
+    """(field, text) for each field the record's schema has beyond v1 that the
+    document actually carries: a v2 field that is absent adds no line, so the
+    lines of a v1 record are exactly the v1 lines."""
+    fields = record.fields
+    lines: list[tuple[str, str]] = []
+    for spec in schema_for_stored(record.prompt_version).fields:
+        if spec.name in SCHEMA_V1.field_names:
+            continue
+        value = fields.get(spec.name)
+        if spec.kind == "array":
+            for index, row in enumerate(value or []):
+                lines.append((f"{spec.name}[{index}]", "tax line: " + _tax_line_text(row, minor_units)))
+        elif value is not None:
+            shown = _money(value, minor_units) if spec.kind == "money" else value
+            lines.append((spec.name, f"{spec.name}: {shown}"))
+    return lines
+
+
 def record_lines(record: DocumentRecord) -> list[tuple[str, str]]:
     """(field, text) for each line of a record's search_result."""
     fields = record.fields
@@ -241,7 +283,8 @@ def record_lines(record: DocumentRecord) -> list[tuple[str, str]]:
         ("document_date", f"date: {fields.get('document_date') or 'unknown'}"),
         ("currency", f"currency: {fields.get('currency') or 'unknown'}"),
     ]
-    # A DocumentRecord does not carry its prompt version yet, so the lines follow the v1 field set.
+    # The v1 amounts are always listed ("not shown" when absent); the fields
+    # v2 adds are listed only when the document has them (_v2_lines).
     for name in SCHEMA_V1.money_field_names:
         value = fields.get(name)
         shown = _money(value, minor_units) if value is not None else "not shown"
@@ -255,6 +298,7 @@ def record_lines(record: DocumentRecord) -> list[tuple[str, str]]:
         if item.get("total") is not None:
             parts.append(f"line total {_money(item['total'], minor_units)}")
         lines.append((f"line_items[{index}]", "line item: " + ", ".join(parts)))
+    lines.extend(_v2_lines(record, minor_units))
     if record.unreviewed_low_confidence:
         lines.append(
             (
