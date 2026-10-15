@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.evals import dataset
 from app.evals.checks import reconcile_label
-from app.extraction import LINE_ITEM_MONEY_KEYS, MONEY_FIELDS, TOP_LEVEL_FIELDS
+from app.extraction_fields import SCHEMA_V1, money_cell_keys
 from app.models import Document, ExtractedField, Extraction
 from app.money import MoneyError, to_decimal, to_label_number
 from app.reconcile import STATUS_FAIL
@@ -65,7 +65,7 @@ _MIME_EXT = {
 
 # Quantities are numbers on a label too, and become canonical strings once a
 # reviewer can correct them.
-_LINE_ITEM_NUMBER_KEYS = ("quantity", *LINE_ITEM_MONEY_KEYS)
+_LINE_ITEM_NUMBER_KEYS = ("quantity", *money_cell_keys("line_items"))
 
 _DOC_ID_PREFIX_RE = re.compile(r"^(\d{3})-")
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9]+")
@@ -129,12 +129,13 @@ def _label_number(value: Any) -> Any:
 
 
 def _label_fields(by_name: dict[str, ExtractedField]) -> dict[str, Any]:
-    """The human-verified value of every top-level field, in label form."""
+    """The human-verified value of every top-level field, in label form. Labels
+    carry the v1 field set."""
     label_fields = {
         name: field_value(by_name[name]) if name in by_name else None
-        for name in TOP_LEVEL_FIELDS
+        for name in SCHEMA_V1.field_names
     }
-    for name in MONEY_FIELDS:
+    for name in SCHEMA_V1.money_field_names:
         label_fields[name] = _label_number(label_fields[name])
     if isinstance(label_fields["line_items"], list):
         # A row that is not an object (a typed correction can be any JSON

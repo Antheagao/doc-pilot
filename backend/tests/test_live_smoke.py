@@ -35,7 +35,8 @@ from app.config import get_settings
 from app.db import async_session_maker
 from app.evals.dataset import load_cases
 from app.evals.scoring import score_case
-from app.extraction import TOP_LEVEL_FIELDS, extract_document
+from app.extraction import extract_document
+from app.extraction_fields import SCHEMA_V1
 from app.models import Document, ExtractedField, Extraction, Job
 from app.worker import run_once
 
@@ -105,7 +106,7 @@ async def test_live_extract_document(live_budget) -> None:
     result = await extract_document(case.image_path, case.mime_type)
     live_budget(result.cost_usd)
 
-    assert all(field_name in result.tool_input for field_name in TOP_LEVEL_FIELDS)
+    assert all(field_name in result.tool_input for field_name in SCHEMA_V1.field_names)
     assert result.cost_usd > 0
     assert result.latency_ms > 0
     assert result.schema_violations == 0

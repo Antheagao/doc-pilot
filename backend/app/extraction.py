@@ -4,13 +4,15 @@ Reads a document image/PDF, asks Claude to call the `record_extraction`
 tool with structured field data, and persists the result as an Extraction
 row plus one ExtractedField row per top-level field. This module is the
 real `process_document_job` handler wired into app.worker (see
-app/worker.py) -- it replaces the T5 placeholder that raised
-NotImplementedError.
+app/worker.py).
 
 Prompt versioning: the extraction prompt lives in prompts/extract_v1.md as
 a plain file, not inline in code, so future prompt iterations are versioned
 by filename (extract_v2.md, ...) and eval results can be tied to a specific
-prompt_version string. See PROMPT_PATH / PROMPT_VERSION below.
+prompt_version string. Each version has an ExtractionSchema
+(app/extraction_fields.py) holding its prompt, repair prompt, field list,
+and token budget; every function below that reads or writes extracted
+fields takes the schema it is working with.
 
 Schema conformance is NOT guaranteed by tool_choice: forcing tool_choice
 to record_extraction guarantees the model returns *a* tool_use block for
@@ -37,6 +39,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings
+from app.extraction_fields import (
+    ARRAY_CELLS,
+    ExtractionSchema,
+    record_extraction_tool,
+    schema_for,
+)
 from app.models import (
     JOB_KIND_INDEX,
     REVIEW_REASON_CONFIDENCE,
@@ -47,28 +55,6 @@ from app.models import (
 )
 from app.pdf import count_pdf_pages, split_pdf_pages
 from app.telemetry import current_traceparent, model_call_span, record_model_response
-
-# The extraction prompt is a versioned file; the version string is derived
-# from its filename so a new prompt (extract_v2.md, ...) automatically
-# gets a distinct prompt_version without a separate constant to keep in
-# sync. Read once at import time (not per-call): it's a small, static
-# file that never changes at runtime, so there's no reason to reread and
-# no need for a lazy cache with its own invalidation questions.
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
-PROMPT_PATH = PROMPTS_DIR / "extract_v1.md"
-PROMPT_VERSION = PROMPT_PATH.stem
-PROMPT_TEXT = PROMPT_PATH.read_text(encoding="utf-8")
-
-# The schema-repair reprompt (see extract_document / _schema_violations)
-# is a separately versioned prompt for the same reason PROMPT_TEXT is:
-# eval results and repair-effectiveness metrics should be tied to which
-# repair wording was in effect. It contains a `{{violations}}`
-# placeholder substituted via str.replace, not str.format -- the prompt
-# text itself contains literal JSON braces (`{"value": ...}`) that
-# str.format would try (and fail) to interpret as replacement fields.
-REPAIR_PROMPT_PATH = PROMPTS_DIR / "repair_v1.md"
-REPAIR_PROMPT_VERSION = REPAIR_PROMPT_PATH.stem
-REPAIR_PROMPT_TEXT = REPAIR_PROMPT_PATH.read_text(encoding="utf-8")
 
 logger = logging.getLogger(__name__)
 
@@ -95,29 +81,6 @@ PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-4-8": (5.00, 25.00),
 }
-
-# The tool's top-level fields, in the order ExtractedField rows are
-# created. Kept as a module constant so process_document_job and tests
-# agree on the field set without repeating the literal list.
-TOP_LEVEL_FIELDS = (
-    "vendor",
-    "document_date",
-    "line_items",
-    "subtotal",
-    "tax",
-    "total",
-    "currency",
-)
-
-# The top-level fields that hold an amount, and the line-item cell keys that
-# do (quantity is a count, not money). Money parsing and formatting
-# (app/money.py) keys off these so no caller repeats the literals;
-# app/evals/dataset.py keeps its own copy to stay free of this module's imports.
-MONEY_FIELDS = ("subtotal", "tax", "total")
-LINE_ITEM_MONEY_KEYS = ("unit_price", "total")
-
-DEFAULT_MAX_TOKENS = 4096
-
 
 class ExtractionError(Exception):
     """Raised when the VLM call fails to produce a usable extraction.
@@ -185,63 +148,6 @@ class ModelRefusalError(NonRetryableExtractionError):
     but worker.fail_job marks the document "refused" instead of "failed"
     so the UI can tell the two apart.
     """
-
-
-def _leaf_schema(value_schema: dict[str, Any]) -> dict[str, Any]:
-    """A `{"value": <value_schema>, "confidence": number}` leaf, the shape
-    every extracted field (and line-item sub-field) uses per the prompt.
-    `minimum`/`maximum` on confidence are hints to the model, not an
-    enforced guarantee -- tool_choice does not validate input against
-    input_schema, so _coerce_leaf still has to clamp defensively.
-    """
-    return {
-        "type": "object",
-        "properties": {
-            "value": value_schema,
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        },
-        "required": ["value", "confidence"],
-    }
-
-
-_STRING_OR_NULL = {"type": ["string", "null"]}
-_NUMBER_OR_NULL = {"type": ["number", "null"]}
-
-_LINE_ITEM_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "description": _leaf_schema(_STRING_OR_NULL),
-        "quantity": _leaf_schema(_NUMBER_OR_NULL),
-        "unit_price": _leaf_schema(_NUMBER_OR_NULL),
-        "total": _leaf_schema(_NUMBER_OR_NULL),
-    },
-    "required": ["description", "quantity", "unit_price", "total"],
-}
-
-# The extraction tool. tool_choice forces the model to call this (see
-# extract_document), so a tool_use block is guaranteed -- but its input
-# is not guaranteed to match this schema (see module docstring), so
-# every consumer of tool_input must go through _coerce_leaf.
-RECORD_EXTRACTION_TOOL: dict[str, Any] = {
-    "name": "record_extraction",
-    "description": (
-        "Record the structured data extracted from the receipt/invoice "
-        "document, with a per-field confidence score."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "vendor": _leaf_schema(_STRING_OR_NULL),
-            "document_date": _leaf_schema(_STRING_OR_NULL),
-            "line_items": _leaf_schema({"type": "array", "items": _LINE_ITEM_SCHEMA}),
-            "subtotal": _leaf_schema(_NUMBER_OR_NULL),
-            "tax": _leaf_schema(_NUMBER_OR_NULL),
-            "total": _leaf_schema(_NUMBER_OR_NULL),
-            "currency": _leaf_schema(_STRING_OR_NULL),
-        },
-        "required": list(TOP_LEVEL_FIELDS),
-    },
-}
 
 
 @dataclass
@@ -375,13 +281,6 @@ def _coerce_leaf(raw: Any) -> tuple[Any, float]:
 # human reviewer even if one page reported very high confidence.
 MERGE_CONFLICT_CONFIDENCE = 0.5
 
-# Header-ish fields: ties in confidence break to the EARLIEST page
-# (the header of a multi-page document is expected up front).
-_MERGE_TIE_BREAK_EARLIEST = ("vendor", "document_date", "currency")
-# Money fields: ties in confidence break to the LATEST page (totals
-# conventionally print at the end of a multi-page invoice).
-_MERGE_TIE_BREAK_LATEST = MONEY_FIELDS
-
 
 def _values_disagree(a: Any, b: Any) -> bool:
     """True iff two non-null candidate leaf values for the same scalar
@@ -466,17 +365,19 @@ def _merge_line_items(page_line_items: list[tuple[Any, float]]) -> dict[str, Any
     return {"value": concatenated, "confidence": min(contributing_confidences)}
 
 
-def merge_page_tool_inputs(page_inputs: list[dict[str, Any]]) -> dict[str, Any]:
+def merge_page_tool_inputs(
+    page_inputs: list[dict[str, Any]], schema: ExtractionSchema
+) -> dict[str, Any]:
     """Merge a list of per-page tool_input dicts (one per PDF page, in
-    page order, each shaped like a single-call RECORD_EXTRACTION_TOOL
-    response) into ONE tool_input identical in SHAPE to a single-call
-    one -- so downstream persistence (process_document_job), scoring
-    (_coerce_leaf-based eval scoring), and this module's own
+    page order, each shaped like a single-call response to the schema's
+    extraction tool) into ONE tool_input identical in SHAPE to a
+    single-call one -- so downstream persistence (process_document_job),
+    scoring (_coerce_leaf-based eval scoring), and this module's own
     _coerce_leaf are all untouched by chunking. See _merge_scalar_leaf
-    and _merge_line_items for the field-by-field merge rules (header
-    fields tie-break earliest, money fields tie-break latest,
-    all-null uses min confidence, disagreement caps confidence at
-    MERGE_CONFLICT_CONFIDENCE).
+    and _merge_line_items for the field-by-field merge rules (each
+    scalar field's FieldSpec.merge_tie_break says whether ties go to the
+    earliest or the latest page, all-null uses min confidence,
+    disagreement caps confidence at MERGE_CONFLICT_CONFIDENCE).
 
     Every page's tool_input is untrusted the same way a single
     response's is (see the module docstring / _coerce_leaf): a
@@ -484,14 +385,17 @@ def merge_page_tool_inputs(page_inputs: list[dict[str, Any]]) -> dict[str, Any]:
     degrades that page's contribution to (None, 0.0) via _coerce_leaf
     rather than raising.
     """
-    line_item_candidates: list[tuple[Any, float]] = []
+    array_candidates: dict[str, list[tuple[Any, float]]] = {
+        field.name: [] for field in schema.fields if field.kind == "array"
+    }
     scalar_candidates: dict[str, list[tuple[int, Any, float]]] = {
-        field_name: [] for field_name in TOP_LEVEL_FIELDS if field_name != "line_items"
+        field.name: [] for field in schema.fields if field.kind != "array"
     }
 
     for page_idx, page_input in enumerate(page_inputs):
-        raw_line_items = page_input.get("line_items") if isinstance(page_input, dict) else None
-        line_item_candidates.append(_coerce_leaf(raw_line_items))
+        for field_name, array_field_candidates in array_candidates.items():
+            raw_array = page_input.get(field_name) if isinstance(page_input, dict) else None
+            array_field_candidates.append(_coerce_leaf(raw_array))
 
         for field_name, candidates in scalar_candidates.items():
             raw_leaf = page_input.get(field_name) if isinstance(page_input, dict) else None
@@ -499,19 +403,17 @@ def merge_page_tool_inputs(page_inputs: list[dict[str, Any]]) -> dict[str, Any]:
             candidates.append((page_idx, value, confidence))
 
     merged: dict[str, Any] = {}
-    for field_name in TOP_LEVEL_FIELDS:
-        if field_name == "line_items":
-            merged[field_name] = _merge_line_items(line_item_candidates)
-        elif field_name in _MERGE_TIE_BREAK_EARLIEST:
-            merged[field_name] = _merge_scalar_leaf(scalar_candidates[field_name], tie_break="earliest")
+    for field in schema.fields:
+        if field.kind == "array":
+            merged[field.name] = _merge_line_items(array_candidates[field.name])
         else:
-            assert field_name in _MERGE_TIE_BREAK_LATEST  # every non-line_items field is one or the other
-            merged[field_name] = _merge_scalar_leaf(scalar_candidates[field_name], tie_break="latest")
+            assert field.merge_tie_break is not None  # every scalar field has one
+            merged[field.name] = _merge_scalar_leaf(
+                scalar_candidates[field.name], tie_break=field.merge_tie_break
+            )
 
     return merged
 
-
-_LINE_ITEM_SUBFIELDS = ("description", "quantity", "unit_price", "total")
 
 # _schema_violations truncates its result to this many dotted-path
 # entries (plus one trailing summary entry) so a response that's
@@ -522,9 +424,9 @@ MAX_SCHEMA_VIOLATIONS = 20
 _MISSING = object()
 
 
-def _schema_violations(tool_input: dict[str, Any]) -> list[str]:
-    """Enumerate dotted-path violations of RECORD_EXTRACTION_TOOL's
-    schema in `tool_input`, the model's untrusted tool_use.input.
+def _schema_violations(tool_input: dict[str, Any], schema: ExtractionSchema) -> list[str]:
+    """Enumerate dotted-path violations of the schema's extraction tool
+    in `tool_input`, the model's untrusted tool_use.input.
 
     A violation path is bare `field_name` for a missing or malformed
     top-level leaf (missing and malformed collapse to the same path --
@@ -553,29 +455,29 @@ def _schema_violations(tool_input: dict[str, Any]) -> list[str]:
     `tool_input` is untrusted the same way every leaf is: a non-dict
     tool_input (the model returning something other than an object at
     all) degrades to "every top-level field missing" rather than raising
-    -- one violation per TOP_LEVEL_FIELDS entry -- so this is always safe
+    -- one violation per schema field -- so this is always safe
     to call on a raw tool_use.input without an isinstance guard at the
     call site.
     """
     if not isinstance(tool_input, dict):
-        return list(TOP_LEVEL_FIELDS)
+        return list(schema.field_names)
 
     violations: list[str] = []
 
-    for field_name in TOP_LEVEL_FIELDS:
-        raw = tool_input.get(field_name, _MISSING)
+    for field in schema.fields:
+        raw = tool_input.get(field.name, _MISSING)
         if raw is _MISSING or _leaf_is_malformed(raw):
-            violations.append(field_name)
+            violations.append(field.name)
             continue
 
-        if field_name == "line_items":
+        if field.kind == "array":
             items = raw["value"]
             if isinstance(items, list):
                 for idx, item in enumerate(items):
                     item_dict = item if isinstance(item, dict) else {}
-                    for sub_field in _LINE_ITEM_SUBFIELDS:
+                    for sub_field in ARRAY_CELLS[field.name]:
                         if _leaf_is_malformed(item_dict.get(sub_field)):
-                            violations.append(f"line_items.value[{idx}].{sub_field}")
+                            violations.append(f"{field.name}.value[{idx}].{sub_field}")
 
     return violations
 
@@ -770,7 +672,10 @@ class _PageResult:
 
 
 async def _extract_one_block(
-    client: anthropic.AsyncAnthropic, settings: Settings, document_block: dict[str, Any]
+    client: anthropic.AsyncAnthropic,
+    settings: Settings,
+    document_block: dict[str, Any],
+    schema: ExtractionSchema,
 ) -> _PageResult:
     """Send ONE document content block (a whole image/PDF for the
     single-call path, or a single PDF page for the H6 chunked path)
@@ -794,16 +699,18 @@ async def _extract_one_block(
         ],
     }
 
+    tool = record_extraction_tool(schema)
+
     start = time.perf_counter()
     with model_call_span(
-        settings.extraction_model, max_tokens=DEFAULT_MAX_TOKENS, prompt_version=PROMPT_VERSION
+        settings.extraction_model, max_tokens=schema.max_tokens, prompt_version=schema.prompt_version
     ) as span:
         try:
             response = await client.messages.create(
                 model=settings.extraction_model,
-                max_tokens=DEFAULT_MAX_TOKENS,
-                system=PROMPT_TEXT,
-                tools=[RECORD_EXTRACTION_TOOL],
+                max_tokens=schema.max_tokens,
+                system=schema.prompt_text,
+                tools=[tool],
                 tool_choice={"type": "tool", "name": "record_extraction"},
                 messages=[user_message],
             )
@@ -856,13 +763,13 @@ async def _extract_one_block(
         )
 
     tool_input = tool_use_block.input
-    violations = _schema_violations(tool_input)
+    violations = _schema_violations(tool_input, schema)
     repaired = False
     total_input_tokens = response.usage.input_tokens
     total_output_tokens = response.usage.output_tokens
 
     # Schema-repair reprompt: tool_choice guarantees *a* tool_use block,
-    # not one that matches RECORD_EXTRACTION_TOOL's schema (see module
+    # not one that matches the schema's extraction tool (see module
     # docstring). If the first response violated it, make exactly one
     # additional call asking the model to fix only the structure. The
     # repair call's cost is billed regardless of whether it's accepted
@@ -872,20 +779,20 @@ async def _extract_one_block(
     # tool_use block from the repair call just falls back to the first
     # response.
     if violations and settings.schema_repair:
-        repair_text = REPAIR_PROMPT_TEXT.replace(
+        repair_text = schema.repair_prompt_text.replace(
             "{{violations}}", _format_violations_for_prompt(violations)
         )
         try:
             with model_call_span(
                 settings.extraction_model,
-                max_tokens=DEFAULT_MAX_TOKENS,
-                prompt_version=REPAIR_PROMPT_VERSION,
+                max_tokens=schema.max_tokens,
+                prompt_version=schema.repair_prompt_version,
             ) as repair_span:
                 repair_response = await client.messages.create(
                     model=settings.extraction_model,
-                    max_tokens=DEFAULT_MAX_TOKENS,
-                    system=PROMPT_TEXT,
-                    tools=[RECORD_EXTRACTION_TOOL],
+                    max_tokens=schema.max_tokens,
+                    system=schema.prompt_text,
+                    tools=[tool],
                     tool_choice={"type": "tool", "name": "record_extraction"},
                     messages=[
                         user_message,
@@ -949,7 +856,7 @@ async def _extract_one_block(
                     repair_response.stop_reason,
                 )
             else:
-                repair_violations = _schema_violations(repair_tool_use_block.input)
+                repair_violations = _schema_violations(repair_tool_use_block.input, schema)
                 if len(repair_violations) < len(violations):
                     tool_input = repair_tool_use_block.input
                     violations = repair_violations
@@ -975,7 +882,7 @@ async def _extract_one_block(
 
 
 async def _extract_chunked_pdf(
-    raw_bytes: bytes, settings: Settings
+    raw_bytes: bytes, settings: Settings, schema: ExtractionSchema
 ) -> ExtractionResult:
     """The H6 chunked-PDF path: settings.pdf_max_pages_per_call < page
     count <= settings.pdf_max_pages. Split the PDF into one single-page
@@ -986,8 +893,8 @@ async def _extract_chunked_pdf(
     per-page tool_inputs (merge_page_tool_inputs) into one tool_input
     shape-identical to a single-call extraction's, plus a `_chunks`
     provenance list keyed by page number (see process_document_job:
-    raw_response is this tool_input verbatim, and its TOP_LEVEL_FIELDS
-    iteration ignores the extra `_chunks` key, so persistence and eval
+    raw_response is this tool_input verbatim, and its per-field
+    iteration over the schema ignores the extra `_chunks` key, so persistence and eval
     scoring are untouched by it).
 
     If any page's _extract_one_block call raises, the tokens/cost
@@ -1017,7 +924,7 @@ async def _extract_chunked_pdf(
     for page_num, page_pdf_bytes in enumerate(page_pdfs, start=1):
         document_block = _encode_document_block(page_pdf_bytes, PDF_MIME_TYPE, "document")
         try:
-            page_result = await _extract_one_block(client, settings, document_block)
+            page_result = await _extract_one_block(client, settings, document_block, schema)
         except ExtractionError as exc:
             exc.input_tokens = total_input_tokens + (exc.input_tokens or 0)
             exc.output_tokens = total_output_tokens + (exc.output_tokens or 0)
@@ -1048,13 +955,13 @@ async def _extract_chunked_pdf(
         total_schema_violations += page_result.schema_violations
         any_repaired = any_repaired or page_result.repaired
 
-    merged_tool_input = merge_page_tool_inputs(page_inputs)
+    merged_tool_input = merge_page_tool_inputs(page_inputs, schema)
     merged_tool_input["_chunks"] = chunks
 
     return ExtractionResult(
         tool_input=merged_tool_input,
         model=settings.extraction_model,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=schema.prompt_version,
         input_tokens=total_input_tokens,
         output_tokens=total_output_tokens,
         cost_usd=_compute_cost_usd(
@@ -1066,9 +973,13 @@ async def _extract_chunked_pdf(
     )
 
 
-async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult:
+async def extract_document(
+    path: str | Path, mime_type: str, *, schema: ExtractionSchema | None = None
+) -> ExtractionResult:
     """Call Claude with the extraction tool forced, and return the parsed
-    result. Dispatches to one of three paths based on document type and
+    result. `schema` is the extraction schema to ask for (default: the one
+    named by settings.extraction_prompt_version), and the result records
+    its prompt_version. Dispatches to one of three paths based on document type and
     (for PDFs) page count -- see the H6 task notes for the full design:
 
     - Images, and PDFs with page count <= settings.pdf_max_pages_per_call
@@ -1103,6 +1014,8 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
     app.pdf.split_pdf_pages.
     """
     settings = get_settings()
+    if schema is None:
+        schema = schema_for(settings.extraction_prompt_version)
     _ensure_model_priced(settings.extraction_model)
 
     path = Path(path)
@@ -1132,19 +1045,19 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
             )
 
         if page_count > settings.pdf_max_pages_per_call:
-            return await _extract_chunked_pdf(raw_bytes, settings)
+            return await _extract_chunked_pdf(raw_bytes, settings, schema)
 
         document_block = _encode_document_block(raw_bytes, mime_type, "document")
     else:
         document_block = await _build_document_block(path, mime_type)
 
     client = _build_client(settings)
-    page_result = await _extract_one_block(client, settings, document_block)
+    page_result = await _extract_one_block(client, settings, document_block, schema)
 
     return ExtractionResult(
         tool_input=page_result.tool_input,
         model=settings.extraction_model,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=schema.prompt_version,
         input_tokens=page_result.input_tokens,
         output_tokens=page_result.output_tokens,
         cost_usd=_compute_cost_usd(
@@ -1157,19 +1070,22 @@ async def extract_document(path: str | Path, mime_type: str) -> ExtractionResult
 
 
 def build_extracted_fields(
-    extraction_id: uuid.UUID, tool_input: dict, review_threshold: float
+    extraction_id: uuid.UUID,
+    tool_input: dict,
+    review_threshold: float,
+    schema: ExtractionSchema,
 ) -> list[ExtractedField]:
-    """One ExtractedField per TOP_LEVEL_FIELDS entry, read defensively out of
+    """One ExtractedField per schema field, read defensively out of
     the model's tool_input (see _coerce_leaf); fields under review_threshold
     get needs_review with the reason "confidence" (the reconciliation can flag
     more afterwards, see app/review_routing.py). Shared by the worker and the demo seed so a replayed
     extraction is persisted exactly as a live one would be.
     """
     fields = []
-    for field_name in TOP_LEVEL_FIELDS:
-        value, confidence = _coerce_leaf(tool_input.get(field_name))
-        if field_name == "line_items":
-            # line_items is an array field: store the array itself as
+    for field in schema.fields:
+        value, confidence = _coerce_leaf(tool_input.get(field.name))
+        if field.kind == "array":
+            # An array field (line_items): store the array itself as
             # the ExtractedField value (its own confidence already
             # lives in the confidence column below). Every other
             # field is a scalar leaf, so the reconstructed
@@ -1181,7 +1097,7 @@ def build_extracted_fields(
         fields.append(
             ExtractedField(
                 extraction_id=extraction_id,
-                field_name=field_name,
+                field_name=field.name,
                 value=field_value,
                 confidence=confidence,
                 needs_review=low_confidence,
@@ -1225,6 +1141,7 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
 
     await session.rollback()
 
+    settings = get_settings()
     result = await extract_document(storage_path, mime_type)
 
     # rollback() expires every attribute on every object in the session,
@@ -1248,9 +1165,13 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
         await session.flush()  # assigns extraction.id without committing
 
         extraction_id = extraction.id
-        settings = get_settings()
         session.add_all(
-            build_extracted_fields(extraction_id, result.tool_input, settings.review_threshold)
+            build_extracted_fields(
+                extraction_id,
+                result.tool_input,
+                settings.review_threshold,
+                schema_for(result.prompt_version),
+            )
         )
         await session.flush()
 

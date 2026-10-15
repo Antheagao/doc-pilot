@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import BACKEND_DIR, Settings
 from app.extraction import build_extracted_fields
+from app.extraction_fields import SCHEMA_V1
 from app.models import Document, ExtractedField, Extraction, Reconciliation
 
 
@@ -71,7 +72,7 @@ async def _seed_unreconciled(db_session: AsyncSession, filename: str) -> uuid.UU
     )
     db_session.add(extraction)
     await db_session.flush()
-    db_session.add_all(build_extracted_fields(extraction.id, tool_input, 0.8))
+    db_session.add_all(build_extracted_fields(extraction.id, tool_input, 0.8, SCHEMA_V1))
     await db_session.flush()
     return extraction.id
 

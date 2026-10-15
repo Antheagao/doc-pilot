@@ -30,6 +30,7 @@ from app.evals.checks import (
     run_mutation_eval,
 )
 from app.evals.dataset import EVALS_DIR, load_cases
+from app.extraction_fields import SCHEMA_V1
 from app.reconcile import RULES_VERSION
 from app.review_routing import Routing
 
@@ -71,7 +72,7 @@ def _caught_fields(run: dict) -> set[tuple[str, str]]:
     """The (doc_id, field) pairs of incorrect fields a failing check flagged."""
     caught = set()
     for doc in run["per_doc"]:
-        routing = doc_routing(doc, run["review_threshold"])
+        routing = doc_routing(doc, run["review_threshold"], SCHEMA_V1)
         for name, field in doc["fields"].items():
             if not field["correct"] and flagged_by_checks(routing[name]):
                 caught.add((doc["doc_id"], name))
@@ -112,6 +113,7 @@ class TestCheckMetrics:
         routing = doc_routing(
             next(d for d in run["per_doc"] if d["doc_id"].startswith("019-")),
             run["review_threshold"],
+            SCHEMA_V1,
         )
 
         assert routing["tax"].review_reason is None
@@ -164,7 +166,7 @@ class TestCheckMetrics:
 
         check_metrics(run)
         for doc in run["per_doc"]:
-            doc_routing(doc, run["review_threshold"])
+            doc_routing(doc, run["review_threshold"], SCHEMA_V1)
 
         assert run == snapshot
         assert path.read_bytes() == before_bytes
@@ -185,7 +187,7 @@ class TestReplay:
         assert tool_input["line_items"]["value"][0]["quantity"] == {"value": 2, "confidence": 0.7}
 
     def test_a_low_confidence_field_with_a_passing_document_is_not_flagged_by_checks(self):
-        report, routing = replay(label_tool_input(load_cases()[0].fields, 0.1), 0.8)
+        report, routing = replay(label_tool_input(load_cases()[0].fields, 0.1), 0.8, SCHEMA_V1)
 
         assert report.status != "fail"
         assert routing["vendor"] == Routing(True, "confidence")

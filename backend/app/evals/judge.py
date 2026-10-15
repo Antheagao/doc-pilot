@@ -37,11 +37,11 @@ from app.agent.tools import extraction_summary, record_lines
 from app.config import Settings
 from app.evals.dataset import EVALS_DIR, EvalCase
 from app.extraction import (
-    PROMPTS_DIR,
     _build_client,
     _classify_api_error,
     _ensure_model_priced,
 )
+from app.extraction_fields import PROMPTS_DIR
 from app.langfuse_link import observation_attributes
 from app.records import DocumentRecord
 from app.telemetry import (

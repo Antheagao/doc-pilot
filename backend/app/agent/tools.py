@@ -24,7 +24,7 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.extraction import MONEY_FIELDS
+from app.extraction_fields import SCHEMA_V1
 from app.models import Document, DocumentPage
 from app.money import (
     MAX_AMOUNT,
@@ -241,7 +241,8 @@ def record_lines(record: DocumentRecord) -> list[tuple[str, str]]:
         ("document_date", f"date: {fields.get('document_date') or 'unknown'}"),
         ("currency", f"currency: {fields.get('currency') or 'unknown'}"),
     ]
-    for name in MONEY_FIELDS:
+    # A DocumentRecord does not carry its prompt version yet, so the lines follow the v1 field set.
+    for name in SCHEMA_V1.money_field_names:
         value = fields.get(name)
         shown = _money(value, minor_units) if value is not None else "not shown"
         lines.append((name, f"{name}: {shown}"))

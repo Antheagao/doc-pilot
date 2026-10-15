@@ -34,7 +34,7 @@ from app.demo_seed import (
     reset_demo_data,
     seed_demo_data,
 )
-from app.extraction import TOP_LEVEL_FIELDS
+from app.extraction_fields import SCHEMA_V1
 from app.models import (
     Document,
     DocumentPage,
@@ -95,7 +95,7 @@ async def test_seeds_every_replayed_document_with_all_fields(
         )
     ).all()
     assert len(rows) == 25
-    assert {count for _, count in rows} == {len(TOP_LEVEL_FIELDS)} == {7}
+    assert {count for _, count in rows} == {len(SCHEMA_V1.field_names)} == {7}
 
 
 async def test_extraction_replays_the_artifact_with_provenance(
@@ -114,13 +114,13 @@ async def test_extraction_replays_the_artifact_with_provenance(
     assert extraction.latency_ms == entry["latency_ms"]
     assert (extraction.input_tokens, extraction.output_tokens) == (entry["input_tokens"], entry["output_tokens"])
     # Exactly the 7 model leaves plus the provenance key.
-    assert set(extraction.raw_response) == {*TOP_LEVEL_FIELDS, "_demo_replay"}
+    assert set(extraction.raw_response) == {*SCHEMA_V1.field_names, "_demo_replay"}
     assert extraction.raw_response["_demo_replay"] == {
         "artifact": REPLAY_ARTIFACT.name,
         "doc_id": entry["doc_id"],
         "staged": {},
     }
-    for name in TOP_LEVEL_FIELDS:
+    for name in SCHEMA_V1.field_names:
         assert extraction.raw_response[name] == {
             "value": entry["fields"][name]["actual"],
             "confidence": entry["fields"][name]["confidence"],

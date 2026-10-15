@@ -22,7 +22,7 @@ The Rust and sqlx sections of the global guide do not apply; their Python and Al
 
 ## Backend
 
-- `app/` modules: `main.py`, `config.py`, `db.py`, `models.py`, `schemas.py`, `worker.py`, `extraction.py`, `transcription.py`, `pdf.py`, `records.py`, `budget.py`, `ratelimit.py`, `telemetry.py`, `langfuse_link.py`.
+- `app/` modules: `main.py`, `config.py`, `db.py`, `models.py`, `schemas.py`, `worker.py`, `extraction.py`, `extraction_fields.py`, `transcription.py`, `pdf.py`, `records.py`, `budget.py`, `ratelimit.py`, `telemetry.py`, `langfuse_link.py`.
 - Packages: `routers/` (one file per resource), `retrieval/`, `agent/` (`loop.py`, `tools.py`), `evals/` (the logic the `evals/*.py` CLIs import).
 - All Pydantic request and response models live in `app/schemas.py`, and all ORM models in `app/models.py`.
 - Prompts: `backend/prompts/<name>_v<N>.md` (`extract_v1`, `repair_v1`, `transcribe_v1`, `agent_v1`, `document_chat_v1`, `judge_v1`, `groundedness_v1`).

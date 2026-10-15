@@ -12,10 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import extraction as extraction_module
 from app.config import Settings
 from app.extraction import (
-    PROMPT_TEXT,
-    PROMPT_VERSION,
-    RECORD_EXTRACTION_TOOL,
-    TOP_LEVEL_FIELDS,
     ExtractionError,
     ExtractionResult,
     ModelRefusalError,
@@ -27,6 +23,7 @@ from app.extraction import (
     extract_document,
     process_document_job,
 )
+from app.extraction_fields import SCHEMA_V1, record_extraction_tool
 from app.models import Document, ExtractedField, Extraction, Job, Reconciliation
 from app.review_routing import Routing
 
@@ -230,7 +227,7 @@ async def test_process_document_job_persists_extraction_and_fields(
         .scalars()
         .one()
     )
-    assert extraction.prompt_version == PROMPT_VERSION
+    assert extraction.prompt_version == SCHEMA_V1.prompt_version
     assert extraction.model == "claude-sonnet-5"
     assert extraction.input_tokens == 1000
     assert extraction.output_tokens == 500
@@ -250,7 +247,7 @@ async def test_process_document_job_persists_extraction_and_fields(
         .all()
     )
     by_name = {f.field_name: f for f in fields}
-    assert set(by_name) == set(TOP_LEVEL_FIELDS)
+    assert set(by_name) == set(SCHEMA_V1.field_names)
 
     # Scalar leaves store the whole {"value", "confidence"} object.
     assert by_name["vendor"].value == REALISTIC_TOOL_INPUT["vendor"]
@@ -298,8 +295,8 @@ async def test_messages_create_called_with_expected_request_shape(
     kwargs = fake_client.messages.create.await_args.kwargs
     assert kwargs["model"] == "claude-sonnet-5"
     assert kwargs["tool_choice"] == {"type": "tool", "name": "record_extraction"}
-    assert kwargs["tools"] == [RECORD_EXTRACTION_TOOL]
-    assert kwargs["system"] == PROMPT_TEXT
+    assert kwargs["tools"] == [record_extraction_tool(SCHEMA_V1)]
+    assert kwargs["system"] == SCHEMA_V1.prompt_text
 
     content = kwargs["messages"][0]["content"]
     assert content[0]["type"] == "image"
@@ -842,7 +839,7 @@ async def test_repair_reprompt_rejected_when_not_strictly_better(
     assert fake_client.messages.create.await_count == 2
     assert result.tool_input == _MALFORMED_TOOL_INPUT
     assert result.repaired is False
-    assert result.schema_violations == len(_schema_violations(_MALFORMED_TOOL_INPUT))
+    assert result.schema_violations == len(_schema_violations(_MALFORMED_TOOL_INPUT, SCHEMA_V1))
     # Both calls are billed regardless of whether the repair was accepted.
     assert result.input_tokens == 1000 + 200
     assert result.output_tokens == 500 + 100
@@ -925,7 +922,7 @@ async def test_schema_repair_disabled_never_makes_a_second_call(
     fake_client.messages.create.assert_awaited_once()
     assert result.repaired is False
     assert result.tool_input == _MALFORMED_TOOL_INPUT
-    assert result.schema_violations == len(_schema_violations(_MALFORMED_TOOL_INPUT))
+    assert result.schema_violations == len(_schema_violations(_MALFORMED_TOOL_INPUT, SCHEMA_V1))
 
 
 async def test_repair_reprompt_accepted_when_both_counts_exceed_truncation_cap(
@@ -943,8 +940,8 @@ async def test_repair_reprompt_accepted_when_both_counts_exceed_truncation_cap(
     """
     first_input = _tool_input_with_n_bad_items(8)  # 32 violations
     repair_input = _tool_input_with_n_bad_items(7)  # 28 violations -- fewer, but still > cap
-    assert len(_schema_violations(first_input)) == 32
-    assert len(_schema_violations(repair_input)) == 28
+    assert len(_schema_violations(first_input, SCHEMA_V1)) == 32
+    assert len(_schema_violations(repair_input, SCHEMA_V1)) == 28
 
     first_response = _FakeMessage(
         stop_reason="tool_use",
@@ -1053,7 +1050,7 @@ def test_schema_violations_reports_missing_and_malformed_paths() -> None:
         "currency": {"value": "USD", "confidence": 1.0},
     }
 
-    violations = _schema_violations(tool_input)
+    violations = _schema_violations(tool_input, SCHEMA_V1)
 
     assert "vendor" in violations
     assert "document_date" in violations
@@ -1075,7 +1072,7 @@ def test_schema_violations_reports_missing_and_malformed_paths() -> None:
 
 
 def test_schema_violations_reports_nothing_for_realistic_input() -> None:
-    assert _schema_violations(REALISTIC_TOOL_INPUT) == []
+    assert _schema_violations(REALISTIC_TOOL_INPUT, SCHEMA_V1) == []
 
 
 def _tool_input_with_n_bad_items(n: int) -> dict:
@@ -1108,7 +1105,7 @@ def test_schema_violations_does_not_truncate_the_returned_list() -> None:
     only appears in the repair PROMPT TEXT, built by
     _format_violations_for_prompt).
     """
-    violations = _schema_violations(_tool_input_with_n_bad_items(10))
+    violations = _schema_violations(_tool_input_with_n_bad_items(10), SCHEMA_V1)
 
     assert len(violations) == 40
     assert violations == [
@@ -1125,7 +1122,7 @@ def test_schema_violations_defensive_against_non_dict_tool_input() -> None:
     AttributeError out of `tool_input.get(...)`.
     """
     for bad_input in (None, "not a dict", [], 42):
-        assert _schema_violations(bad_input) == list(TOP_LEVEL_FIELDS)
+        assert _schema_violations(bad_input, SCHEMA_V1) == list(SCHEMA_V1.field_names)
 
 
 def test_format_violations_for_prompt_truncates_at_20_with_summary_entry() -> None:
@@ -1133,7 +1130,7 @@ def test_format_violations_for_prompt_truncates_at_20_with_summary_entry() -> No
     _format_violations_for_prompt, the repair-prompt-text renderer -- not
     in _schema_violations itself (see FINDING 1 regression test above).
     """
-    violations = _schema_violations(_tool_input_with_n_bad_items(10))  # 40 violations
+    violations = _schema_violations(_tool_input_with_n_bad_items(10), SCHEMA_V1)  # 40 violations
     assert len(violations) == 40
 
     prompt_text = _format_violations_for_prompt(violations)
@@ -1425,7 +1422,7 @@ async def test_a_database_error_in_the_reconciliation_rolls_back_only_the_reconc
             .where(Extraction.document_id == document.id)
         )
     ).scalar_one()
-    assert field_count == len(TOP_LEVEL_FIELDS)
+    assert field_count == len(SCHEMA_V1.field_names)
     assert await _reconciliation_of(db_session, document.id) is None
     await db_session.refresh(document)
     assert document.status == "extracted"
@@ -1446,7 +1443,7 @@ async def _assert_extraction_kept_with_confidence_flags(
             select(ExtractedField).where(ExtractedField.extraction_id == extraction_id)
         )
     ).scalars().all()
-    assert len(fields) == len(TOP_LEVEL_FIELDS)
+    assert len(fields) == len(SCHEMA_V1.field_names)
     assert {f.field_name: f.review_reason for f in fields if f.needs_review} == {
         "document_date": "confidence",
         "total": "confidence",

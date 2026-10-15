@@ -40,10 +40,10 @@ from app.agent.tools import (
 from app.config import Settings
 from app.extraction import (
     PRICING_PER_MTOK,
-    PROMPTS_DIR,
     _build_client,
     _classify_api_error,
 )
+from app.extraction_fields import PROMPTS_DIR
 from app.langfuse_link import observation_attributes
 from app.telemetry import (
     DOCPILOT_COST_USD,

@@ -22,13 +22,13 @@ from app import extraction as extraction_module
 from app.config import Settings
 from app.extraction import (
     MERGE_CONFLICT_CONFIDENCE,
-    TOP_LEVEL_FIELDS,
     ModelRefusalError,
     NonRetryableExtractionError,
     extract_document,
     merge_page_tool_inputs,
     process_document_job,
 )
+from app.extraction_fields import SCHEMA_V1
 from app.models import Document, ExtractedField, Extraction, Job
 from app.pdf import count_pdf_pages, split_pdf_pages
 
@@ -153,11 +153,11 @@ def _leaf(value, confidence):
 
 
 def _minimal_page(**overrides) -> dict:
-    """A page tool_input with every TOP_LEVEL_FIELDS leaf defaulted to
+    """A page tool_input with every SCHEMA_V1.field_names leaf defaulted to
     {"value": None, "confidence": 0.0} (a well-formed, all-absent leaf
     -- not a malformed one), overridden per-field by kwargs.
     """
-    page = {name: _leaf(None, 0.0) for name in TOP_LEVEL_FIELDS}
+    page = {name: _leaf(None, 0.0) for name in SCHEMA_V1.field_names}
     page.update(overrides)
     return page
 
@@ -213,7 +213,7 @@ def test_line_items_concatenated_in_page_order_with_min_confidence() -> None:
         line_items=_leaf([{"description": _leaf("Gadget", 0.8)}], 0.6)
     )
 
-    merged = merge_page_tool_inputs([page0, page1])
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)
 
     assert merged["line_items"]["value"] == [
         {"description": _leaf("Widget", 0.9)},
@@ -226,7 +226,7 @@ def test_line_items_all_null_gives_empty_list_and_zero_confidence() -> None:
     page0 = _minimal_page()
     page1 = _minimal_page()
 
-    merged = merge_page_tool_inputs([page0, page1])
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)
 
     assert merged["line_items"] == {"value": [], "confidence": 0.0}
 
@@ -239,7 +239,7 @@ def test_header_field_tie_breaks_to_earliest_page() -> None:
     page0 = _minimal_page(vendor=_leaf("Acme Corp", 0.9))
     page1 = _minimal_page(vendor=_leaf("Other Co", 0.9))
 
-    merged = merge_page_tool_inputs([page0, page1])
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)
 
     assert merged["vendor"]["value"] == "Acme Corp"
     assert merged["vendor"]["confidence"] == pytest.approx(MERGE_CONFLICT_CONFIDENCE)
@@ -253,7 +253,7 @@ def test_money_field_tie_breaks_to_latest_page() -> None:
     page0 = _minimal_page(total=_leaf(100.0, 0.9))
     page1 = _minimal_page(total=_leaf(200.0, 0.9))
 
-    merged = merge_page_tool_inputs([page0, page1])
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)
 
     assert merged["total"]["value"] == 200.0
     assert merged["total"]["confidence"] == pytest.approx(MERGE_CONFLICT_CONFIDENCE)
@@ -264,7 +264,7 @@ def test_all_null_scalar_field_uses_min_confidence_across_pages() -> None:
     page1 = _minimal_page(currency=_leaf(None, 0.1))
     page2 = _minimal_page(currency=_leaf(None, 0.7))
 
-    merged = merge_page_tool_inputs([page0, page1, page2])
+    merged = merge_page_tool_inputs([page0, page1, page2], SCHEMA_V1)
 
     assert merged["currency"] == {"value": None, "confidence": pytest.approx(0.1)}
 
@@ -273,7 +273,7 @@ def test_conflicting_values_cap_confidence_even_when_winner_was_very_confident()
     page0 = _minimal_page(vendor=_leaf("Acme Corp", 0.95))
     page1 = _minimal_page(vendor=_leaf("Totally Different Vendor", 0.5))
 
-    merged = merge_page_tool_inputs([page0, page1])
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)
 
     # Highest-confidence non-null candidate wins the VALUE...
     assert merged["vendor"]["value"] == "Acme Corp"
@@ -288,7 +288,7 @@ def test_agreeing_values_do_not_trigger_the_conflict_cap() -> None:
     page0 = _minimal_page(vendor=_leaf("  Acme Corp  ", 0.6))
     page1 = _minimal_page(vendor=_leaf("acme corp", 0.9))
 
-    merged = merge_page_tool_inputs([page0, page1])
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)
 
     assert merged["vendor"]["value"] == "acme corp"
     assert merged["vendor"]["confidence"] == pytest.approx(0.9)
@@ -298,7 +298,7 @@ def test_agreeing_numeric_values_tolerate_float_noise() -> None:
     page0 = _minimal_page(total=_leaf(10.004, 0.6))
     page1 = _minimal_page(total=_leaf(10.001, 0.9))
 
-    merged = merge_page_tool_inputs([page0, page1])
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)
 
     # round(10.004, 2) == round(10.001, 2) == 10.0 -- treated as agreement.
     assert merged["total"]["confidence"] == pytest.approx(0.9)
@@ -313,10 +313,10 @@ def test_malformed_page_leaf_degrades_instead_of_crashing_the_merge() -> None:
     malformed_page = "not a dict at all"
     well_formed_page = _minimal_page(vendor=_leaf("Acme Corp", 0.9))
 
-    merged = merge_page_tool_inputs([malformed_page, well_formed_page])
+    merged = merge_page_tool_inputs([malformed_page, well_formed_page], SCHEMA_V1)
 
     assert merged["vendor"]["value"] == "Acme Corp"
-    assert set(merged) == set(TOP_LEVEL_FIELDS)
+    assert set(merged) == set(SCHEMA_V1.field_names)
 
 
 def test_merge_handles_oversized_int_literal_without_crashing() -> None:
@@ -331,7 +331,7 @@ def test_merge_handles_oversized_int_literal_without_crashing() -> None:
     page0 = _minimal_page(total=_leaf(huge, 0.9))
     page1 = _minimal_page(total=_leaf(100.0, 0.9))
 
-    merged = merge_page_tool_inputs([page0, page1])  # must not raise
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)  # must not raise
 
     assert merged["total"]["value"] == 100.0  # tie -> latest page wins
     assert merged["total"]["confidence"] == pytest.approx(MERGE_CONFLICT_CONFIDENCE)
@@ -341,7 +341,7 @@ def test_malformed_leaf_within_an_otherwise_valid_page_degrades() -> None:
     page0 = {**_minimal_page(), "subtotal": "bare scalar, not a leaf dict"}
     page1 = _minimal_page(subtotal=_leaf(42.0, 0.9))
 
-    merged = merge_page_tool_inputs([page0, page1])
+    merged = merge_page_tool_inputs([page0, page1], SCHEMA_V1)
 
     assert merged["subtotal"]["value"] == 42.0
     assert merged["subtotal"]["confidence"] == pytest.approx(0.9)
@@ -510,9 +510,9 @@ async def test_chunked_pdf_extraction_persists_merged_result(
         .scalars()
         .all()
     )
-    # process_document_job iterates TOP_LEVEL_FIELDS only -- the extra
+    # process_document_job iterates SCHEMA_V1.field_names only -- the extra
     # "_chunks" key on raw_response must not spawn its own field row.
-    assert {f.field_name for f in fields} == set(TOP_LEVEL_FIELDS)
+    assert {f.field_name for f in fields} == set(SCHEMA_V1.field_names)
 
     await db_session.refresh(document)
     assert document.status == "extracted"

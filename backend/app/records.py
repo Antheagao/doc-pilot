@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.extraction import LINE_ITEM_MONEY_KEYS, MONEY_FIELDS
+from app.extraction_fields import ARRAY_CELLS, SCHEMA_V1
 from app.models import Document, ExtractedField, Extraction, Reconciliation
 from app.money import (
     CurrencyPrecision,
@@ -35,7 +35,11 @@ from app.schemas import ExtractedFieldOut, ReconciliationOut
 
 logger = logging.getLogger(__name__)
 
-LINE_ITEM_KEYS = ("description", "quantity", *LINE_ITEM_MONEY_KEYS)
+# Which field names are amounts, and the line-item cell keys. The correction
+# and API-view rules below take a field name alone, so they follow the v1
+# field set until the stored extraction's schema reaches them.
+MONEY_FIELDS = SCHEMA_V1.money_field_names
+LINE_ITEM_KEYS = tuple(ARRAY_CELLS["line_items"])
 
 # A currency code as a person types it; case is fixed on the way in. Not
 # checked against the ISO 4217 table: that table is a snapshot, and

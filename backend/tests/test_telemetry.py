@@ -28,7 +28,8 @@ from app import telemetry
 from app import transcription as transcription_module
 from app.config import Settings
 from app.db import async_session_maker
-from app.extraction import PROMPT_VERSION, extract_document, process_document_job
+from app.extraction import extract_document, process_document_job
+from app.extraction_fields import SCHEMA_V1
 from app.models import Document, Job
 from app.retrieval.embeddings import HashingEmbedder
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
@@ -188,7 +189,7 @@ async def test_extraction_call_is_a_genai_chat_span(tmp_path, monkeypatch, spans
     assert attrs["gen_ai.usage.input_tokens"] == 1500
     assert attrs["gen_ai.usage.output_tokens"] == 300
     assert attrs["gen_ai.usage.cache_read.input_tokens"] == 200
-    assert attrs["docpilot.prompt_version"] == PROMPT_VERSION
+    assert attrs["docpilot.prompt_version"] == SCHEMA_V1.prompt_version
     # claude-sonnet-5 at $2/$10 per MTok
     assert attrs["docpilot.cost_usd"] == pytest.approx(0.006)
 

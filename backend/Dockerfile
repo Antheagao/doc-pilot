@@ -4,7 +4,7 @@
 # i.e. the parent of the installed `app` package. `pip install -e .` leaves the
 # package in place at /app/app (an editable install just points back at the
 # source tree, it doesn't copy files into site-packages) -- so BACKEND_DIR still
-# resolves to /app and PROMPTS_DIR (extraction.py) still finds /app/prompts.
+# resolves to /app and PROMPTS_DIR (extraction_fields.py) still finds /app/prompts.
 FROM python:3.12-slim
 
 WORKDIR /app

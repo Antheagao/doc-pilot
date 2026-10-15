@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.extraction import build_extracted_fields
+from app.extraction_fields import SCHEMA_V1
 from app.models import (
     REVIEW_REASON_CONFIDENCE,
     Document,
@@ -408,7 +409,7 @@ async def seed_extraction(db_session: AsyncSession, tool_input: dict) -> uuid.UU
     )
     db_session.add(extraction)
     await db_session.flush()
-    db_session.add_all(build_extracted_fields(extraction.id, tool_input, THRESHOLD))
+    db_session.add_all(build_extracted_fields(extraction.id, tool_input, THRESHOLD, SCHEMA_V1))
     await db_session.flush()
     return extraction.id
 

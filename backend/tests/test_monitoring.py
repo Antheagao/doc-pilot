@@ -128,6 +128,39 @@ def test_an_extraction_run_without_a_summary_is_a_point_without_accuracy(tmp_pat
     assert point.extra["caught_by_checks"] is None
 
 
+def _unregistered_version_run() -> dict:
+    committed = next(iter(sorted(history.EXTRACTION_RESULTS_DIR.glob("*.json"))))
+    run = json.loads(committed.read_text(encoding="utf-8"))
+    return {**run, "prompt_version": "extract_v9"}
+
+
+def test_an_extraction_run_with_an_unregistered_version_is_a_point_without_checks(tmp_path) -> None:
+    _write(tmp_path / "run.json", _unregistered_version_run())
+
+    (point,) = extraction_points(tmp_path)
+
+    assert point.accuracy is not None
+    assert point.extra["caught_by_checks"] is None
+
+
+async def test_eval_endpoint_serves_a_run_with_an_unregistered_version(
+    client: AsyncClient, monkeypatch, tmp_path
+) -> None:
+    extraction_dir, agent_dir, retrieval_dir = (tmp_path / name for name in ("e", "a", "r"))
+    for directory in (extraction_dir, agent_dir, retrieval_dir):
+        directory.mkdir()
+    _write(extraction_dir / "run.json", _unregistered_version_run())
+    monkeypatch.setattr(history, "EXTRACTION_RESULTS_DIR", extraction_dir)
+    monkeypatch.setattr(history, "AGENT_RESULTS_DIR", agent_dir)
+    monkeypatch.setattr(history, "RETRIEVAL_RESULTS_DIR", retrieval_dir)
+
+    response = await client.get("/monitoring/evals")
+
+    assert response.status_code == 200
+    (point,) = response.json()["extraction"]
+    assert point["extra"]["caught_by_checks"] is None
+
+
 async def test_eval_endpoint_returns_every_suite(client: AsyncClient, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(history, "AGENT_RESULTS_DIR", tmp_path)  # none yet
 

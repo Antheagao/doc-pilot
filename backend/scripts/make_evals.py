@@ -59,11 +59,10 @@ DOCS_DIR = EVALS_DIR / "docs"
 LABELS_DIR = EVALS_DIR / "labels"
 TEXT_DIR = EVALS_DIR / "text"
 
-# Mirrors app.extraction.TOP_LEVEL_FIELDS. Kept as an independent literal
-# rather than imported -- this script only needs the field-name set for
-# label validation, and importing app.extraction would pull in the
-# anthropic/sqlalchemy/db-config import chain for a pure image/label
-# generator that makes no API or DB calls. Keep in sync by hand if that
+# Mirrors app.extraction_fields.SCHEMA_V1.field_names. Kept as an independent
+# literal rather than imported -- this script only needs the field-name set
+# for label validation, and a pure image/label generator that makes no API
+# or DB calls stays free of the app package. Keep in sync by hand if that
 # tuple ever changes.
 TOP_LEVEL_FIELD_NAMES = (
     "vendor",

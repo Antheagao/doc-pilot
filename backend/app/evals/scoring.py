@@ -36,15 +36,18 @@ from statistics import mean
 from typing import Any
 
 from app.evals.dataset import EvalCase
-from app.extraction import MONEY_FIELDS, TOP_LEVEL_FIELDS, _coerce_leaf
+from app.extraction import _coerce_leaf
+from app.extraction_fields import ARRAY_CELLS, SCHEMA_V1
 from app.money import MoneyError, to_decimal
 
 VENDOR_MATCH_THRESHOLD = 0.85
 ITEM_DESC_THRESHOLD = 0.8
 AMOUNT_TOLERANCE = Decimal("0.01")
 
-_LINE_ITEM_KEYS = ("description", "quantity", "unit_price", "total")
-_AMOUNT_FIELD_NAMES = MONEY_FIELDS
+_LINE_ITEM_KEYS = tuple(ARRAY_CELLS["line_items"])
+# The gold labels carry the v1 field set, so a case is scored over it.
+_SCORED_FIELDS = SCHEMA_V1.field_names
+_AMOUNT_FIELD_NAMES = SCHEMA_V1.money_field_names
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _PUNCTUATION_RE = re.compile(r"[^\w\s]")
@@ -333,7 +336,7 @@ def score_case(
     hallucinations = 0
     item_accuracy = 1.0
 
-    for field_name in TOP_LEVEL_FIELDS:
+    for field_name in _SCORED_FIELDS:
         expected = gold[field_name]
         value, confidence = _coerce_leaf(tool_input.get(field_name))
 

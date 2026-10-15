@@ -23,6 +23,7 @@ from app.evals.runner import (
     write_result,
 )
 from app.extraction import ExtractionError, ExtractionResult
+from app.extraction_fields import SCHEMA_V1
 
 
 class TestMockRun:
@@ -76,7 +77,7 @@ class TestMockRun:
         assert metrics.n_caught_by_checks == 1
         assert metrics.caught_by_checks == 0.5
         tax_doc = next(d for d in run["per_doc"] if d["fields"]["tax"]["correct"] is False)
-        routing = doc_routing(tax_doc, run["review_threshold"])
+        routing = doc_routing(tax_doc, run["review_threshold"], SCHEMA_V1)
         assert routing["tax"].review_reason == "reconciliation:total_math"
 
 

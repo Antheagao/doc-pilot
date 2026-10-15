@@ -16,6 +16,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import Settings
 from app.extraction import build_extracted_fields
+from app.extraction_fields import SCHEMA_V1
 from app.models import (
     REVIEW_REASON_CONFIDENCE,
     Document,
@@ -634,7 +635,9 @@ async def _seed_016(db_session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, dic
     )
     db_session.add(extraction)
     await db_session.flush()
-    fields = build_extracted_fields(extraction.id, tool_input, THRESHOLD_SETTINGS.review_threshold)
+    fields = build_extracted_fields(
+        extraction.id, tool_input, THRESHOLD_SETTINGS.review_threshold, SCHEMA_V1
+    )
     db_session.add_all(fields)
     await db_session.flush()
     await refresh_reconciliation(db_session, extraction.id, THRESHOLD_SETTINGS)

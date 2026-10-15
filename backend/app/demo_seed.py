@@ -38,7 +38,8 @@ from app.config import Settings, resolve_upload_dir
 from app.db import Base
 from app.evals.dataset import EVALS_DIR, EvalCase, load_cases
 from app.evals.retrieval import load_gold_corpus
-from app.extraction import TOP_LEVEL_FIELDS, build_extracted_fields
+from app.extraction import build_extracted_fields
+from app.extraction_fields import ExtractionSchema, schema_for
 from app.models import (
     REVIEW_REASON_CONFIDENCE,
     Document,
@@ -111,11 +112,11 @@ def _leaf(value: Any) -> dict:
     return {"value": value, "confidence": 1.0}
 
 
-def _label_tool_input(case: EvalCase) -> dict:
+def _label_tool_input(case: EvalCase, schema: ExtractionSchema) -> dict:
     """The label as a tool_input at confidence 1.0, shaped like
     seed_labeled_corpus's fields."""
     tool_input: dict[str, Any] = {}
-    for name in TOP_LEVEL_FIELDS:
+    for name in schema.field_names:
         value = case.fields[name]
         if name == "line_items":
             value = [{key: _leaf(cell) for key, cell in row.items()} for row in value or []]
@@ -123,18 +124,20 @@ def _label_tool_input(case: EvalCase) -> dict:
     return tool_input
 
 
-def _replayed_tool_input(entry: dict, case: EvalCase) -> tuple[dict, bool]:
+def _replayed_tool_input(
+    entry: dict, case: EvalCase, schema: ExtractionSchema
+) -> tuple[dict, bool]:
     """Rebuild the tool_input the model returned from an artifact per_doc
     entry: each field's `actual` and `confidence`. Returns (tool_input,
     used_label_fallback). An entry with no `actual` key at all (an older
     artifact shape) falls back to the label at confidence 1.0 for the whole
     document; the committed Sonnet run has none, and the seed counts them."""
     fields = entry["fields"]
-    if any("actual" not in fields[name] for name in TOP_LEVEL_FIELDS):
-        return _label_tool_input(case), True
+    if any("actual" not in fields[name] for name in schema.field_names):
+        return _label_tool_input(case, schema), True
     tool_input = {
         name: {"value": fields[name]["actual"], "confidence": fields[name]["confidence"]}
-        for name in TOP_LEVEL_FIELDS
+        for name in schema.field_names
     }
     return tool_input, False
 
@@ -182,6 +185,7 @@ async def seed_demo_data(
     page index. `now` only anchors the created_at stagger. Callers that seed
     a real database check ensure_demo_database first."""
     artifact = json.loads(REPLAY_ARTIFACT.read_text(encoding="utf-8"))
+    schema = schema_for(artifact["prompt_version"])
     cases = {case.doc_id: case for case in load_cases()}
     gold_text = {doc.doc_id: doc.text for doc in load_gold_corpus(list(cases.values()))}
     embedder = embedder or build_embedder(settings)
@@ -207,7 +211,7 @@ async def seed_demo_data(
         if entry["status"] != "scored" or doc_id not in cases or doc_id not in gold_text:
             raise ValueError(f"{doc_id}: not a scored replay entry with a label and gold text")
         case = cases[doc_id]
-        tool_input, fallback = _replayed_tool_input(entry, case)
+        tool_input, fallback = _replayed_tool_input(entry, case, schema)
         label_fallbacks += fallback
 
         document_id = demo_document_id(doc_id)
@@ -232,7 +236,7 @@ async def seed_demo_data(
         )
         await session.flush()
         extraction_id = uuid.uuid5(DEMO_NAMESPACE, f"extraction:{doc_id}")
-        fields = build_extracted_fields(extraction_id, tool_input, settings.review_threshold)
+        fields = build_extracted_fields(extraction_id, tool_input, settings.review_threshold, schema)
         staged = _apply_staged_cases(doc_id, fields, settings.review_threshold)
         session.add(
             Extraction(

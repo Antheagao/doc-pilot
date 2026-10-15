@@ -29,12 +29,8 @@ from typing import Any, Protocol
 from app.config import get_settings
 from app.evals.dataset import EVALS_DIR, EvalCase, load_cases
 from app.evals.scoring import aggregate, score_case
-from app.extraction import (
-    PROMPT_VERSION,
-    TOP_LEVEL_FIELDS,
-    ExtractionResult,
-    extract_document,
-)
+from app.extraction import ExtractionResult, extract_document
+from app.extraction_fields import SCHEMA_V1
 
 RESULTS_DIR = EVALS_DIR / "results"
 
@@ -412,7 +408,7 @@ def _fake_tool_input(
     vendor_none_doc_id: str | None,
 ) -> dict[str, Any]:
     tool_input: dict[str, Any] = {}
-    for name in TOP_LEVEL_FIELDS:
+    for name in SCHEMA_V1.field_names:
         if name == "line_items":
             items = fields["line_items"] or []
             wrapped_items = [
@@ -459,7 +455,7 @@ def build_mock_extract_fn(cases: list[EvalCase]) -> ExtractFn:
         return ExtractionResult(
             tool_input=tool_input,
             model=_MOCK_MODEL,
-            prompt_version=PROMPT_VERSION,
+            prompt_version=SCHEMA_V1.prompt_version,
             input_tokens=0,
             output_tokens=0,
             cost_usd=0.0,
@@ -473,7 +469,7 @@ def predicted_mock_accuracy(cases: list[EvalCase]) -> float:
     """Analytically compute the exact overall_accuracy build_mock_extract_fn's
     output must score, for eyeball comparison against the actual run.
 
-    total_slots = len(cases) * len(TOP_LEVEL_FIELDS) (7). Each of the two
+    total_slots = len(cases) * 7 (the v1 field count). Each of the two
     fixed perturbations (see _mock_perturbation_targets) costs exactly
     one wrong field IF its target doc_id is present in `cases` -- for the
     full 25-doc shipped dataset that's 25 * 7 = 175 slots, 2 wrong ->
@@ -481,7 +477,7 @@ def predicted_mock_accuracy(cases: list[EvalCase]) -> float:
     """
     tax_perturb_doc_id, vendor_none_doc_id = _mock_perturbation_targets()
     doc_ids = {c.doc_id for c in cases}
-    total_slots = len(cases) * len(TOP_LEVEL_FIELDS)
+    total_slots = len(cases) * len(SCHEMA_V1.field_names)
     if total_slots == 0:
         return 0.0
     wrong = sum(

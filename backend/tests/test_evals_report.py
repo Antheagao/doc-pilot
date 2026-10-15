@@ -23,6 +23,14 @@ from app.evals.report import (
     render_tables,
     update_readme,
 )
+from app.extraction_fields import SCHEMA_V1, SCHEMAS
+
+
+@pytest.fixture
+def synthetic_v2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These artifacts name a made-up extract_v2 to tell two runs apart; register
+    it with the v1 shape so a replay can look the schema up."""
+    monkeypatch.setitem(SCHEMAS, "extract_v2", SCHEMA_V1)
 
 
 def _make_summary(**overrides: Any) -> dict[str, Any]:
@@ -121,7 +129,7 @@ class TestRenderTables:
     def test_empty_results_is_placeholder(self):
         assert render_tables([]) == NO_RUNS_PLACEHOLDER
 
-    def test_two_rows_percentages_err_annotation_and_na(self):
+    def test_two_rows_percentages_err_annotation_and_na(self, synthetic_v2):
         artifact_a = _make_artifact(
             model="claude-sonnet-5",
             prompt_version="extract_v1",
@@ -298,6 +306,45 @@ class TestLoadResults:
         assert "no-threshold.json" in captured.err
 
 
+class TestUnknownPromptVersion:
+    """An artifact this code has no schema for must not stop a report."""
+
+    def test_an_all_errors_run_renders_with_no_incorrect_fields(self):
+        artifact = _make_artifact(
+            model=None,
+            prompt_version=None,
+            summary=None,
+            n_scored=0,
+            n_errors=1,
+            per_doc=[{"doc_id": "001-boom", "status": "error", "difficulty": "easy"}],
+        )
+
+        markdown = render_latest_md([artifact])
+
+        assert "*No incorrect fields in the most recent run.*" in markdown
+
+    def test_an_unregistered_version_shows_na_in_caught_by_checks(self, capsys):
+        artifact = _make_artifact(
+            prompt_version="extract_v9", n_scored=1, per_doc=[_doc_with_wrong_tax()]
+        )
+
+        ops_row = render_tables([artifact]).split("### Ops")[1].splitlines()[4]
+
+        assert _ops_cell(ops_row, "Caught by checks") == "n/a"
+        assert _ops_cell(ops_row, "Caught by review") == "100.0%"
+        assert "extract_v9" in capsys.readouterr().err
+
+    def test_an_unregistered_version_shows_na_as_the_flagged_cell(self):
+        artifact = _make_artifact(
+            prompt_version="extract_v9", n_scored=1, per_doc=[_doc_with_wrong_tax()]
+        )
+
+        detail = render_latest_md([artifact]).split("### Incorrect fields")[1]
+        row = next(line for line in detail.splitlines() if "042-wrong-tax" in line)
+
+        assert [cell.strip() for cell in row.strip().strip("|").split("|")][-1] == "n/a"
+
+
 class TestRenderLatestMd:
     def test_empty_results_is_placeholder(self):
         assert render_latest_md([]) == NO_RUNS_PLACEHOLDER
@@ -309,7 +356,7 @@ class TestRenderLatestMd:
 
         assert "No incorrect fields" in markdown
 
-    def test_failure_detail_for_most_recent_run_only(self):
+    def test_failure_detail_for_most_recent_run_only(self, synthetic_v2):
         older = _make_artifact(
             model="claude-sonnet-5",
             prompt_version="extract_v1",

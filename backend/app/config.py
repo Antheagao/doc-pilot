@@ -2,8 +2,10 @@ import tempfile
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.extraction_fields import schema_for
 
 # The backend project root (parent of the app/ package). Used to anchor a
 # relative upload_dir so saved paths are stable regardless of the process's
@@ -42,9 +44,15 @@ class Settings(BaseSettings):
     # the current Sonnet id -- see PRICING_PER_MTOK in that module for the
     # price table this must stay in sync with if overridden.
     extraction_model: str = "claude-sonnet-5"
+    # Which extraction schema the worker asks the model for
+    # (app/extraction_fields.py SCHEMAS): the prompt, repair prompt, and field
+    # list move together. Checked at load, so a misspelled version fails at
+    # startup rather than on the first job. Stored extractions keep the
+    # version they were made with, so changing this never rewrites old rows.
+    extraction_prompt_version: str = "extract_v1"
     # Extracted fields with confidence below this are flagged needs_review.
     review_threshold: float = 0.8
-    # When a first extraction response violates RECORD_EXTRACTION_TOOL's
+    # When a first extraction response violates the extraction tool's
     # schema (app/extraction.py's _schema_violations), attempt exactly one
     # repair reprompt before giving up on the cleaner shape. See
     # extraction.extract_document.
@@ -160,6 +168,12 @@ class Settings(BaseSettings):
     # reference-free groundedness grader on JUDGE_MODEL. Off by default:
     # each graded answer is one more billed model call.
     ask_judge_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @field_validator("extraction_prompt_version")
+    @classmethod
+    def _known_extraction_prompt_version(cls, value: str) -> str:
+        schema_for(value)
+        return value
 
 
 @lru_cache

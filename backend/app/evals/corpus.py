@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.evals.dataset import EvalCase
 from app.evals.retrieval import GoldDoc
-from app.extraction import TOP_LEVEL_FIELDS
+from app.extraction_fields import SCHEMA_V1
 from app.models import Document, ExtractedField, Extraction
 from app.retrieval.embeddings import Embedder
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
@@ -66,7 +66,8 @@ async def seed_labeled_corpus(
         )
         session.add(extraction)
         await session.flush()
-        for name in TOP_LEVEL_FIELDS:
+        # The agent eval corpus stays on the v1 field set.
+        for name in SCHEMA_V1.field_names:
             value = case.fields[name]
             stored = (
                 [{key: _leaf(cell) for key, cell in row.items()} for row in value or []]

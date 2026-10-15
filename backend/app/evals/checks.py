@@ -27,6 +27,7 @@ Imports `report.py` nowhere: the report module imports this one.
 """
 
 import re
+import sys
 import uuid
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -36,6 +37,7 @@ from typing import Any
 
 from app.evals.dataset import EvalCase
 from app.extraction import build_extracted_fields
+from app.extraction_fields import ARRAY_CELLS, SCHEMA_V1, SCHEMAS, ExtractionSchema
 from app.models import REVIEW_REASON_RECONCILIATION_PREFIX
 from app.money import currency_precision, to_api_string, to_decimal, to_plain_string
 from app.reconcile import (
@@ -52,8 +54,10 @@ from app.review_routing import Routing, field_name_of, route
 # flagged for doubt, so a flag in the mutation eval is the arithmetic's doing.
 _FULL_CONFIDENCE = 1.0
 
-_HEADER_MONEY = ("subtotal", "tax", "total")
-_LINE_KEYS = ("description", "quantity", "unit_price", "total")
+# The labels carry the v1 field set, so the label replays and the mutation
+# eval run on SCHEMA_V1; a scored run replays under its own prompt version.
+_HEADER_MONEY = SCHEMA_V1.money_field_names
+_LINE_KEYS = tuple(ARRAY_CELLS["line_items"])
 
 
 # --- replaying answers through the product's path ----------------------------
@@ -82,28 +86,34 @@ def label_tool_input(fields: Mapping[str, Any], confidence: float = _FULL_CONFID
     return tool_input
 
 
-def replay(tool_input: dict[str, Any], review_threshold: float) -> tuple[Report, dict[str, Routing]]:
+def replay(
+    tool_input: dict[str, Any], review_threshold: float, schema: ExtractionSchema
+) -> tuple[Report, dict[str, Routing]]:
     """The reconciliation report and per-field routing the worker would store
     for this tool_input. The fields are transient ORM rows, so nothing needs a
     session."""
-    fields = build_extracted_fields(uuid.UUID(int=0), tool_input, review_threshold)
+    fields = build_extracted_fields(uuid.UUID(int=0), tool_input, review_threshold, schema)
     report = reconcile(ReconcileInput.from_fields(fields))
     return report, route(fields, report, review_threshold)
 
 
-def _replay_doc(doc: Mapping[str, Any], review_threshold: float) -> tuple[Report, dict[str, Routing]]:
+def _replay_doc(
+    doc: Mapping[str, Any], review_threshold: float, schema: ExtractionSchema
+) -> tuple[Report, dict[str, Routing]]:
     """`replay` for one scored `per_doc` entry, from its stored answers. Only
     the fields the entry carries are replayed and returned."""
     tool_input = {
         name: _leaf(field["actual"], field["confidence"]) for name, field in doc["fields"].items()
     }
-    report, routing = replay(tool_input, review_threshold)
+    report, routing = replay(tool_input, review_threshold, schema)
     return report, {name: routing[name] for name in doc["fields"]}
 
 
-def doc_routing(doc: Mapping[str, Any], review_threshold: float) -> dict[str, Routing]:
+def doc_routing(
+    doc: Mapping[str, Any], review_threshold: float, schema: ExtractionSchema
+) -> dict[str, Routing]:
     """The routing of each field of one scored `per_doc` entry."""
-    return _replay_doc(doc, review_threshold)[1]
+    return _replay_doc(doc, review_threshold, schema)[1]
 
 
 def flagged_by_checks(routing: Routing) -> bool:
@@ -115,7 +125,7 @@ def flagged_by_checks(routing: Routing) -> bool:
 
 def reconcile_label(fields: Mapping[str, Any]) -> Report:
     """The report for a label's fields, replayed as a fully confident answer."""
-    return replay(label_tool_input(fields), _FULL_CONFIDENCE)[0]
+    return replay(label_tool_input(fields), _FULL_CONFIDENCE, SCHEMA_V1)[0]
 
 
 def failing_labels(cases: Sequence[EvalCase]) -> list[tuple[str, Report]]:
@@ -153,15 +163,24 @@ class CheckMetrics:
 
 def check_metrics(run: Mapping[str, Any]) -> CheckMetrics | None:
     """The check metrics of one eval artifact (or `RunResult.to_dict()`), or
-    None when the run has no summary or no scored document with answers. The
-    run is only read."""
+    None when the run has no summary, no scored document with answers, or a
+    prompt version this code has no schema for (warned about on stderr, so one
+    old artifact never stops a report rendering). The run is only read."""
     if run["summary"] is None:
+        return None
+    schema = SCHEMAS.get(run["prompt_version"])
+    if schema is None:
+        print(
+            f"warning: no extraction schema for prompt version {run['prompt_version']!r} "
+            f"(known: {', '.join(sorted(SCHEMAS))}); caught_by_checks not computed",
+            file=sys.stderr,
+        )
         return None
     n_docs = n_docs_failing = n_incorrect = n_caught = n_correct_flagged = 0
     for doc in run["per_doc"]:
         if doc.get("status") != "scored" or "fields" not in doc:
             continue
-        report, routing = _replay_doc(doc, run["review_threshold"])
+        report, routing = _replay_doc(doc, run["review_threshold"], schema)
         n_docs += 1
         n_docs_failing += report.status == STATUS_FAIL
         for name, field in doc["fields"].items():
@@ -398,7 +417,9 @@ def run_mutation_eval(cases: Sequence[EvalCase]) -> MutationEval:
     misses = []
     for case in cases:
         for mutation in _mutations(case.doc_id, case.fields):
-            report, routing = replay(_broken_tool_input(case.fields, mutation), _FULL_CONFIDENCE)
+            report, routing = replay(
+                _broken_tool_input(case.fields, mutation), _FULL_CONFIDENCE, SCHEMA_V1
+            )
             tally = counts[mutation.kind]
             tally["mutations"] += 1
             if report.status == STATUS_FAIL:

@@ -19,6 +19,7 @@ from typing import Any
 
 from app.evals.checks import check_metrics, doc_routing
 from app.evals.dataset import EVALS_DIR
+from app.extraction_fields import SCHEMAS
 from app.reconcile import RULES_VERSION
 from app.review_routing import Routing
 
@@ -59,7 +60,7 @@ _REQUIRED_KEYS = (
 )
 
 # (column label, per_field_accuracy key) -- in the table's display
-# order, which is not TOP_LEVEL_FIELDS order (line_items moves to the
+# order, which is not the schema's field order (line_items moves to the
 # end, after the amount fields, to match the spec's column layout).
 _ACCURACY_FIELD_COLUMNS = (
     ("Vendor", "vendor"),
@@ -322,10 +323,14 @@ def _flagged_cell(routing: Routing) -> str:
 
 def _failure_rows(latest: dict[str, Any]) -> list[str]:
     rows = []
+    # A run whose prompt version has no schema here cannot be replayed.
+    schema = SCHEMAS.get(latest["prompt_version"])
     for doc in latest["per_doc"]:
         if doc.get("status") != "scored":
             continue
-        routing = doc_routing(doc, latest["review_threshold"])
+        routing = (
+            doc_routing(doc, latest["review_threshold"], schema) if schema is not None else None
+        )
         for field_name, field_score in doc["fields"].items():
             if field_score["correct"]:
                 continue
@@ -337,7 +342,7 @@ def _failure_rows(latest: dict[str, Any]) -> list[str]:
                         _render_value(field_score["expected"]),
                         _render_value(field_score["actual"]),
                         _conf(field_score["confidence"]),
-                        _flagged_cell(routing[field_name]),
+                        _flagged_cell(routing[field_name]) if routing is not None else "n/a",
                     ]
                 )
             )

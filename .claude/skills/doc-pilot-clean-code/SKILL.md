@@ -13,9 +13,9 @@ The Rust subsections of the global guide do not apply; the backend is Python 3.1
 - Product words, spelled the same in SQL, Python, JSON, and TypeScript: `document`, `job` (`kind`, `state`), `extraction`, `extracted_field`, leaf (`{value, confidence}`), `needs_review`, `review_action` (`approved`, `corrected`), `page`, `chunk`, `ask_run`, `conversation`, `citation`.
 - Units in names are already the norm: `cost_usd`, `latency_ms`, `retry_after_seconds`, `daily_budget_usd`, `ask_rate_limit_per_minute`, `chunk_max_chars`.
 - Python: `X | None`, typed signatures, module-private helpers prefixed `_`, constants in `UPPER_CASE`, frozen `@dataclass` for small value objects (`ChatScope`).
-- Shared rules have one home: `records.field_value` (a correction wins), `records.api_field_value` / `normalize_correction` (the decimal-string view and correction validation), `review._PENDING` (what "pending" means), `HANDLERS` (job dispatch), `TOP_LEVEL_FIELDS` (the field set).
+- Shared rules have one home: `records.field_value` (a correction wins), `records.api_field_value` / `normalize_correction` (the decimal-string view and correction validation), `review._PENDING` (what "pending" means), `HANDLERS` (job dispatch), `ExtractionSchema.fields` in `app/extraction_fields.py` (the field set; `schema_for(prompt_version)` finds it).
 - Pure, injectable helpers are the model to copy: `_backoff_delay`, `reciprocal_rank_fusion`, `merge_page_tool_inputs`, `_schema_violations`, `SlidingWindowLimiter(clock=...)`.
-- Prompts are files, never inline strings: `backend/prompts/<name>_v<N>.md`, with the version taken from the file stem (`PROMPT_VERSION = PROMPT_PATH.stem`); new wording is a new file.
+- Prompts are files, never inline strings: `backend/prompts/<name>_v<N>.md`, with the version taken from the file stem (`SCHEMA_V1.prompt_version`); new wording is a new file and a new `SCHEMAS` entry.
 - Frontend API helpers are verb-first in `src/lib/api.ts` (`listDocuments`, `getDocument`, `uploadDocument`, `searchDocuments`, `askQuestion`, `resolveReviewField`); its `as` casts sit at the fetch and SSE parse boundaries.
 - Each `eslint-disable-next-line` has its reason in the comment above or after `--` (`page.tsx`, `documents/[id]/page.tsx`, `review/page.tsx`).
 

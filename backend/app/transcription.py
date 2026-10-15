@@ -29,7 +29,6 @@ import anthropic
 from app.config import get_settings
 from app.extraction import (
     PDF_MIME_TYPE,
-    PROMPTS_DIR,
     ExtractionError,
     ModelRefusalError,
     NonRetryableExtractionError,
@@ -41,6 +40,7 @@ from app.extraction import (
     _ensure_model_priced,
     _read_document_bytes,
 )
+from app.extraction_fields import PROMPTS_DIR
 from app.pdf import count_pdf_pages, split_pdf_pages
 from app.retrieval.indexing import PageText
 from app.telemetry import DOCPILOT_PAGE_NUMBER, model_call_span, record_model_response
