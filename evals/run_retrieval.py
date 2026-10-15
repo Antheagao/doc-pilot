@@ -117,6 +117,7 @@ def main() -> int:
     from app.evals.dataset import load_cases
     from app.evals.report import update_readme
     from app.evals.retrieval import (
+        RETRIEVAL_DATASET_VERSION,
         RETRIEVAL_END_MARKER,
         RETRIEVAL_START_MARKER,
         SNAPSHOT_PATH,
@@ -179,7 +180,7 @@ def main() -> int:
                     modes=modes,
                     lexical_scorings=tuple(s.strip() for s in args.lexical.split(",")),
                     query_set_version=query_set_version,
-                    dataset_version=corpus_cases[0].dataset_version,
+                    dataset_version=RETRIEVAL_DATASET_VERSION,
                 )
             finally:
                 await engine.dispose()

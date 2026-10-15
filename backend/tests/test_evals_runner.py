@@ -34,17 +34,18 @@ class TestMockRun:
         result = await run_eval(cases, extract_fn=extract_fn)
 
         predicted = predicted_mock_accuracy(cases)
-        # 25 docs x 7 fields = 175 slots, 2 wrong (tax perturbation on the
-        # 3rd case, vendor->None on the 7th) -> 173/175.
-        assert predicted == pytest.approx(173 / 175)
+        # 32 docs x 7 v1 fields = 224 slots, 2 wrong (tax perturbation on the
+        # 3rd case, vendor->None on the 7th) -> 222/224. The mock and the
+        # scoring still read only the seven v1 fields of each label.
+        assert predicted == pytest.approx(222 / 224)
         assert result.summary["overall_accuracy"] == predicted
         assert result.total_cost_usd == 0.0
         assert result.mean_cost_per_doc == 0.0
-        assert result.n_scored == 25
+        assert result.n_scored == 32
         assert result.n_errors == 0
         assert result.n_skipped_cost_cap == 0
         assert result.model == "mock-model"
-        assert result.dataset_version == "v1"
+        assert result.dataset_version == "v2"
 
     async def test_limit_changes_predicted_constant_but_still_runs(self):
         cases = load_cases(limit=5)

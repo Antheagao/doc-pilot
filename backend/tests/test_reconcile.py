@@ -14,7 +14,7 @@ import pytest
 from app.demo_seed import STAGED_REVIEW_CASES
 from app.evals import checks
 from app.evals.dataset import EVALS_DIR, load_cases
-from app.extraction_fields import SCHEMAS
+from app.extraction_fields import ARRAY_CELLS, SCHEMA_V1, SCHEMAS
 from app.models import ExtractedField
 from app.reconcile import (
     RULES_VERSION,
@@ -79,11 +79,25 @@ def label_tool_input(fields):
     return {
         name: leaf(
             [{key: leaf(cell) for key, cell in row.items()} for row in value or []]
-            if name == "line_items"
+            if name in ARRAY_CELLS and isinstance(value, list)
             else value
         )
         for name, value in fields.items()
     }
+
+
+# Dataset v1 is documents 001-025. The committed runs and the rules_v1 golden
+# fixture describe only those, and only their seven v1 fields.
+V1_DOCUMENT_COUNT = 25
+
+
+def v1_cases():
+    return [case for case in load_cases() if int(case.doc_id[:3]) <= V1_DOCUMENT_COUNT]
+
+
+def v1_fields(case):
+    """A label's fields as dataset v1 had them: the seven v1 fields only."""
+    return {name: case.fields[name] for name in SCHEMA_V1.field_names}
 
 
 def artifact_tool_input(entry):
@@ -155,7 +169,7 @@ def test_every_sonnet_record_passes(run_path, entry) -> None:
 
 def test_the_sonnet_runs_cover_the_whole_corpus() -> None:
     assert SONNET_RUNS
-    assert max(len(scored(path)) for path in SONNET_RUNS) == len(load_cases()) == 25
+    assert max(len(scored(path)) for path in SONNET_RUNS) == len(v1_cases()) == V1_DOCUMENT_COUNT
 
 
 def test_haiku_records_fail_exactly_where_the_numbers_disagree() -> None:
@@ -195,14 +209,15 @@ def test_haiku_019_names_the_line_sum_and_the_printed_subtotal() -> None:
 
 def current_v1_shaped_reports() -> dict[str, dict]:
     """The reports behind tests/fixtures/rules_v1_reports.json, recomputed:
-    every label, every scored document of the committed runs, the staged 016
+    every dataset-v1 label (its seven v1 fields), every scored document of the committed runs, the staged 016
     record, and the hand-built edge shapes of rules_v1_edge_inputs.json (gross
     readings, computed and assumed values, each format failure, suggestions),
     all v1-shaped. The fixture was written by the rules_v1 engine (before
     rules_v2 existed) and is never regenerated."""
     reports = {}
-    for case in load_cases():
-        reports[f"label:{case.doc_id}"] = report_to_json(checks.reconcile_label(case.fields))
+    for case in v1_cases():
+        report, _ = checks.replay(checks.label_tool_input(v1_fields(case)), 1.0, SCHEMA_V1)
+        reports[f"label:{case.doc_id}"] = report_to_json(report)
     for path in sorted(RESULTS_DIR.glob("*.json")):
         artifact = json.loads(path.read_text(encoding="utf-8"))
         schema = SCHEMAS[artifact["prompt_version"]]

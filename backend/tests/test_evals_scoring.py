@@ -12,6 +12,7 @@ import pytest
 
 import app.evals.dataset as dataset_module
 from app.evals.dataset import (
+    FIELD_KEYS,
     EvalCase,
     _validate_document_date,
     _validate_line_items,
@@ -775,7 +776,7 @@ class TestDatasetValidation:
             "image": "bad-label.png",
             "mime_type": "image/png",
             "source": "synthetic",
-            "dataset_version": "v1",
+            "dataset_version": "v2",
             "difficulty": "clean",
             "fields": {
                 "vendor": "Acme Corp",
@@ -792,6 +793,11 @@ class TestDatasetValidation:
                         "total": 10.0,
                     }
                 ],
+                # The v2 fields a label must also have, all absent here.
+                **dict.fromkeys(
+                    FIELD_KEYS
+                    - {"vendor", "document_date", "currency", "subtotal", "tax", "total", "line_items"}
+                ),
             },
         }
         label_path = tmp_path / "bad-label.json"
@@ -806,20 +812,12 @@ class TestDatasetValidation:
 class TestLoadRealDataset:
     def test_shipped_labels_load_without_exceptions(self):
         cases = load_cases()
-        assert len(cases) == 25
+        assert len([c for c in cases if c.source == "synthetic"]) == 32
         doc_ids = [c.doc_id for c in cases]
         assert doc_ids == sorted(doc_ids)
         for case in cases:
             assert case.image_path.is_file()
-            assert set(case.fields.keys()) == {
-                "vendor",
-                "document_date",
-                "currency",
-                "subtotal",
-                "tax",
-                "total",
-                "line_items",
-            }
+            assert set(case.fields.keys()) == FIELD_KEYS
 
     def test_limit_slices_after_sorting(self):
         all_cases = load_cases()

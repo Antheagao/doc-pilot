@@ -27,12 +27,13 @@ Gate commands live in `AGENTS.md`; the Rust and Playwright subsections of the gl
 
 ## Evals as tests
 
-- Extraction: `python evals/run.py --mock`; `tests/test_evals_runner.py` pins the mock run at `173 / 175` via `predicted_mock_accuracy` and its `caught_by_checks` at `0.5` (the tax perturbation is caught by the arithmetic, the null vendor is not), and `app/evals/scoring.py` holds the per-field match rules (amounts as exact decimals through `money.to_decimal`, `_amounts_match`).
+- Extraction: `python evals/run.py --mock`; `tests/test_evals_runner.py` pins the mock run at `222 / 224` (32 documents times the seven v1 fields) via `predicted_mock_accuracy` and its `caught_by_checks` at `0.5` (the tax perturbation is caught by the arithmetic, the null vendor is not), and `app/evals/scoring.py` holds the per-field match rules (amounts as exact decimals through `money.to_decimal`, `_amounts_match`).
 - Reconciliation: `app/evals/checks.py` computes `caught_by_checks` (replayed from each artifact's stored answers whenever a table renders, never stored) and the mutation eval over the labels; `tests/test_evals_checks.py` pins both, and `python evals/run_checks.py --update-readme` regenerates the CHECKS_TABLE region offline (no database, key, or model; exits 1 if a label fails the checks).
 - README sync: `test_readme_eval_table_and_latest_md_are_current` and `test_readme_checks_table_is_current` fail until the README and `evals/results/latest.md` are regenerated, which is what a rules change needs.
 - Retrieval: `tests/test_retrieval_gates.py` compares the offline eval with `evals/retrieval/snapshot_hashing_v1.json`; CI's `retrieval-eval` job runs `evals/run_retrieval.py --check` with the pinned fastembed model.
+  A retrieval result records `RETRIEVAL_DATASET_VERSION` (`v1`, the version of the 25 gold texts), not the labels' version, so adding documents without gold text does not make the committed results incomparable.
 - Agent and judge: `evals/run_agent.py` and `evals/run_judge_calibration.py` (logic in `app/evals/agent.py`, `judge.py`); live runs stop at `--max-cost`.
-- Labels are synthetic and generated record-first (`backend/scripts/make_evals.py`); `backend/scripts/harvest_corrections.py` turns review corrections into labels.
+- Labels are synthetic and generated record-first (`backend/scripts/make_evals.py`); dataset v2 labels hold the 20 v2 fields and gold evidence, `--labels-only` rewrites them without touching an image (the images of 001-025 are never regenerated), and `tests/test_evals_dataset.py` pins the v1 fields of those 25 by digest. `backend/scripts/harvest_corrections.py` turns review corrections of v2 extractions into labels.
 
 ## Known gaps
 

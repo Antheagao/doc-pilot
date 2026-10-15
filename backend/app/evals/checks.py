@@ -19,13 +19,16 @@ stores, and never written back: the artifacts are what a model said and how it
 scored, and the rules version is part of the measurement, so a new rule moves
 the number without rewriting history.
 
-Reconciliation eval. The 25 labels are consistent documents (every label
-passes the checks unmutated, and `failing_labels` is how a test or the CLI
-says so). `run_mutation_eval` breaks one printed number at a time in the ways
-a reader misreads digits, replays each broken document with full confidence
-(so only arithmetic can notice), and counts what the engine says. It answers
-"which misreads would the checks catch if the model were confidently wrong"
-without paying for a model run.
+Reconciliation eval. The labels are consistent documents (every label passes
+the checks unmutated, with the quotes of its gold evidence, and `failing_labels`
+is how a test or the CLI says so). `run_mutation_eval` breaks one printed number
+at a time in the ways a reader misreads digits, replays each broken document
+with full confidence (so only arithmetic can notice: the replay carries no
+quotes), and counts what the engine says. A number printed once is broken
+everywhere it was read (the gold evidence says which cells cite the same printed
+number), and the rest of the label, its tax lines, discount, shipping, tip, and
+payments, is replayed as it is, so a broken amount is also checked against them. It answers "which misreads would the checks catch
+if the model were confidently wrong" without paying for a model run.
 
 Imports `report.py` nowhere: the report module imports this one.
 """
@@ -39,9 +42,15 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from app.evals.dataset import EvalCase
+from app.evals.dataset import EvalCase, label_values
 from app.extraction import build_extracted_fields
-from app.extraction_fields import ARRAY_CELLS, SCHEMA_V1, SCHEMAS, ExtractionSchema
+from app.extraction_fields import (
+    ARRAY_CELLS,
+    SCHEMA_V1,
+    SCHEMA_V2,
+    SCHEMAS,
+    ExtractionSchema,
+)
 from app.models import REVIEW_REASON_QUOTE_PREFIX, REVIEW_REASON_RECONCILIATION_PREFIX
 from app.money import currency_precision, to_api_string, to_decimal, to_plain_string
 from app.reconcile import (
@@ -58,8 +67,12 @@ from app.review_routing import Routing, field_name_of, route
 # flagged for doubt, so a flag in the mutation eval is the arithmetic's doing.
 _FULL_CONFIDENCE = 1.0
 
-# The labels carry the v1 field set, so the label replays and the mutation
-# eval run on SCHEMA_V1; a scored run replays under its own prompt version.
+# The labels carry every v2 field, so the label replays and the mutation eval
+# run on SCHEMA_V2; a scored run replays under its own prompt version. The
+# mutation eval breaks only the amounts v1 also reads (subtotal, tax, total, and
+# the line cells): the v2 amounts stay as the label has them, and are what the
+# broken ones are checked against.
+_LABEL_SCHEMA = SCHEMA_V2
 _HEADER_MONEY = SCHEMA_V1.money_field_names
 _LINE_KEYS = tuple(ARRAY_CELLS["line_items"])
 
@@ -71,19 +84,38 @@ def _leaf(value: Any, confidence: float) -> dict[str, Any]:
     return {"value": value, "confidence": confidence}
 
 
-def label_tool_input(fields: Mapping[str, Any], confidence: float = _FULL_CONFIDENCE) -> dict[str, Any]:
+def label_tool_input(
+    fields: Mapping[str, Any],
+    confidence: float = _FULL_CONFIDENCE,
+    evidence: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     """A label's `fields` as the tool_input a model would have produced for
-    it: every field a `{value, confidence}` leaf, and every line item cell a
-    leaf too."""
-    tool_input = {name: _leaf(value, confidence) for name, value in fields.items()}
-    rows = fields.get("line_items")
-    if isinstance(rows, list):
-        tool_input["line_items"] = _leaf(
+    it: every field a `{value, confidence}` leaf, and every cell of a line item
+    or tax line a leaf too.
+
+    `evidence` is the label's gold evidence, `{path: {page, quote}}`. Given, it
+    adds an `evidence` key to each leaf other than an array's own: the gold
+    object for its path, else null. Left out (the default), leaves carry no
+    quote, so only the arithmetic can notice a broken number.
+    """
+
+    def leaf(value: Any, path: str) -> dict[str, Any]:
+        cell = _leaf(value, confidence)
+        if evidence is not None:
+            cell["evidence"] = evidence.get(path)
+        return cell
+
+    tool_input: dict[str, Any] = {}
+    for name, value in fields.items():
+        if name not in ARRAY_CELLS or not isinstance(value, list):
+            tool_input[name] = leaf(value, name)
+            continue
+        tool_input[name] = _leaf(
             [
-                {key: _leaf(row.get(key), confidence) for key in _LINE_KEYS}
+                {key: leaf(row.get(key), f"{name}[{index}].{key}") for key in ARRAY_CELLS[name]}
                 if isinstance(row, dict)
                 else row
-                for row in rows
+                for index, row in enumerate(value)
             ],
             confidence,
         )
@@ -136,17 +168,22 @@ def flagged_by_checks(routing: Routing) -> bool:
     )
 
 
-def reconcile_label(fields: Mapping[str, Any]) -> Report:
-    """The report for a label's fields, replayed as a fully confident answer."""
-    return replay(label_tool_input(fields), _FULL_CONFIDENCE, SCHEMA_V1)[0]
+def reconcile_label(
+    fields: Mapping[str, Any], evidence: Mapping[str, Mapping[str, Any]] | None = None
+) -> Report:
+    """The report for a label's fields, replayed as a fully confident answer.
+    With the label's gold evidence its quotes are checked against its values
+    too."""
+    return replay(label_tool_input(fields, evidence=evidence), _FULL_CONFIDENCE, _LABEL_SCHEMA)[0]
 
 
 def failing_labels(cases: Sequence[EvalCase]) -> list[tuple[str, Report]]:
-    """Every label whose own numbers fail a check, with its report. Empty for
-    a consistent dataset, which the mutation eval requires."""
+    """Every label whose own numbers, or whose gold quotes, fail a check, with
+    its report. Empty for a consistent dataset, which the mutation eval
+    requires."""
     failing = []
     for case in cases:
-        report = reconcile_label(case.fields)
+        report = reconcile_label(case.fields, case.evidence)
         if report.status == STATUS_FAIL:
             failing.append((case.doc_id, report))
     return failing
@@ -420,14 +457,47 @@ def _wrong_row_source(path: str) -> str | None:
     return None
 
 
-def _broken_tool_input(fields: Mapping[str, Any], mutation: Mutation) -> dict[str, Any]:
+def _coupled_paths(
+    fields: Mapping[str, Any], evidence: Mapping[str, Mapping[str, Any]], mutation: Mutation
+) -> list[str]:
+    """The other paths a misread of this cell is also a misread of: those whose
+    gold evidence is the same page and quote, and whose value is the same number.
+    A tax printed once is read into `tax` and into the amount of its tax line, so
+    a reader who misreads the printed number misreads both; a document that
+    prints it twice (a tax line and a total-tax line) has two printed numbers and
+    couples nothing. The cells of a line item are never coupled: a unit price and
+    a line total share a printed line, and are two printed numbers even when they
+    are equal."""
+    cited = evidence.get(mutation.path)
+    if cited is None or mutation.path.startswith("line_items["):
+        return []
+    coupled = []
+    for path, value in label_values(fields).items():
+        if path == mutation.path or path.startswith("line_items[") or evidence.get(path) != cited:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            continue
+        if to_decimal(value) == mutation.original:
+            coupled.append(path)
+    return coupled
+
+
+def _set_cell(tool_input: dict[str, Any], path: str, value: Decimal) -> None:
+    """Put a broken value at a path: a header amount, or one cell of a row."""
+    if "[" not in path:
+        tool_input[path] = _leaf(value, _FULL_CONFIDENCE)
+        return
+    head, key = path.rsplit(".", 1)
+    name, index = head.removesuffix("]").split("[")
+    tool_input[name]["value"][int(index)][key] = _leaf(value, _FULL_CONFIDENCE)
+
+
+def _broken_tool_input(
+    fields: Mapping[str, Any], mutation: Mutation, evidence: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Any]:
     tool_input = label_tool_input(fields, _FULL_CONFIDENCE)
-    if mutation.path in _HEADER_MONEY:
-        tool_input[mutation.path] = _leaf(mutation.mutated, _FULL_CONFIDENCE)
-    else:
-        head, key = mutation.path.rsplit(".", 1)
-        index = int(head.removeprefix("line_items[").removesuffix("]"))
-        tool_input["line_items"]["value"][index][key] = _leaf(mutation.mutated, _FULL_CONFIDENCE)
+    for path in (mutation.path, *_coupled_paths(fields, evidence, mutation)):
+        _set_cell(tool_input, path, mutation.mutated)
     return tool_input
 
 
@@ -446,7 +516,7 @@ def run_mutation_eval(cases: Sequence[EvalCase]) -> MutationEval:
     for case in cases:
         for mutation in _mutations(case.doc_id, case.fields):
             report, routing = replay(
-                _broken_tool_input(case.fields, mutation), _FULL_CONFIDENCE, SCHEMA_V1
+                _broken_tool_input(case.fields, mutation, case.evidence), _FULL_CONFIDENCE, _LABEL_SCHEMA
             )
             tally = counts[mutation.kind]
             tally["mutations"] += 1
@@ -540,10 +610,15 @@ def render_checks_markdown(result: MutationEval) -> str:
     caption = (
         f"*All {result.n_labels} labels pass {result.rules_version} unmutated; each row then breaks "
         "one printed amount (subtotal, tax, total, and every line's quantity, unit price, and total) "
-        "in one way and replays the document with full confidence, so only the arithmetic can notice. "
+        "in one way and replays the document with full confidence, so only the arithmetic can notice; "
+        "a number printed once is broken everywhere it was read (a tax that is read as the tax and "
+        "as its only tax line is broken in both), and the document keeps its other amounts and tax "
+        "lines as the label has them, so a broken amount is checked against those too. "
         "Detected means a check fails. Field flagged means the broken field is routed to review "
         "because of a failing check. Fix suggested means the engine proposes exactly the original "
-        "value for that field; Wrong fixes counts any other suggestion. Quantities and unit prices "
+        "value for that field; Wrong fixes counts any other suggestion (it happens when a misread "
+        "that reaches two fields leaves the arithmetic agreeing on both, so the total is blamed). "
+        "Quantities and unit prices "
         "are never suggested, so those misreads are flagged but not fixed. Correct fields flagged is "
         f"the mean number of other fields a mutation sends to review. {_misses_sentence(result.misses)}*"
     )

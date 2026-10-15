@@ -670,6 +670,15 @@ def quoted_label_tool_input(fields, quote_of):
         ],
         evidence=False,
     )
+    if fields["tax_lines"] is not None:
+        # The tax lines are rows of leaves too, with no quote of their own here.
+        tool["tax_lines"] = cell(
+            [
+                {key: cell(row[key], evidence=False) for key in ("label", "rate", "base", "amount")}
+                for row in fields["tax_lines"]
+            ],
+            evidence=False,
+        )
     return tool
 
 

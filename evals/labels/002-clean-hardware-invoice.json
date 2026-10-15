@@ -3,7 +3,7 @@
   "image": "docs/002-clean-hardware-invoice.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "clean",
   "fields": {
     "vendor": "Ironclad Hardware Supply",
@@ -37,6 +37,124 @@
         "unit_price": 15.0,
         "total": 60.0
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 8.78
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Ironclad Hardware Supply"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2025-06-29"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Steel Hex Bolts (box of 50)    3       $6.75     $20.25"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Steel Hex Bolts (box of 50)    3       $6.75     $20.25"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Steel Hex Bolts (box of 50)    3       $6.75     $20.25"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Steel Hex Bolts (box of 50)    3       $6.75     $20.25"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Garden Trowel                  2       $8.10     $16.20"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Garden Trowel                  2       $8.10     $16.20"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Garden Trowel                  2       $8.10     $16.20"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Garden Trowel                  2       $8.10     $16.20"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Kitchen Sponge 6-pack          2       $5.00     $10.00"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Kitchen Sponge 6-pack          2       $5.00     $10.00"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Kitchen Sponge 6-pack          2       $5.00     $10.00"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Kitchen Sponge 6-pack          2       $5.00     $10.00"
+    },
+    "line_items[3].description": {
+      "page": 1,
+      "quote": "Organic Roast Coffee 12oz      4      $15.00     $60.00"
+    },
+    "line_items[3].quantity": {
+      "page": 1,
+      "quote": "Organic Roast Coffee 12oz      4      $15.00     $60.00"
+    },
+    "line_items[3].unit_price": {
+      "page": 1,
+      "quote": "Organic Roast Coffee 12oz      4      $15.00     $60.00"
+    },
+    "line_items[3].total": {
+      "page": 1,
+      "quote": "Organic Roast Coffee 12oz      4      $15.00     $60.00"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $106.45"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $8.78"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $8.78"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $8.78"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $115.23"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

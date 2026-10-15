@@ -3,7 +3,7 @@
   "image": "docs/009-skewed-outdoor-supply.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "skewed",
   "fields": {
     "vendor": "Pinecrest Outdoor Supply",
@@ -31,6 +31,108 @@
         "unit_price": 18.3,
         "total": 73.2
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 4.48
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Pinecrest Outdoor Supply"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2026-01-24"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Bike Tire Patch Kit    2       $4.55      $9.10"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Bike Tire Patch Kit    2       $4.55      $9.10"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Bike Tire Patch Kit    2       $4.55      $9.10"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Bike Tire Patch Kit    2       $4.55      $9.10"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Garden Trowel          1       $7.20      $7.20"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Garden Trowel          1       $7.20      $7.20"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Garden Trowel          1       $7.20      $7.20"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Garden Trowel          1       $7.20      $7.20"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board   4      $18.30     $73.20"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board   4      $18.30     $73.20"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board   4      $18.30     $73.20"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board   4      $18.30     $73.20"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $89.50"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $4.48"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $4.48"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $4.48"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $93.98"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

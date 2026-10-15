@@ -17,6 +17,16 @@ unflagged fields are accepted deliberately -- trusting them is the same
 bet the whole pipeline makes by only routing low-confidence fields to
 humans in the first place.
 
+A label has every field of the v2 extraction schema, so only an extraction
+made with a schema that has them all (extract_v2) can be harvested: a v1
+extraction lacks the new fields, and a label with them guessed as null would
+state that the document shows none. It is skipped with the reason, and
+re-extracting the document with extract_v2 makes it harvestable.
+
+A harvested label also carries the evidence of the values nobody reviewed, as the
+extraction stored it (a reviewed value has none: the person's word replaced the
+model's quote), so the label's quotes are checked with its numbers.
+
 Every written label is validated with the same loud validator the eval
 loader uses (app.evals.dataset._load_case) before it is kept; a label
 that fails validation (e.g. a hand-typed date in the wrong format) is
@@ -47,11 +57,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.evals import dataset
 from app.evals.checks import reconcile_label
-from app.extraction_fields import SCHEMA_V1, money_cell_keys
+from app.extraction_fields import ARRAY_CELLS, SCHEMA_V2
 from app.models import Document, ExtractedField, Extraction
 from app.money import MoneyError, to_decimal, to_label_number
 from app.reconcile import STATUS_FAIL
-from app.records import field_value
+from app.records import field_value, schema_for_stored
 
 HARVEST_SOURCE = "human-review"
 HARVEST_DIFFICULTY = "review"
@@ -63,9 +73,12 @@ _MIME_EXT = {
     "image/gif": ".gif",
 }
 
-# Quantities are numbers on a label too, and become canonical strings once a
-# reviewer can correct them.
-_LINE_ITEM_NUMBER_KEYS = ("quantity", *money_cell_keys("line_items"))
+# The cells of an array field that are numbers on a label: quantities, rates,
+# and amounts become canonical strings once a reviewer can correct them.
+_ARRAY_NUMBER_KEYS = {
+    name: tuple(key for key, kind in cells.items() if kind != "text")
+    for name, cells in ARRAY_CELLS.items()
+}
 
 _DOC_ID_PREFIX_RE = re.compile(r"^(\d{3})-")
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9]+")
@@ -77,7 +90,8 @@ class HarvestOutcome:
 
     document_id: uuid.UUID
     doc_id: str | None  # the new label's doc_id when harvested
-    status: str  # 'harvested' | 'skipped_existing' | 'skipped_pending' | 'invalid'
+    # 'harvested' | 'skipped_existing' | 'skipped_pending' | 'skipped_schema' | 'invalid'
+    status: str
     detail: str = ""
 
 
@@ -130,26 +144,62 @@ def _label_number(value: Any) -> Any:
 
 def _label_fields(by_name: dict[str, ExtractedField]) -> dict[str, Any]:
     """The human-verified value of every top-level field, in label form. Labels
-    carry the v1 field set."""
+    carry the v2 field set."""
     label_fields = {
         name: field_value(by_name[name]) if name in by_name else None
-        for name in SCHEMA_V1.field_names
+        for name in SCHEMA_V2.field_names
     }
-    for name in SCHEMA_V1.money_field_names:
+    for name in SCHEMA_V2.money_field_names:
         label_fields[name] = _label_number(label_fields[name])
-    if isinstance(label_fields["line_items"], list):
-        # A row that is not an object (a typed correction can be any JSON
-        # array) goes through unchanged for the validator to reject.
-        label_fields["line_items"] = [
-            {
-                key: _label_number(cell) if key in _LINE_ITEM_NUMBER_KEYS else cell
-                for key, cell in row.items()
-            }
-            if isinstance(row, dict)
-            else row
-            for row in label_fields["line_items"]
-        ]
+    for name, number_keys in _ARRAY_NUMBER_KEYS.items():
+        rows = label_fields[name]
+        if isinstance(rows, list):
+            # A row that is not an object (a typed correction can be any JSON
+            # array) goes through unchanged for the validator to reject.
+            label_fields[name] = [
+                {
+                    key: _label_number(cell) if key in number_keys else cell
+                    for key, cell in row.items()
+                }
+                if isinstance(row, dict)
+                else row
+                for row in rows
+            ]
     return label_fields
+
+
+def _label_evidence(
+    by_name: dict[str, ExtractedField], label_fields: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """The evidence of the label's values that nobody reviewed: the page and quote
+    the extraction stored (already masked of card numbers), for each non-null
+    value. A reviewed field, approved or corrected, has none: the person's word
+    replaced the model's quote, which may be the very thing they fixed."""
+    evidence: dict[str, dict[str, Any]] = {}
+
+    def keep(path: str, stored: Any, value: Any) -> None:
+        cited = stored.get("evidence") if isinstance(stored, dict) else None
+        if value is None or not isinstance(cited, dict):
+            return
+        page, quote = cited.get("page"), cited.get("quote")
+        if isinstance(page, int) and not isinstance(page, bool) and page >= 1 and isinstance(quote, str):
+            evidence[path] = {"page": page, "quote": quote}
+
+    for name in SCHEMA_V2.field_names:
+        field = by_name.get(name)
+        if field is None or field.reviewed_at is not None:
+            continue
+        if name in ARRAY_CELLS:
+            stored_rows = field.value if isinstance(field.value, list) else []
+            label_rows = label_fields[name] if isinstance(label_fields[name], list) else []
+            for index, (stored, row) in enumerate(zip(stored_rows, label_rows, strict=False)):
+                if not isinstance(stored, dict) or not isinstance(row, dict):
+                    continue
+                for cell in ARRAY_CELLS[name]:
+                    keep(f"{name}[{index}].{cell}", stored.get(cell), row.get(cell))
+        else:
+            keep(name, field.value, label_fields[name])
+    return evidence
 
 
 def _label_problem(label_path: Path, evals_dir: Path) -> str | None:
@@ -243,6 +293,21 @@ async def harvest_corrections(
             )
             continue
 
+        schema = schema_for_stored(extraction.prompt_version)
+        missing_fields = [name for name in SCHEMA_V2.field_names if name not in schema.field_names]
+        if missing_fields:
+            outcomes.append(
+                HarvestOutcome(
+                    document.id,
+                    None,
+                    "skipped_schema",
+                    f"extracted with {extraction.prompt_version}, which has no "
+                    f"{', '.join(missing_fields)}; re-extract with {SCHEMA_V2.prompt_version} "
+                    "to harvest it",
+                )
+            )
+            continue
+
         pending = [
             f.field_name for f in fields if f.needs_review and f.reviewed_at is None
         ]
@@ -281,6 +346,7 @@ async def harvest_corrections(
 
         by_name = {f.field_name: f for f in fields}
         label_fields = _label_fields(by_name)
+        label_evidence = _label_evidence(by_name, label_fields)
 
         doc_id = f"{next_number:03d}-review-{_slugify(document.filename)}"
         label_path = labels_dir / f"{doc_id}.json"
@@ -295,9 +361,10 @@ async def harvest_corrections(
                     "mime_type": document.mime_type,
                     "source": HARVEST_SOURCE,
                     "source_document_id": str(document.id),
-                    "dataset_version": "v1",
+                    "dataset_version": "v2",
                     "difficulty": HARVEST_DIFFICULTY,
                     "fields": label_fields,
+                    "evidence": label_evidence,
                 },
                 indent=2,
             )

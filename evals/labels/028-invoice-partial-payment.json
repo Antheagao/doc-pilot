@@ -1,0 +1,162 @@
+{
+  "doc_id": "028-invoice-partial-payment",
+  "image": "docs/028-invoice-partial-payment.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v2",
+  "difficulty": "invoice",
+  "fields": {
+    "vendor": "Redwood Sign & Banner Co.",
+    "document_date": "2026-07-14",
+    "currency": "USD",
+    "subtotal": 533.0,
+    "tax": 31.98,
+    "total": 564.98,
+    "line_items": [
+      {
+        "description": "Custom Banner 3x8ft",
+        "quantity": 2,
+        "unit_price": 145.0,
+        "total": 290.0
+      },
+      {
+        "description": "Vinyl Decal Set",
+        "quantity": 12,
+        "unit_price": 6.5,
+        "total": 78.0
+      },
+      {
+        "description": "Installation Labor (hr)",
+        "quantity": 3,
+        "unit_price": 55.0,
+        "total": 165.0
+      }
+    ],
+    "invoice_number": "INV-5531",
+    "po_number": "PO-2207-B",
+    "vendor_tax_id": null,
+    "due_date": "2026-08-13",
+    "payment_terms": "Net 30",
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 31.98
+      }
+    ],
+    "tip": null,
+    "amount_paid": 250.0,
+    "amount_due": 314.98
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Redwood Sign & Banner Co."
+    },
+    "invoice_number": {
+      "page": 1,
+      "quote": "Invoice #: INV-5531"
+    },
+    "po_number": {
+      "page": 1,
+      "quote": "PO Number: PO-2207-B"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Invoice date: 07/14/2026"
+    },
+    "due_date": {
+      "page": 1,
+      "quote": "Due date: 08/13/2026"
+    },
+    "payment_terms": {
+      "page": 1,
+      "quote": "Terms: Net 30"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Custom Banner 3x8ft                  2     $145.00    $290.00"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Custom Banner 3x8ft                  2     $145.00    $290.00"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Custom Banner 3x8ft                  2     $145.00    $290.00"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Custom Banner 3x8ft                  2     $145.00    $290.00"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Vinyl Decal Set                     12       $6.50     $78.00"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Vinyl Decal Set                     12       $6.50     $78.00"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Vinyl Decal Set                     12       $6.50     $78.00"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Vinyl Decal Set                     12       $6.50     $78.00"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Installation Labor (hr)              3      $55.00    $165.00"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Installation Labor (hr)              3      $55.00    $165.00"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Installation Labor (hr)              3      $55.00    $165.00"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Installation Labor (hr)              3      $55.00    $165.00"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $533.00"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $31.98"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $31.98"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $31.98"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $564.98"
+    },
+    "amount_paid": {
+      "page": 1,
+      "quote": "Deposit received 06/30/2026: -$250.00"
+    },
+    "amount_due": {
+      "page": 1,
+      "quote": "Amount due: $314.98"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
+  }
+}

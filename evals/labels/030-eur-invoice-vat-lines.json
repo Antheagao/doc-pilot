@@ -1,0 +1,210 @@
+{
+  "doc_id": "030-eur-invoice-vat-lines",
+  "image": "docs/030-eur-invoice-vat-lines.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v2",
+  "difficulty": "eur",
+  "fields": {
+    "vendor": "Nordlicht Papierhandel GmbH",
+    "document_date": "2026-06-22",
+    "currency": "EUR",
+    "subtotal": 271.1,
+    "tax": 32.11,
+    "total": 276.1,
+    "line_items": [
+      {
+        "description": "Copy Paper A4 (box of 5)",
+        "quantity": 4,
+        "unit_price": 23.9,
+        "total": 95.6
+      },
+      {
+        "description": "Desk Organizer",
+        "quantity": 3,
+        "unit_price": 14.5,
+        "total": 43.5
+      },
+      {
+        "description": "Reference Book, Tax Law",
+        "quantity": 2,
+        "unit_price": 38.0,
+        "total": 76.0
+      },
+      {
+        "description": "Wall Calendar 2027",
+        "quantity": 5,
+        "unit_price": 11.2,
+        "total": 56.0
+      }
+    ],
+    "invoice_number": "RE-2026-0188",
+    "po_number": null,
+    "vendor_tax_id": "DE 812 345 679",
+    "due_date": "2026-07-06",
+    "payment_terms": "14 days net",
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": 27.11,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "VAT",
+        "rate": 19.0,
+        "base": 125.19,
+        "amount": 23.79
+      },
+      {
+        "label": "VAT",
+        "rate": 7.0,
+        "base": 118.8,
+        "amount": 8.32
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Nordlicht Papierhandel GmbH"
+    },
+    "invoice_number": {
+      "page": 1,
+      "quote": "Invoice #: RE-2026-0188"
+    },
+    "vendor_tax_id": {
+      "page": 1,
+      "quote": "VAT ID: DE 812 345 679"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Invoice date: 22.06.2026"
+    },
+    "due_date": {
+      "page": 1,
+      "quote": "Due date: 06.07.2026"
+    },
+    "payment_terms": {
+      "page": 1,
+      "quote": "Terms: 14 days net"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Copy Paper A4 (box of 5)             4   23,90 EUR  95,60 EUR"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Copy Paper A4 (box of 5)             4   23,90 EUR  95,60 EUR"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Copy Paper A4 (box of 5)             4   23,90 EUR  95,60 EUR"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Copy Paper A4 (box of 5)             4   23,90 EUR  95,60 EUR"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Desk Organizer                       3   14,50 EUR  43,50 EUR"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Desk Organizer                       3   14,50 EUR  43,50 EUR"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Desk Organizer                       3   14,50 EUR  43,50 EUR"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Desk Organizer                       3   14,50 EUR  43,50 EUR"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Reference Book, Tax Law              2   38,00 EUR  76,00 EUR"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Reference Book, Tax Law              2   38,00 EUR  76,00 EUR"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Reference Book, Tax Law              2   38,00 EUR  76,00 EUR"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Reference Book, Tax Law              2   38,00 EUR  76,00 EUR"
+    },
+    "line_items[3].description": {
+      "page": 1,
+      "quote": "Wall Calendar 2027                   5   11,20 EUR  56,00 EUR"
+    },
+    "line_items[3].quantity": {
+      "page": 1,
+      "quote": "Wall Calendar 2027                   5   11,20 EUR  56,00 EUR"
+    },
+    "line_items[3].unit_price": {
+      "page": 1,
+      "quote": "Wall Calendar 2027                   5   11,20 EUR  56,00 EUR"
+    },
+    "line_items[3].total": {
+      "page": 1,
+      "quote": "Wall Calendar 2027                   5   11,20 EUR  56,00 EUR"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: 271,10 EUR"
+    },
+    "discount": {
+      "page": 1,
+      "quote": "Discount (10%): -27,11 EUR"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Total VAT: 32,11 EUR"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "VAT 19% on 125,19 EUR                        23,79 EUR"
+    },
+    "tax_lines[0].rate": {
+      "page": 1,
+      "quote": "VAT 19% on 125,19 EUR                        23,79 EUR"
+    },
+    "tax_lines[0].base": {
+      "page": 1,
+      "quote": "VAT 19% on 125,19 EUR                        23,79 EUR"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "VAT 19% on 125,19 EUR                        23,79 EUR"
+    },
+    "tax_lines[1].label": {
+      "page": 1,
+      "quote": "VAT 7% on 118,80 EUR                          8,32 EUR"
+    },
+    "tax_lines[1].rate": {
+      "page": 1,
+      "quote": "VAT 7% on 118,80 EUR                          8,32 EUR"
+    },
+    "tax_lines[1].base": {
+      "page": 1,
+      "quote": "VAT 7% on 118,80 EUR                          8,32 EUR"
+    },
+    "tax_lines[1].amount": {
+      "page": 1,
+      "quote": "VAT 7% on 118,80 EUR                          8,32 EUR"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: 276,10 EUR"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: EUR"
+    }
+  }
+}

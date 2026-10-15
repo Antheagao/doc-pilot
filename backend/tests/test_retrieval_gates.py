@@ -12,6 +12,7 @@ import pytest
 from app.db import engine
 from app.evals.dataset import load_cases
 from app.evals.retrieval import (
+    RETRIEVAL_DATASET_VERSION,
     SNAPSHOT_PATH,
     compare_retrieval_results,
     load_gold_corpus,
@@ -52,7 +53,7 @@ async def test_offline_eval_matches_its_committed_snapshot() -> None:
         embedder=HashingEmbedder(),
         chunking_configs=[ChunkingConfig(200, 80, True)],
         query_set_version=version,
-        dataset_version=cases[0].dataset_version,
+        dataset_version=RETRIEVAL_DATASET_VERSION,
     )
 
     regressions, improvements = compare_retrieval_results(

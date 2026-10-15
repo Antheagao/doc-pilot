@@ -3,7 +3,7 @@
   "image": "docs/017-handwriting-farm-stand.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "handwriting",
   "fields": {
     "vendor": "Sunny Acres Farm Stand",
@@ -31,6 +31,108 @@
         "unit_price": 8.0,
         "total": 8.0
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 4.39
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Sunny Acres Farm Stand"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2026-02-23"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Packing Tape Roll      3       $3.60     $10.80"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Packing Tape Roll      3       $3.60     $10.80"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Packing Tape Roll      3       $3.60     $10.80"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Packing Tape Roll      3       $3.60     $10.80"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Extension Cord 25ft    3      $14.65     $43.95"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Extension Cord 25ft    3      $14.65     $43.95"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Extension Cord 25ft    3      $14.65     $43.95"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Extension Cord 25ft    3      $14.65     $43.95"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pa   1       $8.00      $8.00"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pa   1       $8.00      $8.00"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pa   1       $8.00      $8.00"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pa   1       $8.00      $8.00"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $62.75"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $4.39"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $4.39"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $4.39"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $67.14"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

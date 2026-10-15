@@ -8,6 +8,7 @@ back unchanged.
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -19,6 +20,9 @@ from app.evals.checks import (
     CHECKS_START_MARKER,
     MUTATION_KINDS,
     CheckMetrics,
+    _broken_tool_input,
+    _coupled_paths,
+    _mutations,
     check_metrics,
     doc_routing,
     failing_labels,
@@ -224,6 +228,46 @@ class TestReplay:
         assert tool_input["subtotal"] == {"value": 10.0, "confidence": 0.7}
         assert tool_input["line_items"]["value"][0]["quantity"] == {"value": 2, "confidence": 0.7}
 
+    def test_label_tool_input_wraps_tax_line_cells_too(self):
+        fields = {
+            "tax": 0.8,
+            "tax_lines": [{"label": "Tax", "rate": 8.0, "base": 10.0, "amount": 0.8}],
+        }
+
+        tool_input = label_tool_input(fields, 0.7)
+
+        assert tool_input["tax_lines"]["value"][0]["rate"] == {"value": 8.0, "confidence": 0.7}
+        assert tool_input["tax_lines"]["value"][0]["label"] == {"value": "Tax", "confidence": 0.7}
+        assert "evidence" not in tool_input["tax"]
+
+    def test_gold_evidence_becomes_the_evidence_of_each_leaf_and_null_where_there_is_none(self):
+        fields = {
+            "subtotal": 10.0,
+            "tax_lines": [{"label": "Tax", "rate": None, "base": None, "amount": 0.8}],
+        }
+        gold = {
+            "subtotal": {"page": 1, "quote": "Subtotal $10.00"},
+            "tax_lines[0].amount": {"page": 2, "quote": "Tax $0.80"},
+        }
+
+        tool_input = label_tool_input(fields, evidence=gold)
+
+        assert tool_input["subtotal"]["evidence"] == gold["subtotal"]
+        cells = tool_input["tax_lines"]["value"][0]
+        assert cells["amount"]["evidence"] == gold["tax_lines[0].amount"]
+        assert cells["label"]["evidence"] is None
+        assert "evidence" not in tool_input["tax_lines"]
+
+    def test_a_gold_quote_that_shows_another_number_fails_the_label(self):
+        case = next(case for case in load_cases() if case.doc_id.startswith("026"))
+        wrong = {**case.evidence, "discount": {"page": 1, "quote": "Volume discount (5%): -$23.29"}}
+
+        report = reconcile_label(case.fields, wrong)
+
+        assert [check.id for check in report.failing_checks] == ["quote:discount"]
+        assert reconcile_label(case.fields, case.evidence).status == "pass"
+        assert reconcile_label(case.fields).status == "pass"
+
     def test_a_low_confidence_field_with_a_passing_document_is_not_flagged_by_checks(self):
         report, routing = replay(label_tool_input(load_cases()[0].fields, 0.1), 0.8, SCHEMA_V1)
 
@@ -288,20 +332,49 @@ class TestMutationEval:
 
         assert tuple(got) == MUTATION_KINDS
         assert got == {
-            "one_minor_unit": (264, 264, 264, 120, 0, 98),
-            "transposed_digits": (262, 262, 262, 119, 0, 98),
-            "misread_digit": (359, 359, 359, 146, 0, 46),
-            "dropped_point": (264, 264, 264, 169, 0, 0),
-            "extra_leading_digit": (359, 359, 359, 154, 0, 30),
-            "wrong_row": (120, 96, 96, 96, 0, 0),
+            "one_minor_unit": (348, 348, 322, 189, 26, 43),
+            "transposed_digits": (355, 355, 330, 188, 25, 46),
+            "misread_digit": (475, 475, 455, 192, 20, 43),
+            "dropped_point": (348, 348, 348, 191, 0, 66),
+            "extra_leading_digit": (475, 475, 459, 191, 16, 50),
+            "wrong_row": (164, 138, 138, 135, 0, 9),
         }
         overall = evaluated.overall
-        assert (overall.mutations, overall.detected, overall.fixed) == (1628, 1604, 804)
-        assert evaluated.n_labels == 25
+        assert (overall.mutations, overall.detected, overall.fixed) == (2165, 2139, 1086)
+        assert overall.wrong_fixes == 87
+        assert evaluated.n_labels == 32
         assert evaluated.rules_version == RULES_VERSION
 
-    def test_the_engine_never_suggests_a_wrong_value(self, evaluated):
-        assert all(t.wrong_fixes == 0 for t in evaluated.by_kind)
+    def test_wrong_fixes_come_only_from_a_misread_that_reaches_two_fields(self, evaluated):
+        # Broken in one cell only, as if the two readings of a once-printed tax
+        # were independent, the engine never suggests a wrong value.
+        uncoupled = [replace(case, evidence={}) for case in load_cases()]
+
+        assert all(t.wrong_fixes == 0 for t in run_mutation_eval(uncoupled).by_kind)
+        # Broken in both (the tax and its only tax line), the two still agree, the
+        # total is the one number that disagrees, and the engine blames it.
+        assert evaluated.overall.wrong_fixes == 87
+        assert evaluated.by_kind[MUTATION_KINDS.index("dropped_point")].wrong_fixes == 0
+
+    def test_a_number_printed_once_is_broken_everywhere_it_was_read(self):
+        case = next(case for case in load_cases() if case.doc_id.startswith("001"))
+        tax = next(m for m in _mutations(case.doc_id, case.fields) if m.path == "tax")
+
+        broken = _broken_tool_input(case.fields, tax, case.evidence)
+
+        mutated = {"value": tax.mutated, "confidence": 1.0}
+        assert broken["tax"] == mutated
+        assert broken["tax_lines"]["value"][0]["amount"] == mutated
+        # A line's unit price and total are two printed numbers, even when equal.
+        line = next(m for m in _mutations(case.doc_id, case.fields) if m.path == "line_items[0].unit_price")
+        assert _coupled_paths(case.fields, case.evidence, line) == []
+
+    def test_a_tax_printed_twice_is_broken_in_one_cell(self):
+        # 026 prints each tax line and a total-tax line: two printed numbers.
+        case = next(case for case in load_cases() if case.doc_id.startswith("026"))
+        tax = next(m for m in _mutations(case.doc_id, case.fields) if m.path == "tax")
+
+        assert _coupled_paths(case.fields, case.evidence, tax) == []
 
     def test_every_digit_misread_is_detected(self, evaluated):
         for tally in evaluated.by_kind:
@@ -313,14 +386,16 @@ class TestMutationEval:
         taxed = {
             doc_id
             for doc_id, fields in by_doc.items()
-            if fields["tax"] and fields["subtotal"] is not None and fields["total"] is not None
+            if (fields["tax"] or fields["tax_lines"])
+            and fields["subtotal"] is not None
+            and fields["total"] is not None
         }
 
         assert {m.doc_id for m in evaluated.misses} <= taxed
         for miss in evaluated.misses:
             assert (miss.kind, miss.path) == ("wrong_row", "total")
             assert miss.mutated == Decimal(str(by_doc[miss.doc_id]["subtotal"]))
-        assert len(evaluated.misses) == evaluated.overall.mutations - evaluated.overall.detected == 24
+        assert len(evaluated.misses) == evaluated.overall.mutations - evaluated.overall.detected == 26
 
     def test_a_label_that_fails_unmutated_stops_the_eval(self):
         case = load_cases()[0]

@@ -1,0 +1,128 @@
+{
+  "doc_id": "029-receipt-card-number-pii",
+  "image": "docs/029-receipt-card-number-pii.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v2",
+  "difficulty": "receipt",
+  "fields": {
+    "vendor": "Brightwater Camping Supply",
+    "document_date": "2026-08-21",
+    "currency": "USD",
+    "subtotal": 83.95,
+    "tax": 4.62,
+    "total": 88.57,
+    "line_items": [
+      {
+        "description": "Trekking Pole Pair",
+        "quantity": 1,
+        "unit_price": 54.95,
+        "total": 54.95
+      },
+      {
+        "description": "Insulated Mug 16oz",
+        "quantity": 2,
+        "unit_price": 14.5,
+        "total": 29.0
+      }
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": "VISA",
+    "payment_card_last4": "1111",
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 4.62
+      }
+    ],
+    "tip": null,
+    "amount_paid": 88.57,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Brightwater Camping Supply"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2026-08-21"
+    },
+    "payment_method": {
+      "page": 1,
+      "quote": "Paid by VISA ****1111 $88.57"
+    },
+    "payment_card_last4": {
+      "page": 1,
+      "quote": "Paid by VISA ****1111 $88.57"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Trekking Pole Pair         1      $54.95     $54.95"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Trekking Pole Pair         1      $54.95     $54.95"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Trekking Pole Pair         1      $54.95     $54.95"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Trekking Pole Pair         1      $54.95     $54.95"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Insulated Mug 16oz         2      $14.50     $29.00"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Insulated Mug 16oz         2      $14.50     $29.00"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Insulated Mug 16oz         2      $14.50     $29.00"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Insulated Mug 16oz         2      $14.50     $29.00"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $83.95"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $4.62"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $4.62"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $4.62"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $88.57"
+    },
+    "amount_paid": {
+      "page": 1,
+      "quote": "Paid by VISA ****1111 $88.57"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
+  }
+}

@@ -3,7 +3,7 @@
   "image": "docs/018-dense-office-outfitters.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "dense",
   "fields": {
     "vendor": "Northgate Office Outfitters",
@@ -85,6 +85,252 @@
         "unit_price": 9.15,
         "total": 36.6
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 32.43
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Northgate Office Outfitters"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2025-09-01"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                4      $21.10     $84.40"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                4      $21.10     $84.40"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                4      $21.10     $84.40"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                4      $21.10     $84.40"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set            2       $5.75     $11.50"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set            2       $5.75     $11.50"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set            2       $5.75     $11.50"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set            2       $5.75     $11.50"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "AA Batteries (8-pack)            1       $6.80      $6.80"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "AA Batteries (8-pack)            1       $6.80      $6.80"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "AA Batteries (8-pack)            1       $6.80      $6.80"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "AA Batteries (8-pack)            1       $6.80      $6.80"
+    },
+    "line_items[3].description": {
+      "page": 1,
+      "quote": "Stainless Water Bottle           2      $14.20     $28.40"
+    },
+    "line_items[3].quantity": {
+      "page": 1,
+      "quote": "Stainless Water Bottle           2      $14.20     $28.40"
+    },
+    "line_items[3].unit_price": {
+      "page": 1,
+      "quote": "Stainless Water Bottle           2      $14.20     $28.40"
+    },
+    "line_items[3].total": {
+      "page": 1,
+      "quote": "Stainless Water Bottle           2      $14.20     $28.40"
+    },
+    "line_items[4].description": {
+      "page": 1,
+      "quote": "LED Desk Lamp                    2      $19.70     $39.40"
+    },
+    "line_items[4].quantity": {
+      "page": 1,
+      "quote": "LED Desk Lamp                    2      $19.70     $39.40"
+    },
+    "line_items[4].unit_price": {
+      "page": 1,
+      "quote": "LED Desk Lamp                    2      $19.70     $39.40"
+    },
+    "line_items[4].total": {
+      "page": 1,
+      "quote": "LED Desk Lamp                    2      $19.70     $39.40"
+    },
+    "line_items[5].description": {
+      "page": 1,
+      "quote": "Canvas Tote Bag                  2       $9.05     $18.10"
+    },
+    "line_items[5].quantity": {
+      "page": 1,
+      "quote": "Canvas Tote Bag                  2       $9.05     $18.10"
+    },
+    "line_items[5].unit_price": {
+      "page": 1,
+      "quote": "Canvas Tote Bag                  2       $9.05     $18.10"
+    },
+    "line_items[5].total": {
+      "page": 1,
+      "quote": "Canvas Tote Bag                  2       $9.05     $18.10"
+    },
+    "line_items[6].description": {
+      "page": 1,
+      "quote": "Picture Frame 5x7                2      $12.05     $24.10"
+    },
+    "line_items[6].quantity": {
+      "page": 1,
+      "quote": "Picture Frame 5x7                2      $12.05     $24.10"
+    },
+    "line_items[6].unit_price": {
+      "page": 1,
+      "quote": "Picture Frame 5x7                2      $12.05     $24.10"
+    },
+    "line_items[6].total": {
+      "page": 1,
+      "quote": "Picture Frame 5x7                2      $12.05     $24.10"
+    },
+    "line_items[7].description": {
+      "page": 1,
+      "quote": "Produce Bags (set of 5)          4       $6.65     $26.60"
+    },
+    "line_items[7].quantity": {
+      "page": 1,
+      "quote": "Produce Bags (set of 5)          4       $6.65     $26.60"
+    },
+    "line_items[7].unit_price": {
+      "page": 1,
+      "quote": "Produce Bags (set of 5)          4       $6.65     $26.60"
+    },
+    "line_items[7].total": {
+      "page": 1,
+      "quote": "Produce Bags (set of 5)          4       $6.65     $26.60"
+    },
+    "line_items[8].description": {
+      "page": 1,
+      "quote": "Herbal Tea Sampler               3       $8.05     $24.15"
+    },
+    "line_items[8].quantity": {
+      "page": 1,
+      "quote": "Herbal Tea Sampler               3       $8.05     $24.15"
+    },
+    "line_items[8].unit_price": {
+      "page": 1,
+      "quote": "Herbal Tea Sampler               3       $8.05     $24.15"
+    },
+    "line_items[8].total": {
+      "page": 1,
+      "quote": "Herbal Tea Sampler               3       $8.05     $24.15"
+    },
+    "line_items[9].description": {
+      "page": 1,
+      "quote": "Organic Roast Coffee 12oz        3      $15.90     $47.70"
+    },
+    "line_items[9].quantity": {
+      "page": 1,
+      "quote": "Organic Roast Coffee 12oz        3      $15.90     $47.70"
+    },
+    "line_items[9].unit_price": {
+      "page": 1,
+      "quote": "Organic Roast Coffee 12oz        3      $15.90     $47.70"
+    },
+    "line_items[9].total": {
+      "page": 1,
+      "quote": "Organic Roast Coffee 12oz        3      $15.90     $47.70"
+    },
+    "line_items[10].description": {
+      "page": 1,
+      "quote": "Yoga Mat                         2      $22.70     $45.40"
+    },
+    "line_items[10].quantity": {
+      "page": 1,
+      "quote": "Yoga Mat                         2      $22.70     $45.40"
+    },
+    "line_items[10].unit_price": {
+      "page": 1,
+      "quote": "Yoga Mat                         2      $22.70     $45.40"
+    },
+    "line_items[10].total": {
+      "page": 1,
+      "quote": "Yoga Mat                         2      $22.70     $45.40"
+    },
+    "line_items[11].description": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)          4       $9.15     $36.60"
+    },
+    "line_items[11].quantity": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)          4       $9.15     $36.60"
+    },
+    "line_items[11].unit_price": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)          4       $9.15     $36.60"
+    },
+    "line_items[11].total": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)          4       $9.15     $36.60"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $393.15"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $32.43"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $32.43"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $32.43"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $425.58"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

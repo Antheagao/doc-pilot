@@ -1,0 +1,172 @@
+{
+  "doc_id": "027-receipt-restaurant-tip-card",
+  "image": "docs/027-receipt-restaurant-tip-card.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v2",
+  "difficulty": "receipt",
+  "fields": {
+    "vendor": "Juniper & Oak Bistro",
+    "document_date": "2026-09-12",
+    "currency": "USD",
+    "subtotal": 71.0,
+    "tax": 5.86,
+    "total": 90.86,
+    "line_items": [
+      {
+        "description": "Roast Chicken Plate",
+        "quantity": 2,
+        "unit_price": 18.5,
+        "total": 37.0
+      },
+      {
+        "description": "House Salad",
+        "quantity": 2,
+        "unit_price": 7.25,
+        "total": 14.5
+      },
+      {
+        "description": "Sparkling Water",
+        "quantity": 3,
+        "unit_price": 3.5,
+        "total": 10.5
+      },
+      {
+        "description": "Chocolate Torte",
+        "quantity": 1,
+        "unit_price": 9.0,
+        "total": 9.0
+      }
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": "VISA",
+    "payment_card_last4": "4242",
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 5.86
+      }
+    ],
+    "tip": 14.0,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Juniper & Oak Bistro"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 09/12/2026 07:42 PM"
+    },
+    "payment_method": {
+      "page": 1,
+      "quote": "Paid by VISA ****4242"
+    },
+    "payment_card_last4": {
+      "page": 1,
+      "quote": "Paid by VISA ****4242"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Roast Chicken Plate        2      $18.50     $37.00"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Roast Chicken Plate        2      $18.50     $37.00"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Roast Chicken Plate        2      $18.50     $37.00"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Roast Chicken Plate        2      $18.50     $37.00"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "House Salad                2       $7.25     $14.50"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "House Salad                2       $7.25     $14.50"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "House Salad                2       $7.25     $14.50"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "House Salad                2       $7.25     $14.50"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Sparkling Water            3       $3.50     $10.50"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Sparkling Water            3       $3.50     $10.50"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Sparkling Water            3       $3.50     $10.50"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Sparkling Water            3       $3.50     $10.50"
+    },
+    "line_items[3].description": {
+      "page": 1,
+      "quote": "Chocolate Torte            1       $9.00      $9.00"
+    },
+    "line_items[3].quantity": {
+      "page": 1,
+      "quote": "Chocolate Torte            1       $9.00      $9.00"
+    },
+    "line_items[3].unit_price": {
+      "page": 1,
+      "quote": "Chocolate Torte            1       $9.00      $9.00"
+    },
+    "line_items[3].total": {
+      "page": 1,
+      "quote": "Chocolate Torte            1       $9.00      $9.00"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $71.00"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $5.86"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $5.86"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $5.86"
+    },
+    "tip": {
+      "page": 1,
+      "quote": "Tip: $14.00"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $90.86"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
+  }
+}

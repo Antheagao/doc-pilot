@@ -1,0 +1,194 @@
+{
+  "doc_id": "031-invoice-tax-lines-only",
+  "image": "docs/031-invoice-tax-lines-only.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v2",
+  "difficulty": "invoice",
+  "fields": {
+    "vendor": "Summit Office Interiors",
+    "document_date": "2026-05-19",
+    "currency": "USD",
+    "subtotal": 1018.0,
+    "tax": null,
+    "total": 1094.35,
+    "line_items": [
+      {
+        "description": "Office Chair, ergonomic",
+        "quantity": 3,
+        "unit_price": 189.0,
+        "total": 567.0
+      },
+      {
+        "description": "Standing Desk Converter",
+        "quantity": 2,
+        "unit_price": 129.5,
+        "total": 259.0
+      },
+      {
+        "description": "Monitor Arm, dual",
+        "quantity": 3,
+        "unit_price": 64.0,
+        "total": 192.0
+      }
+    ],
+    "invoice_number": "INV-31047",
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": "Due on receipt",
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "State sales tax",
+        "rate": 4.0,
+        "base": 1018.0,
+        "amount": 40.72
+      },
+      {
+        "label": "County sales tax",
+        "rate": 2.5,
+        "base": 1018.0,
+        "amount": 25.45
+      },
+      {
+        "label": "City sales tax",
+        "rate": 1.0,
+        "base": 1018.0,
+        "amount": 10.18
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Summit Office Interiors"
+    },
+    "invoice_number": {
+      "page": 1,
+      "quote": "Invoice #: INV-31047"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Invoice date: 05/19/2026"
+    },
+    "payment_terms": {
+      "page": 1,
+      "quote": "Terms: Due on receipt"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Office Chair, ergonomic              3     $189.00    $567.00"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Office Chair, ergonomic              3     $189.00    $567.00"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Office Chair, ergonomic              3     $189.00    $567.00"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Office Chair, ergonomic              3     $189.00    $567.00"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Standing Desk Converter              2     $129.50    $259.00"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Standing Desk Converter              2     $129.50    $259.00"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Standing Desk Converter              2     $129.50    $259.00"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Standing Desk Converter              2     $129.50    $259.00"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Monitor Arm, dual                    3      $64.00    $192.00"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Monitor Arm, dual                    3      $64.00    $192.00"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Monitor Arm, dual                    3      $64.00    $192.00"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Monitor Arm, dual                    3      $64.00    $192.00"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $1,018.00"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "State sales tax 4% on $1,018.00                 $40.72"
+    },
+    "tax_lines[0].rate": {
+      "page": 1,
+      "quote": "State sales tax 4% on $1,018.00                 $40.72"
+    },
+    "tax_lines[0].base": {
+      "page": 1,
+      "quote": "State sales tax 4% on $1,018.00                 $40.72"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "State sales tax 4% on $1,018.00                 $40.72"
+    },
+    "tax_lines[1].label": {
+      "page": 1,
+      "quote": "County sales tax 2.5% on $1,018.00              $25.45"
+    },
+    "tax_lines[1].rate": {
+      "page": 1,
+      "quote": "County sales tax 2.5% on $1,018.00              $25.45"
+    },
+    "tax_lines[1].base": {
+      "page": 1,
+      "quote": "County sales tax 2.5% on $1,018.00              $25.45"
+    },
+    "tax_lines[1].amount": {
+      "page": 1,
+      "quote": "County sales tax 2.5% on $1,018.00              $25.45"
+    },
+    "tax_lines[2].label": {
+      "page": 1,
+      "quote": "City sales tax 1% on $1,018.00                  $10.18"
+    },
+    "tax_lines[2].rate": {
+      "page": 1,
+      "quote": "City sales tax 1% on $1,018.00                  $10.18"
+    },
+    "tax_lines[2].base": {
+      "page": 1,
+      "quote": "City sales tax 1% on $1,018.00                  $10.18"
+    },
+    "tax_lines[2].amount": {
+      "page": 1,
+      "quote": "City sales tax 1% on $1,018.00                  $10.18"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $1,094.35"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
+  }
+}

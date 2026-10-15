@@ -3,7 +3,7 @@
   "image": "docs/022-missing-field-receipt-no-vendor.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "missing-field",
   "fields": {
     "vendor": null,
@@ -25,6 +25,88 @@
         "unit_price": 5.85,
         "total": 5.85
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 5.75
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2025-08-11"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "LED Desk Lamp                4      $19.85     $79.40"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "LED Desk Lamp                4      $19.85     $79.40"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "LED Desk Lamp                4      $19.85     $79.40"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "LED Desk Lamp                4      $19.85     $79.40"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Recycled Paper Ream          1       $5.85      $5.85"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Recycled Paper Ream          1       $5.85      $5.85"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Recycled Paper Ream          1       $5.85      $5.85"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Recycled Paper Ream          1       $5.85      $5.85"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $85.25"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $5.75"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $5.75"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $5.75"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $91.00"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

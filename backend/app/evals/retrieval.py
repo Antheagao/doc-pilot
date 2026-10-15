@@ -57,6 +57,14 @@ RESULTS_DIR = EVALS_DIR / "results" / "retrieval"
 # by the test suite -- see snapshot_of / compare_retrieval_results.
 SNAPSHOT_PATH = EVALS_DIR / "retrieval" / "snapshot_hashing_v1.json"
 
+# The dataset version a retrieval result records: the version of the corpus it
+# ran on, which is the documents that have gold page text. Dataset v2 added
+# documents (026-032) with no gold text and left the 25 texts as they were, so
+# the corpus, the queries' relevant sets, and every committed retrieval result
+# and snapshot are still "v1". Give a v2 document gold text, then bump this and
+# regenerate the snapshot and results.
+RETRIEVAL_DATASET_VERSION = "v1"
+
 RECALL_KS = (1, 3, 5, 10)
 NDCG_K = 10
 # Per-config query detail kept in the written artifact: only the lowest-MRR

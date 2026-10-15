@@ -1,0 +1,368 @@
+{
+  "doc_id": "032-multipage-invoice-totals-page-two",
+  "image": "docs/032-multipage-invoice-totals-page-two.pdf",
+  "mime_type": "application/pdf",
+  "source": "synthetic",
+  "dataset_version": "v2",
+  "difficulty": "multipage",
+  "fields": {
+    "vendor": "Quarry Lane Building Supply",
+    "document_date": "2026-04-08",
+    "currency": "USD",
+    "subtotal": 1997.0,
+    "tax": 144.78,
+    "total": 2226.78,
+    "line_items": [
+      {
+        "description": "Pressure-treated Lumber 2x4x8",
+        "quantity": 40,
+        "unit_price": 6.85,
+        "total": 274.0
+      },
+      {
+        "description": "Exterior Plywood 4x8 1/2in",
+        "quantity": 12,
+        "unit_price": 38.2,
+        "total": 458.4
+      },
+      {
+        "description": "Galvanized Deck Screws 5lb",
+        "quantity": 6,
+        "unit_price": 29.9,
+        "total": 179.4
+      },
+      {
+        "description": "Concrete Mix 80lb Bag",
+        "quantity": 25,
+        "unit_price": 7.35,
+        "total": 183.75
+      },
+      {
+        "description": "Rebar #4 10ft",
+        "quantity": 30,
+        "unit_price": 9.1,
+        "total": 273.0
+      },
+      {
+        "description": "Roofing Felt Roll",
+        "quantity": 4,
+        "unit_price": 41.75,
+        "total": 167.0
+      },
+      {
+        "description": "Joist Hanger 2x8",
+        "quantity": 100,
+        "unit_price": 1.15,
+        "total": 115.0
+      },
+      {
+        "description": "Silicone Caulk Tube",
+        "quantity": 18,
+        "unit_price": 5.6,
+        "total": 100.8
+      },
+      {
+        "description": "Contractor Trash Bags (50ct)",
+        "quantity": 3,
+        "unit_price": 24.25,
+        "total": 72.75
+      },
+      {
+        "description": "Work Gloves, leather",
+        "quantity": 10,
+        "unit_price": 8.4,
+        "total": 84.0
+      },
+      {
+        "description": "Chalk Line Reel",
+        "quantity": 2,
+        "unit_price": 12.95,
+        "total": 25.9
+      },
+      {
+        "description": "Level, 48in",
+        "quantity": 2,
+        "unit_price": 31.5,
+        "total": 63.0
+      }
+    ],
+    "invoice_number": "INV-7745",
+    "po_number": "PO-4410",
+    "vendor_tax_id": "47-3920158",
+    "due_date": "2026-05-23",
+    "payment_terms": "Net 45",
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": 85.0,
+    "tax_lines": [
+      {
+        "label": "Sales tax",
+        "rate": 7.25,
+        "base": null,
+        "amount": 144.78
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": 2226.78
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Quarry Lane Building Supply"
+    },
+    "invoice_number": {
+      "page": 1,
+      "quote": "Invoice #: INV-7745"
+    },
+    "po_number": {
+      "page": 1,
+      "quote": "PO Number: PO-4410"
+    },
+    "vendor_tax_id": {
+      "page": 1,
+      "quote": "Tax ID: 47-3920158"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Invoice date: 04/08/2026"
+    },
+    "due_date": {
+      "page": 1,
+      "quote": "Due date: 05/23/2026"
+    },
+    "payment_terms": {
+      "page": 1,
+      "quote": "Terms: Net 45"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Pressure-treated Lumber 2x4x8       40       $6.85    $274.00"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Pressure-treated Lumber 2x4x8       40       $6.85    $274.00"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Pressure-treated Lumber 2x4x8       40       $6.85    $274.00"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Pressure-treated Lumber 2x4x8       40       $6.85    $274.00"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Exterior Plywood 4x8 1/2in          12      $38.20    $458.40"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Exterior Plywood 4x8 1/2in          12      $38.20    $458.40"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Exterior Plywood 4x8 1/2in          12      $38.20    $458.40"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Exterior Plywood 4x8 1/2in          12      $38.20    $458.40"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Galvanized Deck Screws 5lb           6      $29.90    $179.40"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Galvanized Deck Screws 5lb           6      $29.90    $179.40"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Galvanized Deck Screws 5lb           6      $29.90    $179.40"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Galvanized Deck Screws 5lb           6      $29.90    $179.40"
+    },
+    "line_items[3].description": {
+      "page": 1,
+      "quote": "Concrete Mix 80lb Bag               25       $7.35    $183.75"
+    },
+    "line_items[3].quantity": {
+      "page": 1,
+      "quote": "Concrete Mix 80lb Bag               25       $7.35    $183.75"
+    },
+    "line_items[3].unit_price": {
+      "page": 1,
+      "quote": "Concrete Mix 80lb Bag               25       $7.35    $183.75"
+    },
+    "line_items[3].total": {
+      "page": 1,
+      "quote": "Concrete Mix 80lb Bag               25       $7.35    $183.75"
+    },
+    "line_items[4].description": {
+      "page": 1,
+      "quote": "Rebar #4 10ft                       30       $9.10    $273.00"
+    },
+    "line_items[4].quantity": {
+      "page": 1,
+      "quote": "Rebar #4 10ft                       30       $9.10    $273.00"
+    },
+    "line_items[4].unit_price": {
+      "page": 1,
+      "quote": "Rebar #4 10ft                       30       $9.10    $273.00"
+    },
+    "line_items[4].total": {
+      "page": 1,
+      "quote": "Rebar #4 10ft                       30       $9.10    $273.00"
+    },
+    "line_items[5].description": {
+      "page": 1,
+      "quote": "Roofing Felt Roll                    4      $41.75    $167.00"
+    },
+    "line_items[5].quantity": {
+      "page": 1,
+      "quote": "Roofing Felt Roll                    4      $41.75    $167.00"
+    },
+    "line_items[5].unit_price": {
+      "page": 1,
+      "quote": "Roofing Felt Roll                    4      $41.75    $167.00"
+    },
+    "line_items[5].total": {
+      "page": 1,
+      "quote": "Roofing Felt Roll                    4      $41.75    $167.00"
+    },
+    "line_items[6].description": {
+      "page": 1,
+      "quote": "Joist Hanger 2x8                   100       $1.15    $115.00"
+    },
+    "line_items[6].quantity": {
+      "page": 1,
+      "quote": "Joist Hanger 2x8                   100       $1.15    $115.00"
+    },
+    "line_items[6].unit_price": {
+      "page": 1,
+      "quote": "Joist Hanger 2x8                   100       $1.15    $115.00"
+    },
+    "line_items[6].total": {
+      "page": 1,
+      "quote": "Joist Hanger 2x8                   100       $1.15    $115.00"
+    },
+    "line_items[7].description": {
+      "page": 1,
+      "quote": "Silicone Caulk Tube                 18       $5.60    $100.80"
+    },
+    "line_items[7].quantity": {
+      "page": 1,
+      "quote": "Silicone Caulk Tube                 18       $5.60    $100.80"
+    },
+    "line_items[7].unit_price": {
+      "page": 1,
+      "quote": "Silicone Caulk Tube                 18       $5.60    $100.80"
+    },
+    "line_items[7].total": {
+      "page": 1,
+      "quote": "Silicone Caulk Tube                 18       $5.60    $100.80"
+    },
+    "line_items[8].description": {
+      "page": 2,
+      "quote": "Contractor Trash Bags (50ct)         3      $24.25     $72.75"
+    },
+    "line_items[8].quantity": {
+      "page": 2,
+      "quote": "Contractor Trash Bags (50ct)         3      $24.25     $72.75"
+    },
+    "line_items[8].unit_price": {
+      "page": 2,
+      "quote": "Contractor Trash Bags (50ct)         3      $24.25     $72.75"
+    },
+    "line_items[8].total": {
+      "page": 2,
+      "quote": "Contractor Trash Bags (50ct)         3      $24.25     $72.75"
+    },
+    "line_items[9].description": {
+      "page": 2,
+      "quote": "Work Gloves, leather                10       $8.40     $84.00"
+    },
+    "line_items[9].quantity": {
+      "page": 2,
+      "quote": "Work Gloves, leather                10       $8.40     $84.00"
+    },
+    "line_items[9].unit_price": {
+      "page": 2,
+      "quote": "Work Gloves, leather                10       $8.40     $84.00"
+    },
+    "line_items[9].total": {
+      "page": 2,
+      "quote": "Work Gloves, leather                10       $8.40     $84.00"
+    },
+    "line_items[10].description": {
+      "page": 2,
+      "quote": "Chalk Line Reel                      2      $12.95     $25.90"
+    },
+    "line_items[10].quantity": {
+      "page": 2,
+      "quote": "Chalk Line Reel                      2      $12.95     $25.90"
+    },
+    "line_items[10].unit_price": {
+      "page": 2,
+      "quote": "Chalk Line Reel                      2      $12.95     $25.90"
+    },
+    "line_items[10].total": {
+      "page": 2,
+      "quote": "Chalk Line Reel                      2      $12.95     $25.90"
+    },
+    "line_items[11].description": {
+      "page": 2,
+      "quote": "Level, 48in                          2      $31.50     $63.00"
+    },
+    "line_items[11].quantity": {
+      "page": 2,
+      "quote": "Level, 48in                          2      $31.50     $63.00"
+    },
+    "line_items[11].unit_price": {
+      "page": 2,
+      "quote": "Level, 48in                          2      $31.50     $63.00"
+    },
+    "line_items[11].total": {
+      "page": 2,
+      "quote": "Level, 48in                          2      $31.50     $63.00"
+    },
+    "subtotal": {
+      "page": 2,
+      "quote": "Subtotal: $1,997.00"
+    },
+    "shipping": {
+      "page": 2,
+      "quote": "Freight: $85.00"
+    },
+    "tax": {
+      "page": 2,
+      "quote": "Sales tax 7.25%: $144.78"
+    },
+    "tax_lines[0].label": {
+      "page": 2,
+      "quote": "Sales tax 7.25%: $144.78"
+    },
+    "tax_lines[0].rate": {
+      "page": 2,
+      "quote": "Sales tax 7.25%: $144.78"
+    },
+    "tax_lines[0].amount": {
+      "page": 2,
+      "quote": "Sales tax 7.25%: $144.78"
+    },
+    "total": {
+      "page": 2,
+      "quote": "Total: $2,226.78"
+    },
+    "amount_due": {
+      "page": 2,
+      "quote": "Amount due: $2,226.78"
+    },
+    "currency": {
+      "page": 2,
+      "quote": "Currency: USD"
+    }
+  }
+}

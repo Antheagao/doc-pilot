@@ -1,0 +1,218 @@
+{
+  "doc_id": "026-invoice-discount-shipping-two-taxes",
+  "image": "docs/026-invoice-discount-shipping-two-taxes.png",
+  "mime_type": "image/png",
+  "source": "synthetic",
+  "dataset_version": "v2",
+  "difficulty": "invoice",
+  "fields": {
+    "vendor": "Harborline Industrial Supply",
+    "document_date": "2026-08-03",
+    "currency": "USD",
+    "subtotal": 478.4,
+    "tax": 35.22,
+    "total": 508.2,
+    "line_items": [
+      {
+        "description": "Hydraulic Hose Assembly 3/4in",
+        "quantity": 4,
+        "unit_price": 38.5,
+        "total": 154.0
+      },
+      {
+        "description": "Stainless Fitting Kit (24pc)",
+        "quantity": 6,
+        "unit_price": 21.75,
+        "total": 130.5
+      },
+      {
+        "description": "Industrial Gasket Sheet 12x12",
+        "quantity": 10,
+        "unit_price": 7.4,
+        "total": 74.0
+      },
+      {
+        "description": "Safety Valve, brass",
+        "quantity": 2,
+        "unit_price": 59.95,
+        "total": 119.9
+      }
+    ],
+    "invoice_number": "INV-2026-0417",
+    "po_number": "PO-88213",
+    "vendor_tax_id": "91-4827365",
+    "due_date": "2026-09-02",
+    "payment_terms": "Net 30",
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": 23.92,
+    "shipping": 18.5,
+    "tax_lines": [
+      {
+        "label": "State sales tax",
+        "rate": 6.5,
+        "base": 454.48,
+        "amount": 29.54
+      },
+      {
+        "label": "County transit tax",
+        "rate": 1.25,
+        "base": 454.48,
+        "amount": 5.68
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Harborline Industrial Supply"
+    },
+    "invoice_number": {
+      "page": 1,
+      "quote": "Invoice #: INV-2026-0417"
+    },
+    "po_number": {
+      "page": 1,
+      "quote": "PO Number: PO-88213"
+    },
+    "vendor_tax_id": {
+      "page": 1,
+      "quote": "Tax ID: 91-4827365"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Invoice date: 08/03/2026"
+    },
+    "due_date": {
+      "page": 1,
+      "quote": "Due date: 09/02/2026"
+    },
+    "payment_terms": {
+      "page": 1,
+      "quote": "Terms: Net 30"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Hydraulic Hose Assembly 3/4in        4      $38.50    $154.00"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Hydraulic Hose Assembly 3/4in        4      $38.50    $154.00"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Hydraulic Hose Assembly 3/4in        4      $38.50    $154.00"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Hydraulic Hose Assembly 3/4in        4      $38.50    $154.00"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Stainless Fitting Kit (24pc)         6      $21.75    $130.50"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Stainless Fitting Kit (24pc)         6      $21.75    $130.50"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Stainless Fitting Kit (24pc)         6      $21.75    $130.50"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Stainless Fitting Kit (24pc)         6      $21.75    $130.50"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Industrial Gasket Sheet 12x12       10       $7.40     $74.00"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Industrial Gasket Sheet 12x12       10       $7.40     $74.00"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Industrial Gasket Sheet 12x12       10       $7.40     $74.00"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Industrial Gasket Sheet 12x12       10       $7.40     $74.00"
+    },
+    "line_items[3].description": {
+      "page": 1,
+      "quote": "Safety Valve, brass                  2      $59.95    $119.90"
+    },
+    "line_items[3].quantity": {
+      "page": 1,
+      "quote": "Safety Valve, brass                  2      $59.95    $119.90"
+    },
+    "line_items[3].unit_price": {
+      "page": 1,
+      "quote": "Safety Valve, brass                  2      $59.95    $119.90"
+    },
+    "line_items[3].total": {
+      "page": 1,
+      "quote": "Safety Valve, brass                  2      $59.95    $119.90"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $478.40"
+    },
+    "discount": {
+      "page": 1,
+      "quote": "Volume discount (5%): -$23.92"
+    },
+    "shipping": {
+      "page": 1,
+      "quote": "Shipping & handling: $18.50"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Total tax: $35.22"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "State sales tax 6.5% on $454.48                 $29.54"
+    },
+    "tax_lines[0].rate": {
+      "page": 1,
+      "quote": "State sales tax 6.5% on $454.48                 $29.54"
+    },
+    "tax_lines[0].base": {
+      "page": 1,
+      "quote": "State sales tax 6.5% on $454.48                 $29.54"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "State sales tax 6.5% on $454.48                 $29.54"
+    },
+    "tax_lines[1].label": {
+      "page": 1,
+      "quote": "County transit tax 1.25% on $454.48              $5.68"
+    },
+    "tax_lines[1].rate": {
+      "page": 1,
+      "quote": "County transit tax 1.25% on $454.48              $5.68"
+    },
+    "tax_lines[1].base": {
+      "page": 1,
+      "quote": "County transit tax 1.25% on $454.48              $5.68"
+    },
+    "tax_lines[1].amount": {
+      "page": 1,
+      "quote": "County transit tax 1.25% on $454.48              $5.68"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $508.20"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
+  }
+}

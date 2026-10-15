@@ -3,7 +3,7 @@
   "image": "docs/012-noisy-florist-glare.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "noisy",
   "fields": {
     "vendor": "Foxglove Florist & Gifts",
@@ -25,6 +25,92 @@
         "unit_price": 8.0,
         "total": 8.0
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 3.29
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Foxglove Florist & Gifts"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2026-01-29"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board           3      $13.00     $39.00"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board           3      $13.00     $39.00"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board           3      $13.00     $39.00"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board           3      $13.00     $39.00"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set          1       $8.00      $8.00"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set          1       $8.00      $8.00"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set          1       $8.00      $8.00"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set          1       $8.00      $8.00"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $47.00"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $3.29"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $3.29"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $3.29"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $50.29"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

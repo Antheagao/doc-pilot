@@ -12,8 +12,8 @@ evals, and scripts can all load it without a cycle.
 The field kinds are the vocabulary the rest of the code keys off: money
 parsing and formatting (app/money.py) follows "money", and the page merge
 (app/extraction.py) follows each field's merge_tie_break. app/evals/dataset.py
-keeps its own copy of the v1 field names to stay free of this module's
-imports.
+takes the label's field set from SCHEMA_V2, so a label has every field the
+richest schema reads.
 """
 
 from dataclasses import dataclass, field

@@ -15,23 +15,38 @@ sibling module that scores what this one loads.
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
 
+import pypdf
+
 from app.config import BACKEND_DIR
+from app.extraction_fields import ARRAY_CELLS, EVIDENCE_QUOTE_MAX_CHARS, SCHEMA_V2
+from app.pii import (
+    CARD_LAST4_RE,
+    has_long_digit_run,
+    mask_card_numbers,
+    mask_digit_runs,
+)
 
 EVALS_DIR = BACKEND_DIR.parent / "evals"
 LABELS_DIR = EVALS_DIR / "labels"
 
 # The exact key set fields must have -- no more, no less. A dataset entry
 # with a stray or missing key is a labeling bug worth failing loudly on,
-# not silently tolerating.
-FIELD_KEYS = frozenset(
-    {"vendor", "document_date", "currency", "subtotal", "tax", "total", "line_items"}
-)
-LINE_ITEM_KEYS = frozenset({"description", "quantity", "unit_price", "total"})
+# not silently tolerating. Dataset v2 labels carry every field of the v2
+# extraction schema; a field the document does not show is null. Scoring still
+# reads only the seven v1 fields of each label (app/evals/scoring.py).
+FIELD_KEYS = frozenset(SCHEMA_V2.field_names)
+LINE_ITEM_KEYS = frozenset(ARRAY_CELLS["line_items"])
+TAX_LINE_KEYS = frozenset(ARRAY_CELLS["tax_lines"])
+
+# The fields a label holds as free text, as ISO dates, and as amounts.
+_TEXT_KEYS = ("invoice_number", "po_number", "vendor_tax_id", "payment_terms", "currency")
+_DATE_KEYS = ("document_date", "due_date")
+_MONEY_KEYS = tuple(SCHEMA_V2.money_field_names)
 
 _LABEL_TOP_LEVEL_KEYS = (
     "image",
@@ -66,9 +81,14 @@ class EvalCase:
     dataset_version: str
     difficulty: str
     fields: dict[str, Any]
+    # Where each non-null value is printed: {path: {"page", "quote"}}, the
+    # gold counterpart of a v2 extraction's evidence. Optional per label.
+    evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
-def _validate_document_date(doc_id: str, value: Any) -> None:
+def _validate_document_date(doc_id: str, value: Any, key: str = "document_date") -> None:
+    """A label's date field (the document date or the due date): null, or a
+    dashed ISO calendar date."""
     if value is None:
         return
     if not isinstance(value, str):
@@ -77,17 +97,15 @@ def _validate_document_date(doc_id: str, value: Any) -> None:
         # every other validator in this module raises ValueError for the
         # same "malformed dataset entry" class of problem.
         raise ValueError(  # noqa: TRY004
-            f"{doc_id}: fields.document_date must be a string or null, got {value!r}"
+            f"{doc_id}: fields.{key} must be a string or null, got {value!r}"
         )
     if not _ISO_DATE_RE.match(value):
-        raise ValueError(
-            f"{doc_id}: fields.document_date {value!r} is not ISO YYYY-MM-DD (dashed)"
-        )
+        raise ValueError(f"{doc_id}: fields.{key} {value!r} is not ISO YYYY-MM-DD (dashed)")
     try:
         date.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(
-            f"{doc_id}: fields.document_date {value!r} is not a valid calendar date"
+            f"{doc_id}: fields.{key} {value!r} is not a valid calendar date"
         ) from exc
 
 
@@ -160,6 +178,113 @@ def _validate_line_items(doc_id: str, value: Any) -> None:
             _validate_line_item_scalar(doc_id, i, key, item[key])
 
 
+def _validate_payment_method(doc_id: str, value: Any) -> None:
+    _validate_string_or_null(doc_id, "payment_method", value)
+    if isinstance(value, str) and has_long_digit_run(value):
+        raise ValueError(
+            f"{doc_id}: fields.payment_method {value!r} holds a card or account number; "
+            "a label keeps the brand only"
+        )
+
+
+def _validate_card_last4(doc_id: str, value: Any) -> None:
+    if value is not None and not (isinstance(value, str) and CARD_LAST4_RE.fullmatch(value)):
+        raise ValueError(
+            f"{doc_id}: fields.payment_card_last4 must be exactly four digits or null, got {value!r}"
+        )
+
+
+def _validate_tax_lines(doc_id: str, value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise ValueError(  # noqa: TRY004 -- label-data validation, see _validate_document_date
+            f"{doc_id}: fields.tax_lines must be a list or null, got {type(value).__name__}"
+        )
+    for i, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise ValueError(  # noqa: TRY004
+                f"{doc_id}: fields.tax_lines[{i}] must be an object, got {type(row).__name__}"
+            )
+        if row.keys() != TAX_LINE_KEYS:
+            raise ValueError(
+                f"{doc_id}: fields.tax_lines[{i}] must have exactly keys "
+                f"{sorted(TAX_LINE_KEYS)}, got {sorted(row)}"
+            )
+        _validate_string_or_null(doc_id, f"tax_lines[{i}].label", row["label"])
+        for key in ("rate", "base", "amount"):
+            _validate_numeric(doc_id, f"tax_lines[{i}].{key}", row[key])
+
+
+def label_values(fields: dict[str, Any]) -> dict[str, Any]:
+    """Every path a label has a value at, with that value: the scalar fields and
+    each cell of each row of line_items and tax_lines. These are the paths an
+    evidence key may name."""
+    values = {name: value for name, value in fields.items() if name not in ARRAY_CELLS}
+    for name, cells in ARRAY_CELLS.items():
+        for index, row in enumerate(fields[name] or []):
+            for cell in cells:
+                values[f"{name}[{index}].{cell}"] = row[cell]
+    return values
+
+
+# The payment fields, whose quotes get the stricter digit-run mask the product
+# applies to them (app/extraction.py, mask_payment_fields).
+_PAYMENT_PATHS = ("payment_method", "payment_card_last4")
+
+
+def _validate_evidence(
+    doc_id: str, raw: Any, fields: dict[str, Any], page_count: int = 1
+) -> dict[str, dict[str, Any]]:
+    """The label's optional `evidence` key: {path: {page, quote}} for values the
+    label gives, with a page the document has (1 to `page_count`) and a verbatim
+    quote that is non-empty, short, and holds no card number: none that passes the
+    Luhn check anywhere, and no long digit run at all in a payment field's quote,
+    exactly what the product masks."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(  # noqa: TRY004
+            f"{doc_id}: evidence must be an object, got {type(raw).__name__}"
+        )
+    values = label_values(fields)
+    for path, entry in raw.items():
+        if path not in values:
+            raise ValueError(f"{doc_id}: evidence names unknown path {path!r}")
+        if values[path] is None:
+            raise ValueError(f"{doc_id}: evidence for {path!r}, whose value is null")
+        if not isinstance(entry, dict) or entry.keys() != {"page", "quote"}:
+            raise ValueError(f"{doc_id}: evidence[{path!r}] must be an object with page and quote")
+        page, quote = entry["page"], entry["quote"]
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError(f"{doc_id}: evidence[{path!r}].page must be an integer from 1, got {page!r}")
+        if page > page_count:
+            raise ValueError(
+                f"{doc_id}: evidence[{path!r}].page {page} is past the document's {page_count} page(s)"
+            )
+        if not isinstance(quote, str) or not quote.strip():
+            raise ValueError(f"{doc_id}: evidence[{path!r}].quote must be non-empty text")
+        if len(quote) > EVIDENCE_QUOTE_MAX_CHARS:
+            raise ValueError(
+                f"{doc_id}: evidence[{path!r}].quote is over {EVIDENCE_QUOTE_MAX_CHARS} characters"
+            )
+        masked = mask_digit_runs(quote) if path in _PAYMENT_PATHS else mask_card_numbers(quote)
+        if masked != quote:
+            raise ValueError(f"{doc_id}: evidence[{path!r}].quote holds a card number; mask it")
+    return raw
+
+
+def _page_count(doc_id: str, raw: dict[str, Any], image_path: Path) -> int:
+    """How many pages the label's document has: an image is one, a PDF as many
+    as it holds."""
+    if raw["mime_type"] != "application/pdf":
+        return 1
+    try:
+        return len(pypdf.PdfReader(image_path).pages)
+    except (pypdf.errors.PyPdfError, OSError) as exc:
+        raise ValueError(f"{doc_id}: unreadable PDF {image_path}: {exc}") from exc
+
+
 def _load_case(label_path: Path, evals_dir: Path = EVALS_DIR) -> EvalCase:
     """Load and loudly validate one label. evals_dir anchors the label's
     relative `image` path; the default is the repo corpus, and
@@ -196,15 +321,21 @@ def _load_case(label_path: Path, evals_dir: Path = EVALS_DIR) -> EvalCase:
         )
 
     _validate_vendor(doc_id, fields["vendor"])
-    _validate_document_date(doc_id, fields["document_date"])
-    _validate_string_or_null(doc_id, "currency", fields["currency"])
-    for key in ("subtotal", "tax", "total"):
+    for key in _DATE_KEYS:
+        _validate_document_date(doc_id, fields[key], key)
+    for key in _TEXT_KEYS:
+        _validate_string_or_null(doc_id, key, fields[key])
+    _validate_payment_method(doc_id, fields["payment_method"])
+    _validate_card_last4(doc_id, fields["payment_card_last4"])
+    for key in _MONEY_KEYS:
         _validate_numeric(doc_id, key, fields[key])
     _validate_line_items(doc_id, fields["line_items"])
+    _validate_tax_lines(doc_id, fields["tax_lines"])
 
     image_path = evals_dir / raw["image"]
     if not image_path.is_file():
         raise ValueError(f"{doc_id}: image file not found: {image_path}")
+    evidence = _validate_evidence(doc_id, raw.get("evidence"), fields, _page_count(doc_id, raw, image_path))
 
     return EvalCase(
         doc_id=doc_id,
@@ -214,6 +345,7 @@ def _load_case(label_path: Path, evals_dir: Path = EVALS_DIR) -> EvalCase:
         dataset_version=raw["dataset_version"],
         difficulty=raw["difficulty"],
         fields=fields,
+        evidence=evidence,
     )
 
 

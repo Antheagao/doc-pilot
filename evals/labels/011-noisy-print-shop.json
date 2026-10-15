@@ -3,7 +3,7 @@
   "image": "docs/011-noisy-print-shop.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "noisy",
   "fields": {
     "vendor": "Union Square Print Shop",
@@ -31,6 +31,108 @@
         "unit_price": 11.8,
         "total": 47.2
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 5.39
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Union Square Print Shop"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2026-01-18"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Wall Calendar                  4       $7.80     $31.20"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Wall Calendar                  4       $7.80     $31.20"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Wall Calendar                  4       $7.80     $31.20"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Wall Calendar                  4       $7.80     $31.20"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Dog Chew Toy                   2       $5.75     $11.50"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Dog Chew Toy                   2       $5.75     $11.50"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Dog Chew Toy                   2       $5.75     $11.50"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Dog Chew Toy                   2       $5.75     $11.50"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Paperback Novel                4      $11.80     $47.20"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Paperback Novel                4      $11.80     $47.20"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Paperback Novel                4      $11.80     $47.20"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Paperback Novel                4      $11.80     $47.20"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $89.90"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $5.39"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $5.39"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $5.39"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $95.29"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

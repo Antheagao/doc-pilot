@@ -3,7 +3,7 @@
   "image": "docs/020-dense-electronics-order.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "dense",
   "fields": {
     "vendor": "Sunridge Electronics Depot",
@@ -73,6 +73,220 @@
         "unit_price": 12.85,
         "total": 25.7
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 16.44
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Sunridge Electronics Depot"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2026-06-06"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set            2       $5.10     $10.20"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set            2       $5.10     $10.20"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set            2       $5.10     $10.20"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set            2       $5.10     $10.20"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Extension Cord 25ft              4      $19.95     $79.80"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Extension Cord 25ft              4      $19.95     $79.80"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Extension Cord 25ft              4      $19.95     $79.80"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Extension Cord 25ft              4      $19.95     $79.80"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Furnace Filter 16x20             1      $12.75     $12.75"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Furnace Filter 16x20             1      $12.75     $12.75"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Furnace Filter 16x20             1      $12.75     $12.75"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Furnace Filter 16x20             1      $12.75     $12.75"
+    },
+    "line_items[3].description": {
+      "page": 1,
+      "quote": "Ceramic Mug 12oz                 4       $8.80     $35.20"
+    },
+    "line_items[3].quantity": {
+      "page": 1,
+      "quote": "Ceramic Mug 12oz                 4       $8.80     $35.20"
+    },
+    "line_items[3].unit_price": {
+      "page": 1,
+      "quote": "Ceramic Mug 12oz                 4       $8.80     $35.20"
+    },
+    "line_items[3].total": {
+      "page": 1,
+      "quote": "Ceramic Mug 12oz                 4       $8.80     $35.20"
+    },
+    "line_items[4].description": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board             4      $14.90     $59.60"
+    },
+    "line_items[4].quantity": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board             4      $14.90     $59.60"
+    },
+    "line_items[4].unit_price": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board             4      $14.90     $59.60"
+    },
+    "line_items[4].total": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board             4      $14.90     $59.60"
+    },
+    "line_items[5].description": {
+      "page": 1,
+      "quote": "Paperback Novel                  2       $9.90     $19.80"
+    },
+    "line_items[5].quantity": {
+      "page": 1,
+      "quote": "Paperback Novel                  2       $9.90     $19.80"
+    },
+    "line_items[5].unit_price": {
+      "page": 1,
+      "quote": "Paperback Novel                  2       $9.90     $19.80"
+    },
+    "line_items[5].total": {
+      "page": 1,
+      "quote": "Paperback Novel                  2       $9.90     $19.80"
+    },
+    "line_items[6].description": {
+      "page": 1,
+      "quote": "Produce Bags (set of 5)          3       $7.00     $21.00"
+    },
+    "line_items[6].quantity": {
+      "page": 1,
+      "quote": "Produce Bags (set of 5)          3       $7.00     $21.00"
+    },
+    "line_items[6].unit_price": {
+      "page": 1,
+      "quote": "Produce Bags (set of 5)          3       $7.00     $21.00"
+    },
+    "line_items[6].total": {
+      "page": 1,
+      "quote": "Produce Bags (set of 5)          3       $7.00     $21.00"
+    },
+    "line_items[7].description": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                1      $19.00     $19.00"
+    },
+    "line_items[7].quantity": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                1      $19.00     $19.00"
+    },
+    "line_items[7].unit_price": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                1      $19.00     $19.00"
+    },
+    "line_items[7].total": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                1      $19.00     $19.00"
+    },
+    "line_items[8].description": {
+      "page": 1,
+      "quote": "Stainless Water Bottle           4      $11.45     $45.80"
+    },
+    "line_items[8].quantity": {
+      "page": 1,
+      "quote": "Stainless Water Bottle           4      $11.45     $45.80"
+    },
+    "line_items[8].unit_price": {
+      "page": 1,
+      "quote": "Stainless Water Bottle           4      $11.45     $45.80"
+    },
+    "line_items[8].total": {
+      "page": 1,
+      "quote": "Stainless Water Bottle           4      $11.45     $45.80"
+    },
+    "line_items[9].description": {
+      "page": 1,
+      "quote": "Cat Litter 10lb                  2      $12.85     $25.70"
+    },
+    "line_items[9].quantity": {
+      "page": 1,
+      "quote": "Cat Litter 10lb                  2      $12.85     $25.70"
+    },
+    "line_items[9].unit_price": {
+      "page": 1,
+      "quote": "Cat Litter 10lb                  2      $12.85     $25.70"
+    },
+    "line_items[9].total": {
+      "page": 1,
+      "quote": "Cat Litter 10lb                  2      $12.85     $25.70"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $328.85"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $16.44"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $16.44"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $16.44"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $345.29"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

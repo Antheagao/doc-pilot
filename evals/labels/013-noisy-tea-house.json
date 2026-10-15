@@ -3,7 +3,7 @@
   "image": "docs/013-noisy-tea-house.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "noisy",
   "fields": {
     "vendor": "Copper Kettle Tea House",
@@ -31,6 +31,108 @@
         "unit_price": 8.8,
         "total": 17.6
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 4.29
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Copper Kettle Tea House"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2025-10-11"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)        2       $9.60     $19.20"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)        2       $9.60     $19.20"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)        2       $9.60     $19.20"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)        2       $9.60     $19.20"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set          2       $7.60     $15.20"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set          2       $7.60     $15.20"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set          2       $7.60     $15.20"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Whiteboard Marker Set          2       $7.60     $15.20"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Paperback Novel                2       $8.80     $17.60"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Paperback Novel                2       $8.80     $17.60"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Paperback Novel                2       $8.80     $17.60"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Paperback Novel                2       $8.80     $17.60"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $52.00"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $4.29"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $4.29"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $4.29"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $56.29"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

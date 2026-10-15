@@ -67,19 +67,24 @@ Fields beyond the basics, each a leaf:
   after the subtotal. A printed negative discount is still recorded as a positive
   number.
 - `shipping`: shipping, freight, or delivery charges.
-- `tax`: the printed total tax for the whole document.
+- `tax`: the printed total tax for the whole document. It is `null` when the
+  document prints only tax lines and no total tax.
 - `tax_lines`: every printed tax line, in the order printed, including a lone
   line labeled just "Tax". Each row has `label` (the printed name, such as
   `State sales tax`), `rate`, `base` (the amount the tax is charged on, when
   printed), and `amount`. `rate` is the printed percentage number: write
   `8.875` for 8.875%, never `0.08875`, and use `null` when no rate is printed.
+  `label` is the printed name without its rate: `VAT` for a line printed
+  `VAT 19% on 125,19 EUR`, `State sales tax` for `State sales tax 6.5%`.
   Do not add up tax lines yourself and do not invent a line the document does
   not show; `tax` is the printed total, not a sum you computed.
 - `tip`: a gratuity or tip amount added to the bill.
 - `total`: the grand total of the document.
 - `amount_paid`: only payments that were applied to this document (a deposit, a
   prepayment, a card payment shown as paid). Never cash tendered, change given,
-  or an amount you derived.
+  or an amount you derived. A payment line that prints no amount (`Paid by VISA
+  ****4242`) leaves `amount_paid` `null`: the total is not the amount paid
+  unless the document prints it as paid.
 - `amount_due`: the balance still owed as printed. It is `null` when no balance
   is printed.
 
@@ -93,8 +98,11 @@ Evidence:
   characters.
 - A leaf whose `value` is `null` has `null` evidence. A leaf with a value
   always has evidence unless you truly cannot point to where it is printed.
-- For the payment fields, a quote never contains more than the last four
-  digits of a card or account number: write `VISA ending 4242`, not the full
-  number.
+- Copy the quote verbatim, except that any card or account number is written
+  as `****` followed by its last four digits: a line printed `Paid by VISA
+  4111 1111 1111 1111 $88.57` is quoted `Paid by VISA ****1111 $88.57`. This
+  holds for the quote of every field, the payment fields and the amount paid
+  or the total alike. A quote never contains more than the last four digits of
+  a card or account number.
 
 Call `record_extraction` exactly once with your best reading of the document.

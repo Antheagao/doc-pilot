@@ -3,7 +3,7 @@
   "image": "docs/004-clean-bike-shop-ticket.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "clean",
   "fields": {
     "vendor": "Ridgeline Bike Works",
@@ -31,6 +31,108 @@
         "unit_price": 9.2,
         "total": 36.8
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 5.87
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Ridgeline Bike Works"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2025-09-29"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)        4       $8.90     $35.60"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)        4       $8.90     $35.60"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)        4       $8.90     $35.60"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)        4       $8.90     $35.60"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder              1      $14.55     $14.55"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder              1      $14.55     $14.55"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder              1      $14.55     $14.55"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder              1      $14.55     $14.55"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Herbal Tea Sampler             4       $9.20     $36.80"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Herbal Tea Sampler             4       $9.20     $36.80"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Herbal Tea Sampler             4       $9.20     $36.80"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Herbal Tea Sampler             4       $9.20     $36.80"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $86.95"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $5.87"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $5.87"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $5.87"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $92.82"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }

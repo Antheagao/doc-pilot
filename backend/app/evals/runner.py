@@ -472,8 +472,9 @@ def predicted_mock_accuracy(cases: list[EvalCase]) -> float:
     total_slots = len(cases) * 7 (the v1 field count). Each of the two
     fixed perturbations (see _mock_perturbation_targets) costs exactly
     one wrong field IF its target doc_id is present in `cases` -- for the
-    full 25-doc shipped dataset that's 25 * 7 = 175 slots, 2 wrong ->
-    173/175 = 0.9885714285714285.
+    full 32-doc shipped dataset that's 32 * 7 = 224 slots, 2 wrong ->
+    222/224 = 0.9910714285714286. The mock fills and scores only the seven v1
+    fields of each label, whatever else a v2 label holds.
     """
     tax_perturb_doc_id, vendor_none_doc_id = _mock_perturbation_targets()
     doc_ids = {c.doc_id for c in cases}

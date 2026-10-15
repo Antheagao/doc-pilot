@@ -3,7 +3,7 @@
   "image": "docs/019-dense-hardware-warehouse.png",
   "mime_type": "image/png",
   "source": "synthetic",
-  "dataset_version": "v1",
+  "dataset_version": "v2",
   "difficulty": "dense",
   "fields": {
     "vendor": "Sterling Hardware & Supply",
@@ -109,6 +109,316 @@
         "unit_price": 15.75,
         "total": 31.5
       }
-    ]
+    ],
+    "invoice_number": null,
+    "po_number": null,
+    "vendor_tax_id": null,
+    "due_date": null,
+    "payment_terms": null,
+    "payment_method": null,
+    "payment_card_last4": null,
+    "discount": null,
+    "shipping": null,
+    "tax_lines": [
+      {
+        "label": "Tax",
+        "rate": null,
+        "base": null,
+        "amount": 23.53
+      }
+    ],
+    "tip": null,
+    "amount_paid": null,
+    "amount_due": null
+  },
+  "evidence": {
+    "vendor": {
+      "page": 1,
+      "quote": "Sterling Hardware & Supply"
+    },
+    "document_date": {
+      "page": 1,
+      "quote": "Date: 2026-05-13"
+    },
+    "line_items[0].description": {
+      "page": 1,
+      "quote": "Ballpoint Pen 12-pack            3       $5.40     $16.20"
+    },
+    "line_items[0].quantity": {
+      "page": 1,
+      "quote": "Ballpoint Pen 12-pack            3       $5.40     $16.20"
+    },
+    "line_items[0].unit_price": {
+      "page": 1,
+      "quote": "Ballpoint Pen 12-pack            3       $5.40     $16.20"
+    },
+    "line_items[0].total": {
+      "page": 1,
+      "quote": "Ballpoint Pen 12-pack            3       $5.40     $16.20"
+    },
+    "line_items[1].description": {
+      "page": 1,
+      "quote": "Extension Cord 25ft              1      $18.65     $18.65"
+    },
+    "line_items[1].quantity": {
+      "page": 1,
+      "quote": "Extension Cord 25ft              1      $18.65     $18.65"
+    },
+    "line_items[1].unit_price": {
+      "page": 1,
+      "quote": "Extension Cord 25ft              1      $18.65     $18.65"
+    },
+    "line_items[1].total": {
+      "page": 1,
+      "quote": "Extension Cord 25ft              1      $18.65     $18.65"
+    },
+    "line_items[2].description": {
+      "page": 1,
+      "quote": "Scented Candle 8oz               3       $9.10     $27.30"
+    },
+    "line_items[2].quantity": {
+      "page": 1,
+      "quote": "Scented Candle 8oz               3       $9.10     $27.30"
+    },
+    "line_items[2].unit_price": {
+      "page": 1,
+      "quote": "Scented Candle 8oz               3       $9.10     $27.30"
+    },
+    "line_items[2].total": {
+      "page": 1,
+      "quote": "Scented Candle 8oz               3       $9.10     $27.30"
+    },
+    "line_items[3].description": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                2      $21.05     $42.10"
+    },
+    "line_items[3].quantity": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                2      $21.05     $42.10"
+    },
+    "line_items[3].unit_price": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                2      $21.05     $42.10"
+    },
+    "line_items[3].total": {
+      "page": 1,
+      "quote": "Cedar Bird Feeder                2      $21.05     $42.10"
+    },
+    "line_items[4].description": {
+      "page": 1,
+      "quote": "Wall Calendar                    2       $6.45     $12.90"
+    },
+    "line_items[4].quantity": {
+      "page": 1,
+      "quote": "Wall Calendar                    2       $6.45     $12.90"
+    },
+    "line_items[4].unit_price": {
+      "page": 1,
+      "quote": "Wall Calendar                    2       $6.45     $12.90"
+    },
+    "line_items[4].total": {
+      "page": 1,
+      "quote": "Wall Calendar                    2       $6.45     $12.90"
+    },
+    "line_items[5].description": {
+      "page": 1,
+      "quote": "Canvas Tote Bag                  4       $7.85     $31.40"
+    },
+    "line_items[5].quantity": {
+      "page": 1,
+      "quote": "Canvas Tote Bag                  4       $7.85     $31.40"
+    },
+    "line_items[5].unit_price": {
+      "page": 1,
+      "quote": "Canvas Tote Bag                  4       $7.85     $31.40"
+    },
+    "line_items[5].total": {
+      "page": 1,
+      "quote": "Canvas Tote Bag                  4       $7.85     $31.40"
+    },
+    "line_items[6].description": {
+      "page": 1,
+      "quote": "Notebook, ruled 80pg             1       $4.10      $4.10"
+    },
+    "line_items[6].quantity": {
+      "page": 1,
+      "quote": "Notebook, ruled 80pg             1       $4.10      $4.10"
+    },
+    "line_items[6].unit_price": {
+      "page": 1,
+      "quote": "Notebook, ruled 80pg             1       $4.10      $4.10"
+    },
+    "line_items[6].total": {
+      "page": 1,
+      "quote": "Notebook, ruled 80pg             1       $4.10      $4.10"
+    },
+    "line_items[7].description": {
+      "page": 1,
+      "quote": "Garden Trowel                    4       $6.05     $24.20"
+    },
+    "line_items[7].quantity": {
+      "page": 1,
+      "quote": "Garden Trowel                    4       $6.05     $24.20"
+    },
+    "line_items[7].unit_price": {
+      "page": 1,
+      "quote": "Garden Trowel                    4       $6.05     $24.20"
+    },
+    "line_items[7].total": {
+      "page": 1,
+      "quote": "Garden Trowel                    4       $6.05     $24.20"
+    },
+    "line_items[8].description": {
+      "page": 1,
+      "quote": "Yoga Mat                         4      $22.55     $90.20"
+    },
+    "line_items[8].quantity": {
+      "page": 1,
+      "quote": "Yoga Mat                         4      $22.55     $90.20"
+    },
+    "line_items[8].unit_price": {
+      "page": 1,
+      "quote": "Yoga Mat                         4      $22.55     $90.20"
+    },
+    "line_items[8].total": {
+      "page": 1,
+      "quote": "Yoga Mat                         4      $22.55     $90.20"
+    },
+    "line_items[9].description": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)          4       $8.75     $35.00"
+    },
+    "line_items[9].quantity": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)          4       $8.75     $35.00"
+    },
+    "line_items[9].unit_price": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)          4       $8.75     $35.00"
+    },
+    "line_items[9].total": {
+      "page": 1,
+      "quote": "Wool Blend Socks (pair)          4       $8.75     $35.00"
+    },
+    "line_items[10].description": {
+      "page": 1,
+      "quote": "Cat Litter 10lb                  3      $12.85     $38.55"
+    },
+    "line_items[10].quantity": {
+      "page": 1,
+      "quote": "Cat Litter 10lb                  3      $12.85     $38.55"
+    },
+    "line_items[10].unit_price": {
+      "page": 1,
+      "quote": "Cat Litter 10lb                  3      $12.85     $38.55"
+    },
+    "line_items[10].total": {
+      "page": 1,
+      "quote": "Cat Litter 10lb                  3      $12.85     $38.55"
+    },
+    "line_items[11].description": {
+      "page": 1,
+      "quote": "Ceramic Mug 12oz                 2       $8.15     $16.30"
+    },
+    "line_items[11].quantity": {
+      "page": 1,
+      "quote": "Ceramic Mug 12oz                 2       $8.15     $16.30"
+    },
+    "line_items[11].unit_price": {
+      "page": 1,
+      "quote": "Ceramic Mug 12oz                 2       $8.15     $16.30"
+    },
+    "line_items[11].total": {
+      "page": 1,
+      "quote": "Ceramic Mug 12oz                 2       $8.15     $16.30"
+    },
+    "line_items[12].description": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board             4      $13.65     $54.60"
+    },
+    "line_items[12].quantity": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board             4      $13.65     $54.60"
+    },
+    "line_items[12].unit_price": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board             4      $13.65     $54.60"
+    },
+    "line_items[12].total": {
+      "page": 1,
+      "quote": "Bamboo Cutting Board             4      $13.65     $54.60"
+    },
+    "line_items[13].description": {
+      "page": 1,
+      "quote": "Kitchen Sponge 6-pack            1       $4.60      $4.60"
+    },
+    "line_items[13].quantity": {
+      "page": 1,
+      "quote": "Kitchen Sponge 6-pack            1       $4.60      $4.60"
+    },
+    "line_items[13].unit_price": {
+      "page": 1,
+      "quote": "Kitchen Sponge 6-pack            1       $4.60      $4.60"
+    },
+    "line_items[13].total": {
+      "page": 1,
+      "quote": "Kitchen Sponge 6-pack            1       $4.60      $4.60"
+    },
+    "line_items[14].description": {
+      "page": 1,
+      "quote": "Dog Chew Toy                     4       $5.75     $23.00"
+    },
+    "line_items[14].quantity": {
+      "page": 1,
+      "quote": "Dog Chew Toy                     4       $5.75     $23.00"
+    },
+    "line_items[14].unit_price": {
+      "page": 1,
+      "quote": "Dog Chew Toy                     4       $5.75     $23.00"
+    },
+    "line_items[14].total": {
+      "page": 1,
+      "quote": "Dog Chew Toy                     4       $5.75     $23.00"
+    },
+    "line_items[15].description": {
+      "page": 1,
+      "quote": "Furnace Filter 16x20             2      $15.75     $31.50"
+    },
+    "line_items[15].quantity": {
+      "page": 1,
+      "quote": "Furnace Filter 16x20             2      $15.75     $31.50"
+    },
+    "line_items[15].unit_price": {
+      "page": 1,
+      "quote": "Furnace Filter 16x20             2      $15.75     $31.50"
+    },
+    "line_items[15].total": {
+      "page": 1,
+      "quote": "Furnace Filter 16x20             2      $15.75     $31.50"
+    },
+    "subtotal": {
+      "page": 1,
+      "quote": "Subtotal: $470.60"
+    },
+    "tax": {
+      "page": 1,
+      "quote": "Tax: $23.53"
+    },
+    "tax_lines[0].label": {
+      "page": 1,
+      "quote": "Tax: $23.53"
+    },
+    "tax_lines[0].amount": {
+      "page": 1,
+      "quote": "Tax: $23.53"
+    },
+    "total": {
+      "page": 1,
+      "quote": "Total: $494.13"
+    },
+    "currency": {
+      "page": 1,
+      "quote": "Currency: USD"
+    }
   }
 }
