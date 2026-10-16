@@ -68,7 +68,9 @@ Fields beyond the basics, each a leaf:
   number.
 - `shipping`: shipping, freight, or delivery charges.
 - `tax`: the printed total tax for the whole document. It is `null` when the
-  document prints only tax lines and no total tax.
+  document prints only tax lines and no total tax. A document whose only tax
+  is a single line labeled just `Tax` prints one number that is both the only
+  tax line and the total tax, so `tax` is that number there, not `null`.
 - `tax_lines`: every printed tax line, in the order printed, including a lone
   line labeled just "Tax". Each row has `label` (the printed name, such as
   `State sales tax`), `rate`, `base` (the amount the tax is charged on, when

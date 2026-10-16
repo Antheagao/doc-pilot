@@ -23,6 +23,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -30,7 +31,7 @@ from app.config import get_settings
 from app.evals.dataset import EVALS_DIR, EvalCase, load_cases
 from app.evals.scoring import aggregate, score_case
 from app.extraction import ExtractionResult, extract_document
-from app.extraction_fields import SCHEMA_V1
+from app.extraction_fields import ARRAY_CELLS, SCHEMA_V1, ExtractionSchema
 
 RESULTS_DIR = EVALS_DIR / "results"
 
@@ -42,6 +43,8 @@ RESULTS_DIR = EVALS_DIR / "results"
 _MOCK_MODEL = "mock-model"
 _MOCK_CONFIDENCE = 0.9
 _MOCK_TAX_PERTURBATION = 0.10
+# "No evidence key at all", which a v1 leaf has and a null evidence does not.
+_NO_EVIDENCE = object()
 
 
 class ExtractFn(Protocol):
@@ -71,6 +74,10 @@ class RunResult:
     errors: list[dict[str, Any]]
     skipped_cost_cap: list[str]
     per_doc: list[dict[str, Any]] = field(default_factory=list)
+    # Malformed leaves left in the answers after the repair pass, summed over the
+    # scored documents; scoring's own count (summary.total_schema_violations) is
+    # of what the scorer had to coerce, a different measure.
+    total_residual_schema_violations: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +102,7 @@ class RunResult:
             "errors": self.errors,
             "skipped_cost_cap": self.skipped_cost_cap,
             "per_doc": self.per_doc,
+            "total_residual_schema_violations": self.total_residual_schema_violations,
         }
 
 
@@ -119,10 +127,11 @@ async def run_eval(
     *,
     concurrency: int = 3,
     max_cost_usd: float = 1.00,
+    schema: ExtractionSchema = SCHEMA_V1,
 ) -> RunResult:
-    """Run `extract_fn` (default: app.extraction.extract_document) over
-    every case in `cases`, score each result against its gold label, and
-    return a single RunResult.
+    """Run `extract_fn` (default: app.extraction.extract_document asked for
+    `schema`) over every case in `cases`, score each result against its gold
+    label over the fields of `schema`, and return a single RunResult.
 
     Concurrency is bounded by an asyncio.Semaphore(concurrency): one task
     per case is created up front, but at most `concurrency` of them are
@@ -188,7 +197,7 @@ async def run_eval(
         raise ValueError(f"concurrency must be >= 1, got {concurrency}")
 
     if extract_fn is None:
-        extract_fn = extract_document
+        extract_fn = partial(extract_document, schema=schema)
 
     dataset_versions = {c.dataset_version for c in cases}
     if len(dataset_versions) > 1:
@@ -246,6 +255,7 @@ async def run_eval(
                     "input_tokens": getattr(exc, "input_tokens", None),
                     "output_tokens": getattr(exc, "output_tokens", None),
                     "cost_usd": error_cost_usd,
+                    "stop_reasons": getattr(exc, "stop_reasons", None),
                 }
                 if error_cost_usd is not None:
                     async with cost_lock:
@@ -254,7 +264,7 @@ async def run_eval(
                             state["cap_hit"] = True
                 return
 
-            score = score_case(case, result.tool_input, review_threshold)
+            score = score_case(case, result.tool_input, review_threshold, schema)
             results_by_idx[idx] = result
             case_scores_by_idx[idx] = score
             doc_details[idx] = {
@@ -270,6 +280,8 @@ async def run_eval(
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
                 "repaired": result.repaired,
+                "residual_schema_violations": result.schema_violations,
+                "stop_reasons": result.stop_reasons,
             }
 
             async with cost_lock:
@@ -340,6 +352,7 @@ async def run_eval(
         errors=errors,
         skipped_cost_cap=[d["doc_id"] for d in skipped],
         per_doc=[d for d in doc_details if d is not None],
+        total_residual_schema_violations=sum(r.schema_violations for r in results),
     )
 
 
@@ -381,8 +394,13 @@ def write_result(result: RunResult, out_dir: Path | None = None) -> Path:
 # --- mock extract_fn (shared by the CLI and the test suite) --------------
 
 
-def _wrap_leaf(value: Any, confidence: float = _MOCK_CONFIDENCE) -> dict[str, Any]:
-    return {"value": value, "confidence": confidence}
+def _wrap_leaf(
+    value: Any, confidence: float = _MOCK_CONFIDENCE, evidence: Any = _NO_EVIDENCE
+) -> dict[str, Any]:
+    leaf = {"value": value, "confidence": confidence}
+    if evidence is not _NO_EVIDENCE:
+        leaf["evidence"] = evidence
+    return leaf
 
 
 def _mock_perturbation_targets() -> tuple[str | None, str | None]:
@@ -402,83 +420,103 @@ def _mock_perturbation_targets() -> tuple[str | None, str | None]:
 
 
 def _fake_tool_input(
-    fields: dict[str, Any],
-    doc_id: str,
+    case: EvalCase,
+    schema: ExtractionSchema,
     tax_perturb_doc_id: str | None,
     vendor_none_doc_id: str | None,
 ) -> dict[str, Any]:
+    """The answer a flawless reader gives for `case` under `schema`, with the two
+    fixed perturbations applied. A schema with evidence gets each non-null value's
+    gold evidence (a copy, so a caller cannot change the label), and the perturbed
+    tax keeps the gold quote of the number it was nudged away from, which is what
+    a misread that the quote contradicts looks like."""
+
+    def leaf(value: Any, path: str) -> dict[str, Any]:
+        if not schema.evidence:
+            return _wrap_leaf(value)
+        cited = case.evidence.get(path) if value is not None else None
+        return _wrap_leaf(value, evidence=dict(cited) if cited is not None else None)
+
     tool_input: dict[str, Any] = {}
-    for name in SCHEMA_V1.field_names:
-        if name == "line_items":
-            items = fields["line_items"] or []
-            wrapped_items = [
-                {key: _wrap_leaf(item[key]) for key in ("description", "quantity", "unit_price", "total")}
-                for item in items
+    for spec in schema.fields:
+        name = spec.name
+        if spec.kind == "array":
+            rows = case.fields[name] or []
+            wrapped_rows = [
+                {key: leaf(row[key], f"{name}[{index}].{key}") for key in ARRAY_CELLS[name]}
+                for index, row in enumerate(rows)
             ]
-            tool_input["line_items"] = _wrap_leaf(wrapped_items)
+            tool_input[name] = _wrap_leaf(wrapped_rows)
             continue
 
-        value = fields[name]
-        if name == "tax" and doc_id == tax_perturb_doc_id and value is not None:
+        value = case.fields[name]
+        if name == "tax" and case.doc_id == tax_perturb_doc_id and value is not None:
             value = round(value + _MOCK_TAX_PERTURBATION, 2)
-        elif name == "vendor" and doc_id == vendor_none_doc_id:
+        elif name == "vendor" and case.doc_id == vendor_none_doc_id:
             value = None
-        tool_input[name] = _wrap_leaf(value)
+        tool_input[name] = leaf(value, name)
     return tool_input
 
 
-def build_mock_extract_fn(cases: list[EvalCase]) -> ExtractFn:
+def build_mock_extract_fn(
+    cases: list[EvalCase], schema: ExtractionSchema = SCHEMA_V1
+) -> ExtractFn:
     """Build a deterministic, zero-cost fake extract_fn from `cases`'
-    own gold labels: every field is wrapped as {value, confidence 0.9}
-    (line_items: each item's four sub-fields wrapped the same way), so a
-    default run scores ~perfectly -- except for two fixed perturbations
-    (see _mock_perturbation_targets / _fake_tool_input) that make the
-    expected accuracy an exact, analytically-known constant rather than
-    a vacuous 1.0. See predicted_mock_accuracy() for that computation.
+    own gold labels: every field of `schema` is wrapped as {value, confidence
+    0.9} (each cell of a line item or tax line the same way, with gold evidence
+    on every leaf for a schema with evidence), so a default run scores
+    ~perfectly -- except for two fixed perturbations (see
+    _mock_perturbation_targets / _fake_tool_input) that make the expected
+    accuracy an exact, analytically-known constant rather than a vacuous 1.0. See
+    predicted_mock_accuracy() for that computation.
 
     This is the shared mock seam: both the --mock CLI flag and
     test_evals_runner.py call this (not a duplicated local version), so
     they can never drift out of sync with each other.
     """
     tax_perturb_doc_id, vendor_none_doc_id = _mock_perturbation_targets()
-    fields_by_doc_id = {c.doc_id: c.fields for c in cases}
+    cases_by_doc_id = {c.doc_id: c for c in cases}
 
     async def mock_extract_fn(path: str | Path, mime_type: str) -> ExtractionResult:
         doc_id = Path(path).stem
-        fields = fields_by_doc_id.get(doc_id)
-        if fields is None:
+        case = cases_by_doc_id.get(doc_id)
+        if case is None:
             raise KeyError(
                 f"mock extract_fn: no case with doc_id {doc_id!r} was passed to "
                 f"build_mock_extract_fn (path={path})"
             )
-        tool_input = _fake_tool_input(fields, doc_id, tax_perturb_doc_id, vendor_none_doc_id)
+        tool_input = _fake_tool_input(case, schema, tax_perturb_doc_id, vendor_none_doc_id)
         return ExtractionResult(
             tool_input=tool_input,
             model=_MOCK_MODEL,
-            prompt_version=SCHEMA_V1.prompt_version,
+            prompt_version=schema.prompt_version,
             input_tokens=0,
             output_tokens=0,
             cost_usd=0.0,
             latency_ms=1,
+            stop_reasons=[{"first": "tool_use", "repair": None}],
         )
 
     return mock_extract_fn
 
 
-def predicted_mock_accuracy(cases: list[EvalCase]) -> float:
+def predicted_mock_accuracy(
+    cases: list[EvalCase], schema: ExtractionSchema = SCHEMA_V1
+) -> float:
     """Analytically compute the exact overall_accuracy build_mock_extract_fn's
     output must score, for eyeball comparison against the actual run.
 
-    total_slots = len(cases) * 7 (the v1 field count). Each of the two
+    total_slots = len(cases) * the schema's field count. Each of the two
     fixed perturbations (see _mock_perturbation_targets) costs exactly
     one wrong field IF its target doc_id is present in `cases` -- for the
-    full 32-doc shipped dataset that's 32 * 7 = 224 slots, 2 wrong ->
-    222/224 = 0.9910714285714286. The mock fills and scores only the seven v1
-    fields of each label, whatever else a v2 label holds.
+    full 32-doc shipped dataset that's 32 * 7 = 224 slots for v1, 2 wrong ->
+    222/224 = 0.9910714285714286, and 32 * 20 = 640 slots for v2, 2 wrong ->
+    638/640 = 0.996875. The mock fills and scores the fields of `schema` only,
+    whatever else a v2 label holds.
     """
     tax_perturb_doc_id, vendor_none_doc_id = _mock_perturbation_targets()
     doc_ids = {c.doc_id for c in cases}
-    total_slots = len(cases) * len(SCHEMA_V1.field_names)
+    total_slots = len(cases) * len(schema.field_names)
     if total_slots == 0:
         return 0.0
     wrong = sum(

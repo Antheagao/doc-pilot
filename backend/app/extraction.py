@@ -30,6 +30,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -122,12 +123,16 @@ class ExtractionError(Exception):
         output_tokens: int | None = None,
         cost_usd: float | None = None,
         retry_after_seconds: float | None = None,
+        stop_reasons: list[dict[str, str | None]] | None = None,
     ) -> None:
         super().__init__(message)
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.cost_usd = cost_usd
         self.retry_after_seconds = retry_after_seconds
+        # The stop reasons of the calls made before this failure, one entry per
+        # block as on ExtractionResult.stop_reasons (None where no call finished).
+        self.stop_reasons = stop_reasons
 
 
 class NonRetryableExtractionError(ExtractionError):
@@ -170,6 +175,12 @@ class ExtractionResult:
     # the first response's otherwise.
     repaired: bool = False
     schema_violations: int = 0
+    # How each block's calls stopped, one {"first", "repair"} entry per block (a
+    # whole document on the single-call path, each page on the chunked path):
+    # "first" is the stop reason of the extraction call, "repair" that of the
+    # repair call, None when none was made or it failed. A "max_tokens" here
+    # means an answer was cut off, which tool_use alone would hide.
+    stop_reasons: list[dict[str, str | None]] = dataclass_field(default_factory=list)
 
 
 def _build_client(settings: Settings) -> anthropic.AsyncAnthropic:
@@ -996,6 +1007,8 @@ class _PageResult:
     latency_ms: int
     repaired: bool
     schema_violations: int
+    stop_reason: str
+    repair_stop_reason: str | None
 
 
 async def _extract_one_block(
@@ -1076,6 +1089,7 @@ async def _extract_one_block(
                 response.usage.input_tokens,
                 response.usage.output_tokens,
             ),
+            stop_reasons=[{"first": response.stop_reason, "repair": None}],
         )
 
     tool_use_block = next(
@@ -1093,6 +1107,7 @@ async def _extract_one_block(
                 response.usage.input_tokens,
                 response.usage.output_tokens,
             ),
+            stop_reasons=[{"first": response.stop_reason, "repair": None}],
         )
 
     # Masked before anything else sees it: the repair prompt below, the
@@ -1102,6 +1117,7 @@ async def _extract_one_block(
     tool_input = _with_evidence_pages(model_input, schema, page_count)
     violations = _schema_violations(tool_input, schema)
     repaired = False
+    repair_stop_reason: str | None = None
     total_input_tokens = response.usage.input_tokens
     total_output_tokens = response.usage.output_tokens
 
@@ -1178,6 +1194,7 @@ async def _extract_one_block(
             # docstring) -- both calls spent real money.
             total_input_tokens += repair_response.usage.input_tokens
             total_output_tokens += repair_response.usage.output_tokens
+            repair_stop_reason = repair_response.stop_reason
 
             repair_tool_use_block = None
             if repair_response.stop_reason == "tool_use":
@@ -1218,6 +1235,8 @@ async def _extract_one_block(
         latency_ms=latency_ms,
         repaired=repaired,
         schema_violations=len(violations),
+        stop_reason=response.stop_reason,
+        repair_stop_reason=repair_stop_reason,
     )
 
 
@@ -1260,6 +1279,7 @@ async def _extract_chunked_pdf(
     total_latency_ms = 0
     total_schema_violations = 0
     any_repaired = False
+    stop_reasons: list[dict[str, str | None]] = []
 
     for page_num, page_pdf_bytes in enumerate(page_pdfs, start=1):
         document_block = _encode_document_block(page_pdf_bytes, PDF_MIME_TYPE, "document")
@@ -1273,6 +1293,7 @@ async def _extract_chunked_pdf(
             exc.cost_usd = _compute_cost_usd(
                 settings.extraction_model, exc.input_tokens, exc.output_tokens
             )
+            exc.stop_reasons = [*stop_reasons, *(exc.stop_reasons or [])]
             raise
 
         page_inputs.append(page_result.tool_input)
@@ -1296,6 +1317,9 @@ async def _extract_chunked_pdf(
         total_latency_ms += page_result.latency_ms
         total_schema_violations += page_result.schema_violations
         any_repaired = any_repaired or page_result.repaired
+        stop_reasons.append(
+            {"first": page_result.stop_reason, "repair": page_result.repair_stop_reason}
+        )
 
     merged_tool_input = merge_page_tool_inputs(page_inputs, schema)
     merged_tool_input["_chunks"] = chunks
@@ -1312,6 +1336,7 @@ async def _extract_chunked_pdf(
         latency_ms=total_latency_ms,
         repaired=any_repaired,
         schema_violations=total_schema_violations,
+        stop_reasons=stop_reasons,
     )
 
 
@@ -1418,6 +1443,9 @@ async def extract_document(
         latency_ms=page_result.latency_ms,
         repaired=page_result.repaired,
         schema_violations=page_result.schema_violations,
+        stop_reasons=[
+            {"first": page_result.stop_reason, "repair": page_result.repair_stop_reason}
+        ],
     )
 
 

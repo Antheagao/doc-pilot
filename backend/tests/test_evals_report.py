@@ -11,19 +11,22 @@ from typing import Any
 
 import pytest
 
-from app.evals.dataset import EVALS_DIR
+from app.evals.dataset import CORE_DOC_IDS, EVALS_DIR, load_cases
 from app.evals.report import (
+    _ACCURACY_HEADER,
     _OPS_HEADER,
     END_MARKER,
     LATEST_MD_PATH,
     NO_RUNS_PLACEHOLDER,
     START_MARKER,
+    core_counts,
     load_results,
     render_latest_md,
     render_tables,
     update_readme,
 )
-from app.extraction_fields import SCHEMA_V1, SCHEMAS
+from app.evals.runner import build_mock_extract_fn, run_eval
+from app.extraction_fields import SCHEMA_V1, SCHEMA_V2, SCHEMAS
 
 
 @pytest.fixture
@@ -125,6 +128,41 @@ def _ops_cell(row: str, column: str) -> str:
     return cells[_OPS_HEADER.index(column)]
 
 
+def _accuracy_cell(row: str, column: str) -> str:
+    cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+    return cells[_ACCURACY_HEADER.index(column)]
+
+
+def _table_rows(markdown: str, heading: str) -> list[str]:
+    """The data rows of the first table under a heading."""
+    table: list[str] = []
+    for line in markdown.split(heading, 1)[1].splitlines():
+        if line.startswith("|"):
+            table.append(line)
+        elif table:
+            break
+    return table[2:]
+
+
+async def _mock_v2_artifact(limit: int | None = None) -> dict[str, Any]:
+    cases = load_cases(limit=limit)
+    result = await run_eval(cases, extract_fn=build_mock_extract_fn(cases, SCHEMA_V2), schema=SCHEMA_V2)
+    return result.to_dict()
+
+
+def _core_doc(doc_id: str, correct: bool) -> dict[str, Any]:
+    return {
+        "doc_id": doc_id,
+        "status": "scored",
+        "fields": {
+            "vendor": _field("A", "A", correct=correct),
+            "tax": _field(1.0, 1.0, correct=True),
+            # A v2-only field: the core column never reads it.
+            "payment_terms": _field("Net 30", "Net 60", correct=False),
+        },
+    }
+
+
 class TestRenderTables:
     def test_empty_results_is_placeholder(self):
         assert render_tables([]) == NO_RUNS_PLACEHOLDER
@@ -209,8 +247,32 @@ class TestRenderTables:
     def test_caught_by_checks_is_na_without_scored_answers(self):
         ops_row = render_tables([_make_artifact(per_doc=[])]).split("### Ops")[1].splitlines()[4]
 
-        assert ops_row.count("n/a") == 1
-        assert "| 100.0% | n/a |" in ops_row
+        # Caught by checks and Caught by quotes both have nothing to replay.
+        assert ops_row.count("n/a") == 2
+        assert "| 100.0% | n/a | n/a |" in ops_row
+
+    def test_ops_table_has_a_caught_by_quotes_column_after_the_checks_one(self):
+        markdown = render_tables([_make_artifact()])
+
+        ops_header = next(line for line in markdown.splitlines() if "Caught by review" in line)
+        assert "| Caught by checks | Caught by quotes | Halluc. |" in ops_header
+        assert "Caught by quotes is the part of that share" in markdown
+
+    def test_caught_by_quotes_is_na_for_a_v1_run(self):
+        artifact = _make_artifact(n_scored=1, per_doc=[_doc_with_wrong_tax()])
+
+        ops_row = render_tables([artifact]).split("### Ops")[1].splitlines()[4]
+
+        assert _ops_cell(ops_row, "Caught by checks") == "100.0%"
+        assert _ops_cell(ops_row, "Caught by quotes") == "n/a"
+
+    async def test_caught_by_quotes_is_the_quotes_share_for_a_v2_run(self):
+        run = await _mock_v2_artifact()
+
+        ops_row = render_tables([run]).split("### Ops")[1].splitlines()[4]
+
+        assert _ops_cell(ops_row, "Caught by checks") == "50.0%"
+        assert _ops_cell(ops_row, "Caught by quotes") == "50.0%"
 
     def test_summary_none_renders_na_row(self):
         artifact = _make_artifact(n_scored=0, n_errors=5, summary=None)
@@ -219,6 +281,133 @@ class TestRenderTables:
 
         assert "0 +5 err" in markdown
         assert "n/a / n/a" in markdown
+
+
+class TestCoreColumn:
+    def test_it_follows_overall_in_the_accuracy_table(self):
+        assert _ACCURACY_HEADER[3:5] == ("Overall", "Core (v1 fields, docs 001-025)")
+
+    def test_it_is_the_share_of_core_v1_fields_the_run_got_right(self):
+        docs = [_core_doc(CORE_DOC_IDS[0], True), _core_doc(CORE_DOC_IDS[1], False)]
+        artifact = _make_artifact(prompt_version="extract_v2", n_scored=2, per_doc=docs)
+
+        row = _table_rows(render_tables([artifact]), "### Accuracy")[0]
+
+        # 2 docs x the 2 v1 fields they carry = 4 fields, 3 right; payment_terms
+        # is not a v1 field and is wrong in both.
+        assert core_counts(artifact) == (3, 4)
+        assert _accuracy_cell(row, "Core (v1 fields, docs 001-025)") == "3/4 (75.0%)"
+
+    def test_documents_outside_the_core_do_not_count(self):
+        docs = [_core_doc(CORE_DOC_IDS[0], True), _core_doc("026-invoice-discount-shipping-two-taxes", False)]
+        artifact = _make_artifact(n_scored=2, per_doc=docs)
+
+        assert core_counts(artifact) == (2, 2)
+
+    def test_errored_and_skipped_documents_do_not_count(self):
+        docs = [
+            _core_doc(CORE_DOC_IDS[0], True),
+            {"doc_id": CORE_DOC_IDS[1], "status": "error"},
+            {"doc_id": CORE_DOC_IDS[2], "status": "skipped_cost_cap"},
+        ]
+
+        assert core_counts(_make_artifact(per_doc=docs)) == (2, 2)
+
+    def test_a_run_with_no_core_document_shows_na(self):
+        artifact = _make_artifact(
+            prompt_version="extract_v2", n_scored=1, per_doc=[_core_doc("029-receipt-card-number-pii", True)]
+        )
+
+        row = _table_rows(render_tables([artifact]), "### Accuracy")[0]
+
+        assert core_counts(artifact) == (0, 0)
+        assert _accuracy_cell(row, "Core (v1 fields, docs 001-025)") == "n/a"
+
+    def test_the_committed_runs_core_is_computed_from_their_documents(self):
+        # Recomputed here from the artifacts' own fields, not read from a table.
+        runs = load_results()
+        markdown = render_tables(runs)
+
+        for run, row in zip(runs, _table_rows(markdown, "### Accuracy"), strict=True):
+            correct = scored = 0
+            for doc in run["per_doc"]:
+                if doc["doc_id"] in CORE_DOC_IDS:
+                    for field in doc["fields"].values():
+                        scored += 1
+                        correct += field["correct"]
+            assert (correct, scored) == core_counts(run)
+            assert (
+                _accuracy_cell(row, "Core (v1 fields, docs 001-025)")
+                == f"{correct}/{scored} ({correct / scored * 100:.1f}%)"
+            )
+
+    def test_the_committed_runs_core_values(self):
+        runs = load_results()
+
+        values = [(run["model"], run["n_scored"], core_counts(run)) for run in runs]
+
+        assert values == [
+            ("claude-sonnet-5", 3, (21, 21)),
+            ("claude-sonnet-5", 25, (174, 175)),
+            ("claude-haiku-4-5", 25, (167, 175)),
+        ]
+        # On the 25 documents the core is the run's own accuracy: nothing moved.
+        for run in runs:
+            assert core_counts(run)[0] / core_counts(run)[1] == run["summary"]["overall_accuracy"]
+
+    async def test_a_v2_run_compares_with_a_v1_run_on_the_same_documents(self):
+        cases = load_cases()
+        v1 = (await run_eval(cases, extract_fn=build_mock_extract_fn(cases))).to_dict()
+        v2 = await _mock_v2_artifact()
+
+        # The same two mistakes in both runs, both on core documents (003, 007),
+        # although the runs score 7 and 20 fields on 32 documents.
+        assert core_counts(v1) == core_counts(v2) == (173, 175)
+        assert v1["summary"]["overall_accuracy"] != v2["summary"]["overall_accuracy"]
+
+
+class TestSchemaV2Table:
+    def test_v1_only_results_render_no_such_section(self):
+        markdown = render_tables(load_results())
+
+        assert "Schema v2 fields" not in markdown
+        assert markdown.count("### ") == 2
+
+    async def test_a_v2_run_gets_a_table_with_a_row_per_field_and_a_total(self):
+        run = await _mock_v2_artifact()
+
+        markdown = render_tables([run])
+        rows = _table_rows(markdown, "### Schema v2 fields")
+
+        assert "### Schema v2 fields" in markdown
+        assert "#### mock-model / extract_v2 (32 docs)" in markdown
+        assert [row.split("|")[1].strip() for row in rows] == [*SCHEMA_V2.field_names, "All"]
+        by_field = {row.split("|")[1].strip(): [c.strip() for c in row.strip().strip("|").split("|")] for row in rows}
+        assert by_field["tax"][1:] == ["96.9%", "30", "100.0%", "100.0%", "100.0%"]
+        assert by_field["po_number"][1:] == ["100.0%", "3", "100.0%", "100.0%", "100.0%"]
+        assert by_field["line_items"][2] == "508"
+        assert by_field["All"][1:] == ["99.7%", "813", "100.0%", "100.0%", "100.0%"]
+
+    async def test_it_shows_a_coverage_miss_and_a_page_miss_apart(self):
+        run = await _mock_v2_artifact(limit=1)
+        # total: quoted, page unknown. subtotal: no quote at all.
+        coverage = run["summary"]["evidence_coverage"]
+        coverage["per_field"]["total"].update(page_agree=0, page_agreement=0.0)
+        coverage["per_field"]["subtotal"].update(with_quote=0, coverage=0.0, page_agree=0, page_agreement=0.0)
+
+        rows = _table_rows(render_tables([run]), "### Schema v2 fields")
+        by_field = {row.split("|")[1].strip(): [c.strip() for c in row.strip().strip("|").split("|")] for row in rows}
+
+        assert by_field["total"][3:5] == ["100.0%", "0.0%"]
+        assert by_field["subtotal"][3:5] == ["0.0%", "0.0%"]
+
+    async def test_the_table_is_part_of_latest_md(self):
+        run = await _mock_v2_artifact(limit=2)
+
+        assert "### Schema v2 fields" in render_latest_md([run])
+
+    def test_a_run_without_a_summary_has_no_table(self):
+        assert "Schema v2 fields" not in render_tables([_make_artifact(summary=None, n_scored=0)])
 
 
 class TestUpdateReadme:

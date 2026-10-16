@@ -20,10 +20,17 @@ from app.evals.checks import (
     CHECKS_END_MARKER,
     CHECKS_START_MARKER,
     MUTATION_KINDS,
+    QUOTE_VARIANTS,
+    QUOTES_END_MARKER,
+    QUOTES_START_MARKER,
     CheckMetrics,
+    Mutation,
     _broken_tool_input,
     _coupled_paths,
+    _misread_quote,
     _mutations,
+    _quoted_tool_input,
+    _replace_number,
     check_metrics,
     doc_routing,
     failing_labels,
@@ -32,8 +39,10 @@ from app.evals.checks import (
     label_tool_input,
     reconcile_label,
     render_checks_markdown,
+    render_quotes_markdown,
     replay,
     run_mutation_eval,
+    run_quote_eval,
 )
 from app.evals.dataset import EVALS_DIR, load_cases
 from app.extraction_fields import SCHEMA_V1, SCHEMA_V2
@@ -345,19 +354,19 @@ class TestMutationEval:
 
         assert tuple(got) == MUTATION_KINDS
         assert got == {
-            "one_minor_unit": (348, 348, 348, 165, 0, 118),
-            "transposed_digits": (355, 355, 355, 165, 0, 115),
-            "misread_digit": (475, 475, 475, 195, 0, 55),
-            "dropped_point": (348, 348, 348, 219, 0, 7),
-            "extra_leading_digit": (475, 475, 475, 202, 0, 42),
-            "wrong_row": (164, 138, 138, 135, 0, 9),
+            "one_minor_unit": (371, 363, 363, 174, 0, 136),
+            "transposed_digits": (383, 381, 381, 174, 0, 134),
+            "misread_digit": (506, 505, 505, 205, 0, 72),
+            "dropped_point": (375, 374, 374, 230, 0, 21),
+            "extra_leading_digit": (506, 505, 505, 212, 0, 59),
+            "wrong_row": (173, 147, 147, 143, 0, 11),
         }
         overall = evaluated.overall
         assert (overall.mutations, overall.detected, overall.flagged, overall.fixed) == (
-            2165,
-            2139,
-            2139,
-            1081,
+            2314,
+            2275,
+            2275,
+            1138,
         )
         assert overall.wrong_fixes == 0
         assert evaluated.n_labels == 32
@@ -400,7 +409,7 @@ class TestMutationEval:
         wrong = fixed = 0
         for case in load_cases():
             minor_units = currency_precision(case.fields.get("currency")).minor_units
-            for mutation in _mutations(case.doc_id, case.fields):
+            for mutation in _mutations(case.doc_id, case.fields, case.evidence):
                 if perturb is not None and mutation.path != "tax":
                     continue
                 tool = _broken_tool_input(case.fields, mutation, case.evidence)
@@ -448,12 +457,24 @@ class TestMutationEval:
 
         assert _coupled_paths(case.fields, case.evidence, tax) == []
 
-    def test_every_digit_misread_is_detected(self, evaluated):
-        for tally in evaluated.by_kind:
-            if tally.kind != "wrong_row":
-                assert tally.detected == tally.mutations, tally.kind
+    def test_every_digit_misread_is_detected_except_where_nothing_can_check_it(self, evaluated):
+        # The blind spots: an amount paid on a document that prints no amount due
+        # (029), and a tax line's base that moves by too little to change the tax
+        # its rate gives.
+        misses = [m for m in evaluated.misses if m.kind != "wrong_row"]
+        missed = {
+            (m.doc_id[:3], m.path.split("[")[0] + ("." + m.path.rsplit(".", 1)[1] if "[" in m.path else ""))
+            for m in misses
+        }
+        assert len(misses) == 13
+        assert missed == {
+            ("026", "tax_lines.base"),
+            ("029", "amount_paid"),
+            ("030", "tax_lines.base"),
+            ("031", "tax_lines.base"),
+        }
 
-    def test_the_only_misses_are_a_total_read_as_the_subtotal(self, evaluated):
+    def test_the_wrong_row_misses_are_a_total_read_as_the_subtotal(self, evaluated):
         by_doc = {case.doc_id: case.fields for case in load_cases()}
         taxed = {
             doc_id
@@ -462,12 +483,14 @@ class TestMutationEval:
             and fields["subtotal"] is not None
             and fields["total"] is not None
         }
+        wrong_row = [m for m in evaluated.misses if m.kind == "wrong_row"]
 
-        assert {m.doc_id for m in evaluated.misses} <= taxed
-        for miss in evaluated.misses:
-            assert (miss.kind, miss.path) == ("wrong_row", "total")
+        assert {m.doc_id for m in wrong_row} <= taxed
+        for miss in wrong_row:
+            assert miss.path == "total"
             assert miss.mutated == Decimal(str(by_doc[miss.doc_id]["subtotal"]))
-        assert len(evaluated.misses) == evaluated.overall.mutations - evaluated.overall.detected == 26
+        assert len(wrong_row) == 26
+        assert len(evaluated.misses) == evaluated.overall.mutations - evaluated.overall.detected == 39
 
     def test_a_label_that_fails_unmutated_stops_the_eval(self):
         case = load_cases()[0]
@@ -529,12 +552,346 @@ class TestMutationKinds:
         )
 
 
+# --- header evidence in a replay ------------------------------------------------
+
+
+def _v2_cell(value, quote=None, confidence=1.0):
+    return {"value": value, "confidence": confidence, "evidence": {"page": 1, "quote": quote} if quote else None}
+
+
+def _doc_with_wrong_subtotal(stored_evidence: bool) -> dict:
+    """A scored v2 document whose subtotal was read as 11.30 while the page
+    prints 10.30: the lines and the total say so too, and so does the quote."""
+    subtotal = {"correct": False, "expected": 10.3, "actual": 11.3, "confidence": 1.0}
+    if stored_evidence:
+        subtotal["evidence"] = {"page": 1, "quote": "Subtotal: $10.30"}
+    row = {
+        "description": _v2_cell("Widget"),
+        "quantity": _v2_cell(1),
+        "unit_price": _v2_cell(10.3),
+        "total": _v2_cell(10.3),
+    }
+    return {
+        "status": "scored",
+        "fields": {
+            "currency": {"correct": True, "actual": "USD", "confidence": 1.0},
+            "line_items": {"correct": True, "actual": [row], "confidence": 1.0},
+            "subtotal": subtotal,
+            "total": {"correct": True, "actual": 10.3, "confidence": 1.0},
+        },
+    }
+
+
+class TestReplayedHeaderEvidence:
+    def test_a_header_field_brings_its_stored_quote_to_the_replay(self):
+        routing = doc_routing(_doc_with_wrong_subtotal(True), 0.8, SCHEMA_V2)
+
+        assert routing["subtotal"].review_reason == "quote:subtotal"
+        assert flagged_by_quotes(routing["subtotal"])
+
+    def test_without_the_stored_quote_only_the_arithmetic_can_flag_it(self):
+        routing = doc_routing(_doc_with_wrong_subtotal(False), 0.8, SCHEMA_V2)
+
+        assert routing["subtotal"].review_reason is not None
+        assert routing["subtotal"].review_reason.startswith("reconciliation:")
+        assert not flagged_by_quotes(routing["subtotal"])
+
+    def test_check_metrics_counts_the_quote_catch_apart_from_the_arithmetic(self):
+        def run(stored_evidence):
+            return {
+                "summary": {},
+                "prompt_version": "extract_v2",
+                "review_threshold": 0.8,
+                "per_doc": [_doc_with_wrong_subtotal(stored_evidence)],
+            }
+
+        with_quote = check_metrics(run(True))
+        without = check_metrics(run(False))
+
+        assert (with_quote.n_incorrect, with_quote.n_caught_by_checks, with_quote.n_caught_by_quotes) == (1, 1, 1)
+        assert with_quote.caught_by_quotes == 1.0
+        assert (without.n_caught_by_checks, without.n_caught_by_quotes) == (1, 0)
+        assert without.caught_by_quotes == 0.0
+
+    def test_a_v1_run_has_no_quotes_to_catch_with(self):
+        metrics = check_metrics(_haiku())
+
+        assert metrics.quotes_checkable is False
+        assert metrics.caught_by_quotes is None
+
+
+# --- the mutation eval's cells ---------------------------------------------------
+
+
+def _case(prefix):
+    return next(case for case in load_cases() if case.doc_id.startswith(prefix))
+
+
+class TestMutationCells:
+    def test_the_new_money_fields_and_tax_line_cells_are_broken(self):
+        case = _case("026")
+
+        paths = {m.path for m in _mutations(case.doc_id, case.fields, case.evidence)}
+
+        assert {"discount", "shipping"} <= paths
+        for cell in ("rate", "base", "amount"):
+            assert {f"tax_lines[0].{cell}", f"tax_lines[1].{cell}"} <= paths
+        assert {m.path for m in _mutations(_case("027").doc_id, _case("027").fields)} >= {"tip"}
+        paths_028 = {m.path for m in _mutations(_case("028").doc_id, _case("028").fields)}
+        assert {"amount_paid", "amount_due"} <= paths_028
+
+    def test_a_tax_printed_once_is_one_cell_not_two(self):
+        # 001 reads its tax into the tax and into its only tax line; breaking the
+        # line's amount too would replay the document the tax's mutation made.
+        case = _case("001")
+        with_twins = {m.path for m in _mutations(case.doc_id, case.fields)}
+        without_twins = {m.path for m in _mutations(case.doc_id, case.fields, case.evidence)}
+
+        assert "tax_lines[0].amount" in with_twins
+        assert "tax_lines[0].amount" not in without_twins
+        assert without_twins == with_twins - {"tax_lines[0].amount"}
+
+    def test_a_tax_printed_twice_keeps_its_tax_line_amounts(self):
+        case = _case("026")
+
+        paths = {m.path for m in _mutations(case.doc_id, case.fields, case.evidence)}
+
+        assert {"tax", "tax_lines[0].amount", "tax_lines[1].amount"} <= paths
+
+    def test_wrong_row_covers_the_balance_and_the_tax_base(self):
+        by_path = {}
+        for prefix in ("028", "026"):
+            case = _case(prefix)
+            for m in _mutations(case.doc_id, case.fields, case.evidence):
+                if m.kind == "wrong_row":
+                    by_path.setdefault((prefix, m.path), set()).add(m.mutated)
+
+        fields_028 = _case("028").fields
+        total, due = Decimal(str(fields_028["total"])), Decimal(str(fields_028["amount_due"]))
+        # The total read as the balance due, and the balance due as the total.
+        assert due in by_path[("028", "total")]
+        assert total in by_path[("028", "amount_due")]
+        # A tax amount read as the base it is charged on.
+        assert Decimal("454.48") in by_path[("026", "tax_lines[0].amount")]
+
+    def test_a_wrong_row_that_reads_the_same_number_is_no_mutation(self):
+        # 032's balance due equals its total: reading one as the other changes nothing.
+        case = _case("032")
+
+        mutations = _mutations(case.doc_id, case.fields, case.evidence)
+
+        assert not [m for m in mutations if m.kind == "wrong_row" and m.mutated == m.original]
+        assert case.fields["amount_due"] == case.fields["total"]
+        assert {m.mutated for m in mutations if m.kind == "wrong_row" and m.path == "total"} == {
+            Decimal(str(case.fields["subtotal"]))
+        }
+
+
+# --- quote eval ------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def quoted():
+    return run_quote_eval(load_cases())
+
+
+def _tallies(quoted):
+    return {t.variant: t for t in quoted.by_variant}
+
+
+class TestQuoteEval:
+    def test_it_replays_the_mutation_evals_documents_in_four_ways(self, quoted, evaluated):
+        assert tuple(t.variant for t in quoted.by_variant) == QUOTE_VARIANTS
+        assert quoted.n_labels == 32
+        assert quoted.rules_version == RULES_VERSION
+        assert {t.mutations for t in quoted.by_variant} == {evaluated.overall.mutations}
+
+    def test_pinned_tallies(self, quoted):
+        got = {
+            t.variant: (t.mutations, t.detected, t.quote_flagged, t.flagged, t.fixed, t.wrong_fixes)
+            for t in quoted.by_variant
+        }
+
+        assert got == {
+            "none": (2314, 2275, 0, 2275, 1138, 0),
+            "faithful": (2314, 2314, 2196, 2314, 1352, 0),
+            "same_misread": (2314, 2275, 0, 2275, 1138, 0),
+            "missing": (2314, 2275, 0, 2275, 1138, 0),
+        }
+
+    def test_a_mutation_eval_run_beforehand_is_reused_not_replayed_and_gives_the_same_table(self, quoted, evaluated, monkeypatch):
+        calls = []
+        monkeypatch.setattr(checks, "run_mutation_eval", lambda cases: calls.append(cases))
+
+        again = run_quote_eval(load_cases(), evaluated)
+
+        assert again == quoted
+        assert calls == []
+
+    def test_with_no_quotes_it_is_the_mutation_eval(self, quoted, evaluated):
+        none = _tallies(quoted)["none"]
+        overall = evaluated.overall
+
+        assert (none.detected, none.flagged, none.fixed, none.wrong_fixes) == (
+            overall.detected,
+            overall.flagged,
+            overall.fixed,
+            overall.wrong_fixes,
+        )
+
+    def test_a_misread_whose_quote_shows_what_is_printed_is_always_detected(self, quoted):
+        faithful = _tallies(quoted)["faithful"]
+
+        assert faithful.detected == faithful.flagged == faithful.mutations
+        # The rest are caught by the arithmetic, not a quote: the misread value is
+        # another number the same quoted line prints, or the cell has no quote.
+        assert 0 < faithful.mutations - faithful.quote_flagged < 200
+        assert faithful.fixed > _tallies(quoted)["none"].fixed
+
+    def test_a_value_and_quote_misread_alike_fall_back_to_the_arithmetic_exactly(self, quoted):
+        tallies = _tallies(quoted)
+
+        for variant in ("same_misread", "missing"):
+            assert tallies[variant].quote_flagged == 0
+            assert tallies[variant].detected == tallies["none"].detected
+            assert tallies[variant].fixed == tallies["none"].fixed
+
+    def test_no_way_of_writing_quotes_causes_a_wrong_fix(self, quoted):
+        assert [t.wrong_fixes for t in quoted.by_variant] == [0, 0, 0, 0]
+
+    def test_a_label_that_fails_unmutated_stops_the_quote_eval(self):
+        case = load_cases()[0]
+        broken = replace(case, fields={**case.fields, "total": 999.0})
+
+        with pytest.raises(ValueError, match=case.doc_id):
+            run_quote_eval([broken])
+
+
+def _total_mutation(prefix="001"):
+    case = _case(prefix)
+    mutation = next(
+        m for m in _mutations(case.doc_id, case.fields, case.evidence) if m.path == "total" and m.kind == "misread_digit"
+    )
+    return case, mutation
+
+
+class TestQuoteVariants:
+    """The two cases the value-quote check was specified with."""
+
+    def test_change_a_value_and_keep_its_quote_and_the_quote_check_fails(self):
+        case, mutation = _total_mutation()
+
+        tool = _quoted_tool_input(case.fields, mutation, case.evidence, "faithful")
+        report, routing = replay(tool, 1.0, SCHEMA_V2)
+
+        assert tool["total"]["value"] == mutation.mutated
+        assert tool["total"]["evidence"] == case.evidence["total"]
+        assert "quote:total" in [check.id for check in report.failing_checks]
+        assert routing["total"].review_reason == "quote:total"
+
+    def test_change_both_together_and_the_quote_check_is_silent(self):
+        case, mutation = _total_mutation()
+
+        tool = _quoted_tool_input(case.fields, mutation, case.evidence, "same_misread")
+        report, routing = replay(tool, 1.0, SCHEMA_V2)
+
+        assert tool["total"]["evidence"]["quote"] != case.evidence["total"]["quote"]
+        assert tool["total"]["evidence"]["quote"].startswith("Total: $")
+        assert [c.id for c in report.failing_checks if c.kind == "quote"] == []
+        # Only the arithmetic notices.
+        assert [c.id for c in report.failing_checks] == ["total_math"]
+        assert routing["total"].review_reason == "reconciliation:total_math"
+
+    def test_a_missing_quote_leaves_the_broken_cell_unchecked_and_the_rest_quoted(self):
+        case, mutation = _total_mutation()
+
+        tool = _quoted_tool_input(case.fields, mutation, case.evidence, "missing")
+
+        assert tool["total"]["evidence"] is None
+        assert tool["subtotal"]["evidence"] == case.evidence["subtotal"]
+        assert replay(tool, 1.0, SCHEMA_V2)[1]["total"].review_reason == "reconciliation:total_math"
+
+    def test_a_number_printed_once_has_its_quote_broken_in_both_places(self):
+        case = _case("001")
+        tax = next(m for m in _mutations(case.doc_id, case.fields, case.evidence) if m.path == "tax")
+
+        tool = _quoted_tool_input(case.fields, tax, case.evidence, "same_misread")
+
+        shown = tool["tax"]["evidence"]["quote"]
+        assert shown == tool["tax_lines"]["value"][0]["amount"]["evidence"]["quote"]
+        assert to_api_string(tax.mutated, 2) in shown
+        assert to_api_string(tax.original, 2) not in shown
+
+    def test_every_misread_can_be_written_into_its_quote(self):
+        # A quote that cannot be rewritten would silently turn "misread alike"
+        # into "missing", so every cell the eval breaks must be one it can write.
+        for case in load_cases():
+            minor_units = currency_precision(case.fields.get("currency")).minor_units
+            for mutation in _mutations(case.doc_id, case.fields, case.evidence):
+                cited = case.evidence.get(mutation.path)
+                if cited is None:
+                    continue
+                money = not mutation.path.endswith((".quantity", ".rate"))
+                rewritten = _misread_quote(cited, mutation, minor_units, money)
+                assert rewritten is not None, (case.doc_id, mutation)
+                assert rewritten["quote"] != cited["quote"]
+                assert rewritten["page"] == cited["page"]
+
+    def test_the_gold_evidence_is_never_changed(self):
+        case, mutation = _total_mutation("032")
+        before = deepcopy(case.evidence)
+
+        for variant in QUOTE_VARIANTS:
+            _quoted_tool_input(case.fields, mutation, case.evidence, variant)
+
+        assert case.evidence == before
+
+
+class TestWritingAMisreadQuote:
+    def test_a_number_is_replaced_in_the_style_it_is_printed_in(self):
+        cited = {"page": 1, "quote": "Total: $2,226.78"}
+        mutation = Mutation("032", "total", "misread_digit", Decimal("2226.78"), Decimal("7226.78"))
+
+        assert _misread_quote(cited, mutation, 2, True) == {"page": 1, "quote": "Total: $7,226.78"}
+
+    def test_a_decimal_comma_is_kept(self):
+        cited = {"page": 1, "quote": "VAT 19% on 125,19 EUR"}
+        mutation = Mutation("030", "tax_lines[0].base", "one_minor_unit", Decimal("125.19"), Decimal("125.20"))
+
+        assert _misread_quote(cited, mutation, 2, True)["quote"] == "VAT 19% on 125,20 EUR"
+
+    def test_european_grouping_is_kept(self):
+        cited = {"page": 1, "quote": "Summe 2.226,78 EUR"}
+        mutation = Mutation("x", "total", "misread_digit", Decimal("2226.78"), Decimal("7226.78"))
+
+        assert _misread_quote(cited, mutation, 2, True)["quote"] == "Summe 7.226,78 EUR"
+
+    def test_only_a_whole_number_is_replaced(self):
+        # The quantity 2 is a token of its own; the 2 in 12.25 and 20.00 are not.
+        assert _replace_number("Widget   2   $12.25   $20.00", "2", "7") == "Widget   7   $12.25   $20.00"
+
+    def test_a_number_not_printed_in_the_quote_gives_no_quote(self):
+        mutation = Mutation("x", "total", "misread_digit", Decimal("46.25"), Decimal("96.25"))
+
+        assert _misread_quote({"page": 1, "quote": "Total due on receipt"}, mutation, 2, True) is None
+        assert _misread_quote(None, mutation, 2, True) is None
+
+
 # --- README --------------------------------------------------------------------
+
+
+def _marked(text, start, end):
+    first = text.index(start) + len(start)
+    return text[first : text.index(end)]
 
 
 def test_readme_checks_table_is_current(evaluated):
     text = README.read_text(encoding="utf-8")
-    start = text.index(CHECKS_START_MARKER) + len(CHECKS_START_MARKER)
-    end = text.index(CHECKS_END_MARKER)
 
-    assert text[start:end] == f"\n\n{render_checks_markdown(evaluated)}\n\n"
+    assert _marked(text, CHECKS_START_MARKER, CHECKS_END_MARKER) == f"\n\n{render_checks_markdown(evaluated)}\n\n"
+
+
+def test_readme_quotes_table_is_current(quoted):
+    text = README.read_text(encoding="utf-8")
+
+    assert _marked(text, QUOTES_START_MARKER, QUOTES_END_MARKER) == f"\n\n{render_quotes_markdown(quoted)}\n\n"

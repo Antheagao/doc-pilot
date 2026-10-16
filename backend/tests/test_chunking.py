@@ -1022,3 +1022,39 @@ async def test_chunked_page_failure_preserves_exception_type_and_prior_pages_spe
     assert exc.output_tokens == 50 + 10
     expected_cost = ((100 + 20) * 2.00 + (50 + 10) * 10.00) / 1_000_000
     assert exc.cost_usd == pytest.approx(expected_cost)
+
+
+async def test_every_pages_stop_reasons_are_recorded_and_a_failure_keeps_the_earlier_pages(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        extraction_module,
+        "get_settings",
+        lambda: Settings(
+            extraction_model="claude-sonnet-5", review_threshold=0.8, pdf_max_pages_per_call=2
+        ),
+    )
+    path = tmp_path / "invoice.pdf"
+    path.write_bytes(_build_multipage_pdf(3))
+
+    def page(tool_use_id):
+        return _FakeMessage(
+            stop_reason="tool_use",
+            content=[_FakeToolUseBlock(_minimal_page(vendor=_leaf("Acme", 0.9)), tool_use_id=tool_use_id)],
+            usage=_FakeUsage(100, 50),
+        )
+
+    _patch_client_side_effect(monkeypatch, [page("t1"), page("t2"), page("t3")])
+    result = await extract_document(path, "application/pdf")
+
+    assert result.stop_reasons == [{"first": "tool_use", "repair": None}] * 3
+
+    truncated = _FakeMessage(stop_reason="max_tokens", content=[], usage=_FakeUsage(20, 4096))
+    _patch_client_side_effect(monkeypatch, [page("t1"), truncated])
+    with pytest.raises(NonRetryableExtractionError) as exc_info:
+        await extract_document(path, "application/pdf")
+
+    assert exc_info.value.stop_reasons == [
+        {"first": "tool_use", "repair": None},
+        {"first": "max_tokens", "repair": None},
+    ]

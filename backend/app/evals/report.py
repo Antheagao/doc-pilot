@@ -4,10 +4,13 @@ inject them into README between the EVAL_TABLE marker comments.
 
 Offline: reads only the JSON artifacts app.evals.runner.write_result
 already wrote, plus the README.md text -- no DB, no network, no
-re-running extraction. The one computed column, Caught by checks, replays
-each run's stored answers through the reconciliation rules every time the
-tables are rendered (app.evals.checks), so it follows the rules version
-and is never written into an artifact. Deliberately tolerant of a corrupt or
+re-running extraction. Two columns are computed, never written into an
+artifact: Core, the accuracy over the seven v1 fields of the 25 original
+documents, read from each run's per_doc entries so that runs of different
+prompt versions compare on the same ground; and Caught by checks (with its
+Caught by quotes part), which replays each run's stored answers through the
+reconciliation rules every time the tables are rendered (app.evals.checks),
+so it follows the rules version. Deliberately tolerant of a corrupt or
 half-written artifact file (warns to stderr, skips it) so one bad run
 can't take down reporting for every other run in evals/results/.
 """
@@ -18,8 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from app.evals.checks import check_metrics, doc_routing
-from app.evals.dataset import EVALS_DIR
-from app.extraction_fields import SCHEMAS
+from app.evals.dataset import CORE_DOC_IDS, EVALS_DIR
+from app.extraction_fields import SCHEMA_V1, SCHEMAS
 from app.reconcile import RULES_VERSION
 from app.review_routing import Routing
 
@@ -72,11 +75,14 @@ _ACCURACY_FIELD_COLUMNS = (
     ("Line items", "line_items"),
 )
 
+_CORE_HEADER = "Core (v1 fields, docs 001-025)"
+
 _ACCURACY_HEADER = (
     "Model",
     "Prompt",
     "Docs",
     "Overall",
+    _CORE_HEADER,
     *(label for label, _key in _ACCURACY_FIELD_COLUMNS),
 )
 _OPS_HEADER = (
@@ -85,6 +91,7 @@ _OPS_HEADER = (
     "Conf ✓/✗",
     "Caught by review",
     "Caught by checks",
+    "Caught by quotes",
     "Halluc.",
     "$/doc",
     "Total $",
@@ -96,7 +103,10 @@ _ACCURACY_CAPTION = (
     "for the per-field match rules); Docs is n_scored for that run, with "
     "`+N err` appended when the run had N extraction errors. Each row is one "
     "eval run, tied to its own model / prompt_version / dataset_version, "
-    "ordered oldest to newest by started_at_utc.*"
+    "ordered oldest to newest by started_at_utc. Core is the accuracy over "
+    "the seven v1 fields of documents 001-025 only, the ground every prompt "
+    "version has been run on, so a v1 run and a v2 run compare there whatever "
+    "else each was run on.*"
 )
 _OPS_CAPTION = (
     "*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; "
@@ -107,8 +117,19 @@ _OPS_CAPTION = (
     f"{RULES_VERSION}) and, for a run whose answers carry evidence quotes, the "
     "agreement of each value with the number in its quote (app/quotes.py), "
     "replayed from each run's stored answers whenever this table is "
-    "rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; "
+    "rendered (a field can count in both); Caught by quotes is the part of that share "
+    "that the quote check made, n/a for a prompt version whose answers carry no quotes; "
+    "$/doc and Total $ are extraction spend in USD; "
     "latency is wall-clock p50/p95 per document.*"
+)
+_SCHEMA_V2_CAPTION = (
+    "*Accuracy is the field-level accuracy of that field over the run's documents. "
+    "Values counts the non-null values the model extracted for the field (every cell of "
+    "a line item or tax line counts). Evidence coverage is the share of them that cite a "
+    "usable quote. Page agreement and Quote agreement are the shares of the values the gold "
+    "label cites that name the gold page and copy the gold quote (whitespace collapsed); a "
+    "value with no quote, or with a quote and no page, is a miss on both, and the first is "
+    "a coverage miss too.*"
 )
 
 
@@ -197,6 +218,30 @@ def _table(header: tuple[str, ...], rows: list[str]) -> str:
     return "\n".join([header_line, sep_line, *rows])
 
 
+def core_counts(result: dict[str, Any]) -> tuple[int, int]:
+    """(correct, scored) over the seven v1 fields of the core documents
+    (CORE_DOC_IDS) the run scored, read from its per_doc entries. (0, 0) when it
+    scored none of them. Counts rather than a share so two runs can be compared
+    field by field."""
+    correct = scored = 0
+    for doc in result["per_doc"]:
+        if doc.get("status") != "scored" or doc["doc_id"] not in CORE_DOC_IDS:
+            continue
+        for name in SCHEMA_V1.field_names:
+            field = doc["fields"].get(name)
+            if field is not None:
+                scored += 1
+                correct += bool(field["correct"])
+    return correct, scored
+
+
+def _core_cell(result: dict[str, Any]) -> str:
+    """The core accuracy with its counts (`174/175 (99.4%)`), so a difference of
+    one field is readable and a shrunk denominator is visible."""
+    correct, scored = core_counts(result)
+    return f"{correct}/{scored} ({_pct(correct / scored)})" if scored else "n/a"
+
+
 def _accuracy_row(result: dict[str, Any]) -> str:
     summary = result["summary"]
     if summary is None:
@@ -215,6 +260,7 @@ def _accuracy_row(result: dict[str, Any]) -> str:
             result["prompt_version"] or "n/a",
             _docs_cell(result),
             overall,
+            _core_cell(result),
             *(per_field[key] for _label, key in _ACCURACY_FIELD_COLUMNS),
         ]
     )
@@ -232,6 +278,7 @@ def _ops_row(result: dict[str, Any]) -> str:
         halluc = str(summary["total_hallucinations"])
     metrics = check_metrics(result)
     caught_by_checks = _pct(metrics.caught_by_checks) if metrics else "n/a"
+    caught_by_quotes = _pct(metrics.caught_by_quotes) if metrics else "n/a"
 
     return _row(
         [
@@ -240,6 +287,7 @@ def _ops_row(result: dict[str, Any]) -> str:
             conf,
             caught,
             caught_by_checks,
+            caught_by_quotes,
             halluc,
             f"${result['mean_cost_per_doc']:.4f}",
             f"${result['total_cost_usd']:.4f}",
@@ -248,12 +296,62 @@ def _ops_row(result: dict[str, Any]) -> str:
     )
 
 
+_SCHEMA_V2_HEADER = (
+    "Field",
+    "Accuracy",
+    "Values",
+    "Evidence coverage",
+    "Page agreement",
+    "Quote agreement",
+)
+
+
+def _schema_v2_rows(summary: dict[str, Any]) -> list[str]:
+    """One row per field of a run with evidence, and a last row for all of them."""
+    coverage = summary["evidence_coverage"]
+    accuracy = summary["per_field_accuracy"]
+
+    def row(label: str, acc: float | None, counts: dict[str, Any]) -> str:
+        return _row(
+            [
+                label,
+                _pct(acc),
+                str(counts["leaves"]),
+                _pct(counts["coverage"]),
+                _pct(counts["page_agreement"]),
+                _pct(counts["quote_agreement"]),
+            ]
+        )
+
+    rows = [row(name, accuracy.get(name), counts) for name, counts in coverage["per_field"].items()]
+    rows.append(row("All", summary["overall_accuracy"], coverage))
+    return rows
+
+
+def _schema_v2_section(results: list[dict[str, Any]]) -> str:
+    """The Schema v2 fields tables, one per run whose answers carry evidence, or
+    an empty string when no run does."""
+    tables = []
+    for result in results:
+        summary = result["summary"]
+        if summary is None or summary.get("evidence_coverage") is None:
+            continue
+        tables.append(
+            f"#### {result['model']} / {result['prompt_version']} ({_docs_cell(result)} docs)\n\n"
+            + _table(_SCHEMA_V2_HEADER, _schema_v2_rows(summary))
+        )
+    if not tables:
+        return ""
+    return "### Schema v2 fields\n\n" + "\n\n".join(tables) + f"\n\n{_SCHEMA_V2_CAPTION}"
+
+
 def render_tables(results: list[dict[str, Any]]) -> str:
-    """Render the two GitHub-markdown eval-history tables (accuracy,
-    ops), one row per artifact in `results`, plus a one-line caption
-    under each explaining what its metrics mean. `results` is expected
-    already sorted oldest-first (see load_results) -- this function
-    renders rows in the order given rather than re-sorting.
+    """Render the GitHub-markdown eval-history tables (accuracy, ops), one row
+    per artifact in `results`, plus a one-line caption under each explaining what
+    its metrics mean, and, when a run carries evidence, a Schema v2 fields table
+    per such run. `results` is expected already sorted oldest-first (see
+    load_results) -- this function renders rows in the order given rather than
+    re-sorting.
     """
     if not results:
         return NO_RUNS_PLACEHOLDER
@@ -261,10 +359,14 @@ def render_tables(results: list[dict[str, Any]]) -> str:
     accuracy_table = _table(_ACCURACY_HEADER, [_accuracy_row(r) for r in results])
     ops_table = _table(_OPS_HEADER, [_ops_row(r) for r in results])
 
-    return (
-        f"### Accuracy\n\n{accuracy_table}\n\n{_ACCURACY_CAPTION}\n\n"
-        f"### Ops\n\n{ops_table}\n\n{_OPS_CAPTION}"
-    )
+    sections = [
+        f"### Accuracy\n\n{accuracy_table}\n\n{_ACCURACY_CAPTION}",
+        f"### Ops\n\n{ops_table}\n\n{_OPS_CAPTION}",
+    ]
+    schema_v2 = _schema_v2_section(results)
+    if schema_v2:
+        sections.append(schema_v2)
+    return "\n\n".join(sections)
 
 
 def update_readme(

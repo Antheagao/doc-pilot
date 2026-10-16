@@ -1,22 +1,22 @@
 ### Accuracy
 
-| Model | Prompt | Docs | Overall | Vendor | Date | Currency | Subtotal | Tax | Total | Line items |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude-sonnet-5 | extract_v1 | 3 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
-| claude-sonnet-5 | extract_v1 | 25 | 99.4% | 100.0% | 100.0% | 96.0% | 100.0% | 100.0% | 100.0% | 100.0% |
-| claude-haiku-4-5 | extract_v1 | 25 | 95.4% | 100.0% | 96.0% | 96.0% | 96.0% | 96.0% | 96.0% | 88.0% |
+| Model | Prompt | Docs | Overall | Core (v1 fields, docs 001-025) | Vendor | Date | Currency | Subtotal | Tax | Total | Line items |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| claude-sonnet-5 | extract_v1 | 3 | 100.0% | 21/21 (100.0%) | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| claude-sonnet-5 | extract_v1 | 25 | 99.4% | 174/175 (99.4%) | 100.0% | 100.0% | 96.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| claude-haiku-4-5 | extract_v1 | 25 | 95.4% | 167/175 (95.4%) | 100.0% | 96.0% | 96.0% | 96.0% | 96.0% | 96.0% | 88.0% |
 
-*Percentages are field-level accuracy (see this README's Evals section for the per-field match rules); Docs is n_scored for that run, with `+N err` appended when the run had N extraction errors. Each row is one eval run, tied to its own model / prompt_version / dataset_version, ordered oldest to newest by started_at_utc.*
+*Percentages are field-level accuracy (see this README's Evals section for the per-field match rules); Docs is n_scored for that run, with `+N err` appended when the run had N extraction errors. Each row is one eval run, tied to its own model / prompt_version / dataset_version, ordered oldest to newest by started_at_utc. Core is the accuracy over the seven v1 fields of documents 001-025 only, the ground every prompt version has been run on, so a v1 run and a v2 run compare there whatever else each was run on.*
 
 ### Ops
 
-| Model | Prompt | Conf ✓/✗ | Caught by review | Caught by checks | Halluc. | $/doc | Total $ | p50/p95 latency |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude-sonnet-5 | extract_v1 | 0.97 / n/a | n/a | n/a | 0 | $0.0110 | $0.0329 | 4368ms / 5943ms |
-| claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 0.0% | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
-| claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 50.0% | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
+| Model | Prompt | Conf ✓/✗ | Caught by review | Caught by checks | Caught by quotes | Halluc. | $/doc | Total $ | p50/p95 latency |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| claude-sonnet-5 | extract_v1 | 0.97 / n/a | n/a | n/a | n/a | 0 | $0.0110 | $0.0329 | 4368ms / 5943ms |
+| claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 0.0% | n/a | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
+| claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 50.0% | n/a | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
 
-*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the deterministic checks route to review: the arithmetic (app/reconcile.py, rules_v2) and, for a run whose answers carry evidence quotes, the agreement of each value with the number in its quote (app/quotes.py), replayed from each run's stored answers whenever this table is rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
+*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the deterministic checks route to review: the arithmetic (app/reconcile.py, rules_v2) and, for a run whose answers carry evidence quotes, the agreement of each value with the number in its quote (app/quotes.py), replayed from each run's stored answers whenever this table is rendered (a field can count in both); Caught by quotes is the part of that share that the quote check made, n/a for a prompt version whose answers carry no quotes; $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
 
 ## Latest run: claude-haiku-4-5 / extract_v1 (2026-07-31T06:50:07.416732+00:00)
 

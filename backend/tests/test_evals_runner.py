@@ -23,7 +23,7 @@ from app.evals.runner import (
     write_result,
 )
 from app.extraction import ExtractionError, ExtractionResult
-from app.extraction_fields import SCHEMA_V1
+from app.extraction_fields import SCHEMA_V1, SCHEMA_V2
 
 
 class TestMockRun:
@@ -80,6 +80,194 @@ class TestMockRun:
         tax_doc = next(d for d in run["per_doc"] if d["fields"]["tax"]["correct"] is False)
         routing = doc_routing(tax_doc, run["review_threshold"], SCHEMA_V1)
         assert routing["tax"].review_reason == "reconciliation:total_math"
+
+
+class TestMockRunV2:
+    """The mock under the v2 schema: a flawless reader, with gold evidence, who
+    makes the same two fixed mistakes."""
+
+    async def _run(self, cases=None):
+        cases = cases if cases is not None else load_cases()
+        return cases, await run_eval(
+            cases, extract_fn=build_mock_extract_fn(cases, SCHEMA_V2), schema=SCHEMA_V2
+        )
+
+    async def test_overall_accuracy_matches_predicted_constant(self):
+        cases, result = await self._run()
+
+        predicted = predicted_mock_accuracy(cases, SCHEMA_V2)
+        # 32 docs x 20 v2 fields = 640 slots, the same 2 wrong (003's tax nudged,
+        # 007's vendor null) -> 638/640.
+        assert predicted == pytest.approx(638 / 640)
+        assert predicted == 0.996875
+        assert result.summary["overall_accuracy"] == predicted
+        assert result.prompt_version == "extract_v2"
+        assert result.n_scored == 32
+        assert result.summary["n_docs"] == 32
+        assert len(result.per_doc[0]["fields"]) == 20
+
+    async def test_v1_is_untouched_by_the_schema_parameter(self):
+        cases = load_cases()
+        v1 = await run_eval(cases, extract_fn=build_mock_extract_fn(cases))
+        explicit = await run_eval(
+            cases, extract_fn=build_mock_extract_fn(cases, SCHEMA_V1), schema=SCHEMA_V1
+        )
+
+        assert predicted_mock_accuracy(cases) == predicted_mock_accuracy(cases, SCHEMA_V1) == 222 / 224
+        assert v1.summary["overall_accuracy"] == explicit.summary["overall_accuracy"] == 222 / 224
+        assert v1.prompt_version == "extract_v1"
+        # A v1 run carries no evidence anywhere in its artifact.
+        assert "evidence_coverage" not in v1.summary
+        assert "evidence" not in json.dumps(v1.to_dict())
+
+    async def test_limit_changes_the_constant_the_same_way(self):
+        cases, result = await self._run(load_cases(limit=5))
+
+        assert predicted_mock_accuracy(cases, SCHEMA_V2) == pytest.approx((5 * 20 - 1) / (5 * 20))
+        assert result.summary["overall_accuracy"] == predicted_mock_accuracy(cases, SCHEMA_V2)
+
+    async def test_mock_caught_by_checks_and_by_quotes_are_pinned(self):
+        _cases, result = await self._run()
+        run = result.to_dict()
+
+        metrics = check_metrics(run)
+
+        # The same two wrong fields: 007's null vendor, which nothing can see, and
+        # 003's tax, which the quote it kept (Tax: $2.69) contradicts. A quote
+        # reason outranks the arithmetic's, which would also flag it.
+        assert (metrics.n_incorrect, metrics.n_caught_by_checks, metrics.n_caught_by_quotes) == (2, 1, 1)
+        assert metrics.caught_by_checks == 0.5
+        assert metrics.caught_by_quotes == 0.5
+        assert metrics.n_correct_flagged == 0
+        assert metrics.quotes_checkable
+        tax_doc = next(d for d in run["per_doc"] if d["fields"]["tax"]["correct"] is False)
+        assert doc_routing(tax_doc, run["review_threshold"], SCHEMA_V2)["tax"].review_reason == "quote:tax"
+        # Without the stored evidence the arithmetic still catches it: the tax no
+        # longer equals the sum of its only tax line.
+        del tax_doc["fields"]["tax"]["evidence"]
+        assert (
+            doc_routing(tax_doc, run["review_threshold"], SCHEMA_V2)["tax"].review_reason
+            == "reconciliation:tax_lines_sum"
+        )
+
+    async def test_mock_evidence_coverage_is_pinned(self):
+        _cases, result = await self._run()
+
+        coverage = result.summary["evidence_coverage"]
+
+        # 813 non-null values, each quoted, each citing the gold page and the gold
+        # line (the perturbed tax keeps its gold quote; the null vendor has no leaf).
+        assert (coverage["leaves"], coverage["with_quote"]) == (813, 813)
+        assert (coverage["gold_judged"], coverage["page_agree"], coverage["quote_agree"]) == (813, 813, 813)
+        assert coverage["per_field"]["line_items"]["leaves"] == 508
+        assert coverage["per_field"]["tax_lines"]["leaves"] == 85
+        assert coverage["per_field"]["vendor"]["leaves"] == 30  # 022 has no vendor, 007's is dropped
+
+    async def test_the_mock_emits_gold_evidence_and_keeps_the_perturbed_taxs_quote(self):
+        cases = load_cases()
+        by_id = {case.doc_id: case for case in cases}
+        fn = build_mock_extract_fn(cases, SCHEMA_V2)
+
+        tax_doc = cases[2]
+        tool = (await fn(tax_doc.image_path, tax_doc.mime_type)).tool_input
+        vendor_doc = cases[6]
+        vendor_tool = (await fn(vendor_doc.image_path, vendor_doc.mime_type)).tool_input
+
+        assert tool["tax"]["value"] == round(tax_doc.fields["tax"] + 0.10, 2)
+        assert tool["tax"]["evidence"] == by_id[tax_doc.doc_id].evidence["tax"]
+        assert tool["total"]["evidence"] == tax_doc.evidence["total"]
+        assert tool["line_items"]["value"][0]["total"]["evidence"] == tax_doc.evidence["line_items[0].total"]
+        assert tool["line_items"]["value"][0]["total"]["evidence"] is not tax_doc.evidence["line_items[0].total"]
+        assert tool["po_number"] == {"value": None, "confidence": 0.9, "evidence": None}
+        assert vendor_tool["vendor"] == {"value": None, "confidence": 0.9, "evidence": None}
+
+    async def test_a_v1_mock_answer_has_no_evidence_key(self):
+        cases = load_cases(limit=1)
+        fn = build_mock_extract_fn(cases)
+
+        tool = (await fn(cases[0].image_path, cases[0].mime_type)).tool_input
+
+        assert set(tool) == set(SCHEMA_V1.field_names)
+        assert tool["total"] == {"value": cases[0].fields["total"], "confidence": 0.9}
+        assert "evidence" not in json.dumps(tool)
+
+    async def test_the_artifact_round_trips_through_json_with_its_evidence(self):
+        _cases, result = await self._run(load_cases(limit=3))
+
+        loaded = json.loads(json.dumps(result.to_dict()))
+
+        assert loaded["per_doc"][0]["fields"]["total"]["evidence"]["quote"].startswith("Total")
+        assert loaded["summary"]["evidence_coverage"]["leaves"] == result.summary["evidence_coverage"]["leaves"]
+
+
+class TestRunEvalSchema:
+    async def test_the_default_extract_fn_asks_for_the_schema(self, monkeypatch):
+        import app.evals.runner as runner_module
+
+        seen = []
+
+        async def fake_extract(path, mime_type, *, schema=None):
+            seen.append(schema)
+            return ExtractionResult({}, "m", schema.prompt_version, 0, 0, 0.0, 1)
+
+        monkeypatch.setattr(runner_module, "extract_document", fake_extract)
+        cases = load_cases(limit=2)
+
+        result = await run_eval(cases, schema=SCHEMA_V2)
+        v1_result = await run_eval(cases)
+
+        assert seen == [SCHEMA_V2, SCHEMA_V2, SCHEMA_V1, SCHEMA_V1]
+        assert result.prompt_version == "extract_v2"
+        assert v1_result.prompt_version == "extract_v1"
+
+
+class TestRecordedForTheBar:
+    """What the pre-registered bar needs from an artifact: residual schema
+    violations and the stop reasons of every call."""
+
+    async def test_the_residual_violations_are_the_extractions_not_the_scorers(self):
+        cases = load_cases(limit=3)
+
+        async def extract(path, mime_type):
+            return ExtractionResult(
+                tool_input={},
+                model="m",
+                prompt_version="extract_v1",
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd=0.0,
+                latency_ms=1,
+                schema_violations=2 if Path(path).stem == cases[1].doc_id else 0,
+                stop_reasons=[{"first": "tool_use", "repair": "tool_use"}],
+            )
+
+        result = await run_eval(cases, extract_fn=extract)
+
+        scored = [d for d in result.per_doc if d["status"] == "scored"]
+        assert [d["residual_schema_violations"] for d in scored] == [0, 2, 0]
+        assert result.total_residual_schema_violations == 2
+        assert result.to_dict()["total_residual_schema_violations"] == 2
+        assert scored[0]["stop_reasons"] == [{"first": "tool_use", "repair": "tool_use"}]
+
+    async def test_an_errored_document_keeps_the_stop_reasons_of_its_calls(self):
+        cases = load_cases(limit=2)
+
+        async def extract(path, mime_type):
+            raise ExtractionError(
+                "cut off", stop_reasons=[{"first": "max_tokens", "repair": None}]
+            )
+
+        result = await run_eval(cases, extract_fn=extract)
+
+        assert [e["stop_reasons"] for e in result.errors] == [[{"first": "max_tokens", "repair": None}]] * 2
+
+    async def test_the_mock_records_a_clean_stop_and_no_residual_violation(self):
+        cases = load_cases(limit=2)
+
+        result = await run_eval(cases, extract_fn=build_mock_extract_fn(cases))
+
+        assert result.total_residual_schema_violations == 0
+        assert all(d["stop_reasons"] == [{"first": "tool_use", "repair": None}] for d in result.per_doc)
 
 
 class TestCostCap:

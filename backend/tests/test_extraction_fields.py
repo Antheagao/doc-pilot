@@ -194,5 +194,9 @@ def test_the_v2_prompts_carry_the_guard_and_the_evidence_rules() -> None:
     assert "verbatim" in text
     assert "last four digits" in text
     assert "\u2014" not in text and "\u2014" not in SCHEMA_V2.repair_prompt_text
+    # A lone line labeled just Tax is both the only tax line and the total tax,
+    # while a document with only tax lines and no total keeps tax null.
+    assert "single line labeled just `Tax`" in text
+    assert "`null` when the\n  document prints only tax lines and no total tax" in text
     for cell in ARRAY_CELLS["tax_lines"]:
         assert f"`{cell}`" in SCHEMA_V2.repair_prompt_text

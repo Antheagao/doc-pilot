@@ -2,8 +2,10 @@
 """Thin CLI for the reconciliation eval (backend/app/evals/checks.py).
 
 Breaks one printed amount at a time in every label, replays each broken
-document through the arithmetic checks, and prints what they caught. Also
-prints the checks' view of each committed extraction run. Free and offline:
+document through the arithmetic checks, and prints what they caught; then
+replays the same broken documents with evidence quotes and prints what the
+quote check adds. Also prints the checks' view of each committed extraction
+run. Free and offline:
 no API calls, no database, no key. Exits 1 if any label fails the checks
 unmutated, since the table would then mean nothing.
 
@@ -31,7 +33,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--update-readme",
         action="store_true",
-        help="write the table into README.md between the CHECKS_TABLE markers",
+        help="write the tables into README.md between the CHECKS_TABLE and QUOTES_TABLE markers",
     )
     return parser.parse_args()
 
@@ -42,10 +44,14 @@ def main() -> int:
     from app.evals.checks import (
         CHECKS_END_MARKER,
         CHECKS_START_MARKER,
+        QUOTES_END_MARKER,
+        QUOTES_START_MARKER,
         check_metrics,
         failing_labels,
         render_checks_markdown,
+        render_quotes_markdown,
         run_mutation_eval,
+        run_quote_eval,
     )
     from app.evals.dataset import load_cases
     from app.evals.report import load_results, update_readme
@@ -67,6 +73,10 @@ def main() -> int:
     for miss in result.misses:
         print(f"  {miss.doc_id} {miss.path} {miss.kind}: {miss.original} -> {miss.mutated}")
 
+    quote_result = run_quote_eval(cases, result)
+    quotes_markdown = render_quotes_markdown(quote_result)
+    print(f"\n{quotes_markdown}")
+
     print(f"\ncaught_by_checks per committed run ({result.rules_version}):")
     for run in load_results():
         metrics = check_metrics(run)
@@ -87,6 +97,12 @@ def main() -> int:
             readme_path,
             start_marker=CHECKS_START_MARKER,
             end_marker=CHECKS_END_MARKER,
+        )
+        update_readme(
+            quotes_markdown,
+            readme_path,
+            start_marker=QUOTES_START_MARKER,
+            end_marker=QUOTES_END_MARKER,
         )
         print(f"\nupdated {readme_path}")
     return 0

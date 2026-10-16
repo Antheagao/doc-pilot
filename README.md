@@ -461,6 +461,14 @@ Every extraction is scored against a synthetic-but-messy, PII-free corpus of lab
 The `caught_by_checks` metric is its counterpart for arithmetic.
 It is the share of incorrect fields that the reconciliation rules (`app/reconcile.py`) would send to a person, found by replaying each run's stored answers through the same worker path.
 It is computed whenever the table is rendered and never stored in an artifact, so it follows the rules version.
+Schema v2 adds a few match rules.
+Identifiers (invoice, purchase order, and tax numbers) match after casefolding and dropping everything but letters and digits.
+Payment terms and method are fuzzy like vendor names, the card's last four digits are exact, a due date is normalized like a date, and the new amounts tolerate a cent.
+Tax lines match row by row in the order printed: the label fuzzy, the rate exactly, the base and amount within a cent.
+A run whose answers carry evidence also reports how many of its values cite a usable quote, and how often the page and quote they cite are the gold ones.
+The Core column scores only the seven v1 fields of documents 001-025, so a v1 run and a v2 run compare on the same ground.
+`python evals/check_bar.py <v1 artifact> <v2 artifact>` checks a model's two runs against the bar for making v2 the default (core accuracy within one field, no residual schema violations, Sonnet evidence coverage of at least 95%, no `max_tokens` stop, no unmasked card number, 32 documents scored), printing each term with its numbers.
+`python evals/run.py --mock` is a flawless reader with two fixed mistakes, for checking the plumbing; it writes to a temporary directory and never to `evals/results`, so it cannot reach these tables.
 
 Every extraction row records its own `cost_usd` and `latency_ms` (token counts times the model's per-token price), which is where every dollar figure in this README comes from -- there's no separate cost-tracking path to keep in sync. Two numbers show up elsewhere and are worth labeling so they don't read as contradictory: a single manual smoke extraction (`scripts/smoke.py`, one receipt) costs **~$0.009** on `claude-sonnet-5`, while the **$0.0125/doc** below is the **25-document eval mean** for that same model. Both are real; they differ because one is a single sample and the other is averaged across the labeled set -- the eval mean is the number to trust for planning per-document spend, not the one-off smoke run.
 
@@ -470,23 +478,23 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 
 ### Accuracy
 
-| Model | Prompt | Docs | Overall | Vendor | Date | Currency | Subtotal | Tax | Total | Line items |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude-sonnet-5 | extract_v1 | 3 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
-| claude-sonnet-5 | extract_v1 | 25 | 99.4% | 100.0% | 100.0% | 96.0% | 100.0% | 100.0% | 100.0% | 100.0% |
-| claude-haiku-4-5 | extract_v1 | 25 | 95.4% | 100.0% | 96.0% | 96.0% | 96.0% | 96.0% | 96.0% | 88.0% |
+| Model | Prompt | Docs | Overall | Core (v1 fields, docs 001-025) | Vendor | Date | Currency | Subtotal | Tax | Total | Line items |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| claude-sonnet-5 | extract_v1 | 3 | 100.0% | 21/21 (100.0%) | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| claude-sonnet-5 | extract_v1 | 25 | 99.4% | 174/175 (99.4%) | 100.0% | 100.0% | 96.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| claude-haiku-4-5 | extract_v1 | 25 | 95.4% | 167/175 (95.4%) | 100.0% | 96.0% | 96.0% | 96.0% | 96.0% | 96.0% | 88.0% |
 
-*Percentages are field-level accuracy (see this README's Evals section for the per-field match rules); Docs is n_scored for that run, with `+N err` appended when the run had N extraction errors. Each row is one eval run, tied to its own model / prompt_version / dataset_version, ordered oldest to newest by started_at_utc.*
+*Percentages are field-level accuracy (see this README's Evals section for the per-field match rules); Docs is n_scored for that run, with `+N err` appended when the run had N extraction errors. Each row is one eval run, tied to its own model / prompt_version / dataset_version, ordered oldest to newest by started_at_utc. Core is the accuracy over the seven v1 fields of documents 001-025 only, the ground every prompt version has been run on, so a v1 run and a v2 run compare there whatever else each was run on.*
 
 ### Ops
 
-| Model | Prompt | Conf ✓/✗ | Caught by review | Caught by checks | Halluc. | $/doc | Total $ | p50/p95 latency |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude-sonnet-5 | extract_v1 | 0.97 / n/a | n/a | n/a | 0 | $0.0110 | $0.0329 | 4368ms / 5943ms |
-| claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 0.0% | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
-| claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 50.0% | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
+| Model | Prompt | Conf ✓/✗ | Caught by review | Caught by checks | Caught by quotes | Halluc. | $/doc | Total $ | p50/p95 latency |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| claude-sonnet-5 | extract_v1 | 0.97 / n/a | n/a | n/a | n/a | 0 | $0.0110 | $0.0329 | 4368ms / 5943ms |
+| claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 0.0% | n/a | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
+| claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 50.0% | n/a | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
 
-*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the deterministic checks route to review: the arithmetic (app/reconcile.py, rules_v2) and, for a run whose answers carry evidence quotes, the agreement of each value with the number in its quote (app/quotes.py), replayed from each run's stored answers whenever this table is rendered (a field can count in both); $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
+*Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the deterministic checks route to review: the arithmetic (app/reconcile.py, rules_v2) and, for a run whose answers carry evidence quotes, the agreement of each value with the number in its quote (app/quotes.py), replayed from each run's stored answers whenever this table is rendered (a field can count in both); Caught by quotes is the part of that share that the quote check made, n/a for a prompt version whose answers carry no quotes; $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
 
 <!-- EVAL_TABLE:END -->
 
@@ -495,7 +503,7 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 The extraction eval asks how often a model misreads a document.
 This one asks what the arithmetic checks would do about it, without paying for a model run.
 Every label is a consistent document, and `rules_v2` passes all 32 unmutated, each checked together with the quotes of its gold evidence.
-The eval then breaks one printed amount at a time (subtotal, tax, total, and every line's quantity, unit price, and total) in the ways a reader gets digits wrong, and replays each broken document with full confidence, so only the arithmetic can notice.
+The eval then breaks one printed amount at a time (every header amount, every line's quantity, unit price, and total, and every tax line's rate, base, and amount) in the ways a reader gets digits wrong, and replays each broken document with full confidence, so only the arithmetic can notice.
 A number printed once is broken everywhere it was read: a tax that is read as the tax and as its only tax line is broken in both.
 "Fix suggested" counts the cases where the engine proposes exactly the original value, and "Wrong fixes" counts any other suggestion.
 A wrong fix is a suggestion that changes something that was read correctly.
@@ -503,24 +511,48 @@ The evidence-coupled eval at dataset v2 first measured 87 of them in 2165 mutati
 The engine now takes the two for one candidate (`_tax_is_one_reading` in `app/reconcile.py`), so the misread is ambiguous between the tax and the total, as it is for a document without tax lines, and gets no suggestion.
 The same holds for a tax computed from tax lines when the document prints no tax of its own.
 The table shows the measured result: no wrong fixes.
-What that cost is a few fixes (1086 before, 1081 now), a higher mean of correct fields sent to review (0.12 before, 0.16 now), and a higher "Field flagged" (2052 before, 2139 now, every detected misread), because a misread that is ambiguous flags every field the failing check names, its own included.
-The misses are a total read as the subtotal on a document with tax, which looks like a tax-inclusive receipt and is the known blind spot.
-`python evals/run_checks.py --update-readme` regenerates the table in a second or two, with no API calls, database, or key.
+On those 2165 mutations that cost a few fixes (1086 before, 1081 after), a higher mean of correct fields sent to review (0.12 before, 0.16 after), and a higher "Field flagged" (2052 before, 2139 after, every detected misread), because a misread that is ambiguous flags every field the failing check names, its own included.
+The eval has since grown to the amounts the first version left alone (discount, shipping, tip, amount paid, amount due, and the cells of every tax line), so the table counts more mutations, and its numbers are not comparable with those.
+The misses are a total read as the subtotal on a document with tax, which looks like a tax-inclusive receipt and is the known blind spot, an amount paid on a document that prints no amount due (there is nothing to check it against), and a tax line's base that moves by too little to change the tax its rate gives.
+`python evals/run_checks.py --update-readme` regenerates both tables in under a minute, with no API calls, database, or key.
 
 <!-- CHECKS_TABLE:START -->
 
 | Misread | Example | Mutations | Detected | Field flagged | Fix suggested | Wrong fixes | Correct fields flagged (mean) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| One minor unit off | 46.25 -> 46.26 | 348 | 348 (100.0%) | 348 (100.0%) | 165 (47.4%) | 0 | 0.34 |
-| Two digits swapped | 46.25 -> 46.52 | 355 | 355 (100.0%) | 355 (100.0%) | 165 (46.5%) | 0 | 0.32 |
-| Leading digit misread | 46.25 -> 96.25 | 475 | 475 (100.0%) | 475 (100.0%) | 195 (41.1%) | 0 | 0.12 |
-| Decimal point dropped | 46.25 -> 4625 | 348 | 348 (100.0%) | 348 (100.0%) | 219 (62.9%) | 0 | 0.02 |
-| Extra leading digit | 46.25 -> 146.25 | 475 | 475 (100.0%) | 475 (100.0%) | 202 (42.5%) | 0 | 0.09 |
-| Wrong row read | total read as the subtotal | 164 | 138 (84.1%) | 138 (84.1%) | 135 (82.3%) | 0 | 0.05 |
-| All |  | 2165 | 2139 (98.8%) | 2139 (98.8%) | 1081 (49.9%) | 0 | 0.16 |
+| One minor unit off | 46.25 -> 46.26 | 371 | 363 (97.8%) | 363 (97.8%) | 174 (46.9%) | 0 | 0.37 |
+| Two digits swapped | 46.25 -> 46.52 | 383 | 381 (99.5%) | 381 (99.5%) | 174 (45.4%) | 0 | 0.35 |
+| Leading digit misread | 46.25 -> 96.25 | 506 | 505 (99.8%) | 505 (99.8%) | 205 (40.5%) | 0 | 0.14 |
+| Decimal point dropped | 46.25 -> 4625 | 375 | 374 (99.7%) | 374 (99.7%) | 230 (61.3%) | 0 | 0.06 |
+| Extra leading digit | 46.25 -> 146.25 | 506 | 505 (99.8%) | 505 (99.8%) | 212 (41.9%) | 0 | 0.12 |
+| Wrong row read | total read as the subtotal | 173 | 147 (85.0%) | 147 (85.0%) | 143 (82.7%) | 0 | 0.06 |
+| All |  | 2314 | 2275 (98.3%) | 2275 (98.3%) | 1138 (49.2%) | 0 | 0.19 |
 
-*All 32 labels pass rules_v2 unmutated; each row then breaks one printed amount (subtotal, tax, total, and every line's quantity, unit price, and total) in one way and replays the document with full confidence, so only the arithmetic can notice; a number printed once is broken everywhere it was read (a tax that is read as the tax and as its only tax line is broken in both), and the document keeps its other amounts and tax lines as the label has them, so a broken amount is checked against those too. Detected means a check fails. Field flagged means the broken field is routed to review because of a failing check. Fix suggested means the engine proposes exactly the original value for that field; Wrong fixes counts any other suggestion, a change to something that was read correctly (a tax and its only tax line that are one reading are one candidate, so a misread that reaches both is not blamed on the total). Quantities and unit prices are never suggested, so those misreads are flagged but not fixed. Correct fields flagged is the mean number of other fields a mutation sends to review. Undetected: 26 wrong row read on total.*
+*All 32 labels pass rules_v2 unmutated; each row then breaks one printed amount (every header amount, every line's quantity, unit price, and total, and every tax line's rate, base, and amount) in one way and replays the document with full confidence, so only the arithmetic can notice; a number printed once is broken everywhere it was read (a tax that is read as the tax and as its only tax line is broken in both, once), and the document keeps its other amounts and tax lines as the label has them, so a broken amount is checked against those too. Detected means a check fails. Field flagged means the broken field is routed to review because of a failing check. Fix suggested means the engine proposes exactly the original value for that field; Wrong fixes counts any other suggestion, a change to something that was read correctly (a tax and its only tax line that are one reading are one candidate, so a misread that reaches both is not blamed on the total). Quantities, unit prices, tax rates, and tax bases are never suggested, so those misreads are flagged but not fixed. Correct fields flagged is the mean number of other fields a mutation sends to review. Undetected: 1 decimal point dropped on amount paid; 1 extra leading digit on amount paid; 1 leading digit misread on amount paid; 1 one minor unit off on amount paid; 7 one minor unit off on tax line base; 1 two digits swapped on amount paid; 1 two digits swapped on tax line base; 26 wrong row read on total.*
 
 <!-- CHECKS_TABLE:END -->
+
+#### Quote eval
+
+The table above replays every broken document with only numbers in front of the engine.
+An extraction that carries evidence also gives each value the quote it was read from, and the quote check (`app/quotes.py`) fails a value that is not among the numbers its quote prints.
+This eval replays the same broken documents with each label's gold quote on every leaf, and writes the quote of the broken cell three ways.
+A misread value whose quote still shows what is printed is what the quote check exists for.
+A value and a quote misread the same way agree with each other, so the quote check is silent and the arithmetic does all the work, as it does when the quote is missing.
+It counts, per way, how many misreads are detected, flagged, fixed, and fixed wrongly.
+What it cannot show is a fabricated quote that agrees with a fabricated value, which only reading the document again can catch (C2 in `FUTURE.md`).
+
+<!-- QUOTES_TABLE:START -->
+
+| Quotes | Mutations | Detected | Field flagged by a quote | Field flagged | Fix suggested | Wrong fixes |
+| --- | --- | --- | --- | --- | --- | --- |
+| No quotes | 2314 | 2275 (98.3%) | 0 (0.0%) | 2275 (98.3%) | 1138 (49.2%) | 0 |
+| Value misread, quote shows what is printed | 2314 | 2314 (100.0%) | 2196 (94.9%) | 2314 (100.0%) | 1352 (58.4%) | 0 |
+| Value and quote misread the same way | 2314 | 2275 (98.3%) | 0 (0.0%) | 2275 (98.3%) | 1138 (49.2%) | 0 |
+| No quote on the broken cell | 2314 | 2275 (98.3%) | 0 (0.0%) | 2275 (98.3%) | 1138 (49.2%) | 0 |
+
+*The same 2314 broken documents as the table above, replayed with evidence quotes. Every leaf the gold label cites carries its gold quote, the line as the document prints it; the rows differ only in the broken cell, and in the cell of any twin of the same printed number. A misread value keeps its faithful quote: the quote check sees the value is not the number printed beside it. A value and quote misread the same way agree with each other, so the quote check is silent and the arithmetic does all the work, as it does with no quote or a missing one. Detected, Field flagged, Fix suggested and Wrong fixes mean what they mean in the table above; Field flagged by a quote counts the broken fields whose review reason is `quote:<path>`. What no row can show is a fabricated quote that agrees with a fabricated value.*
+
+<!-- QUOTES_TABLE:END -->
 
 *Status: the full loop is working -- upload -> extract -> view -> human review -> corrections harvested back into the eval set -- plus retrieval: every extracted document is transcribed, chunked, embedded, and searchable with page citations, measured by its own eval. The whole stack runs with one command, `docker compose up --build`, with CI running the full test suite against Postgres + pgvector on every push. Every document's lifecycle is one OpenTelemetry trace, and `/ask` answers questions with an agent that routes between search and the structured data, citing the lines and fields it used. An LLM judge grades answers for correctness and groundedness beside the deterministic rubric, and both are scored against hand-labeled answers; in production, every answer is stored with its evidence, rated by people, and (sampled) graded for groundedness in the background. Next: the first live agent-eval and judge-calibration runs, and Batch B's richer schema with evidence for every value (`FUTURE.md`). doc-pilot stays a local demonstration and is never hosted.*

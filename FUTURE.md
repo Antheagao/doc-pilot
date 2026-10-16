@@ -103,6 +103,10 @@ What remains is the workflow a company would recognize, all demoable on one mach
 - **G4 Data handling:** PII redaction in exports, and per-document deletion that also removes chunks, words, regions, and files.
 - **G5 Demo GIF:** a large invoice trips an approval rule, gets approved, and the history panel shows every change with its reason.
 
+## Engine gaps found in Batch B reviews (not scheduled)
+
+- An amount paid larger than the total is checkable even when no amount due is printed; the mutation eval misses 029's `amount_paid` misreads for lack of that check (found in the B7 review, 2026-10-15).
+
 ## Decisions needed from Anthony
 
 - **Live eval budget** for Batch B (v2 schema re-run, roughly $0.50 to $1.00 at past rates), Batch C (model-box provider eval), and Batch F (classifier eval).

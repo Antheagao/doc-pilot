@@ -2344,3 +2344,74 @@ def test_a_chunked_v2_pdf_keeps_the_winners_scalar_evidence_with_its_chunks_page
     assert [c.status for c in quote_checks] == ["pass"]
     # The concatenated arrays' cells cite the chunk each row came from.
     assert [row["amount"]["evidence"]["page"] for row in fields["tax_lines"].value] == [1, 2]
+
+
+# --- stop reasons ---------------------------------------------------------------
+
+
+async def test_a_clean_single_call_records_its_stop_reason(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = _FakeMessage(
+        stop_reason="tool_use",
+        content=[_FakeToolUseBlock(REALISTIC_TOOL_INPUT)],
+        usage=_FakeUsage(100, 50),
+    )
+    _patch_client(monkeypatch, response)
+
+    result = await _extract_from_tmp_file(tmp_path)
+
+    assert result.stop_reasons == [{"first": "tool_use", "repair": None}]
+
+
+async def test_a_repair_call_cut_off_at_max_tokens_is_recorded_not_swallowed(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_response = _FakeMessage(
+        stop_reason="tool_use",
+        content=[_FakeToolUseBlock(_MALFORMED_TOOL_INPUT, tool_use_id="toolu_1")],
+        usage=_FakeUsage(1000, 500),
+    )
+    cut_off = _FakeMessage(
+        stop_reason="max_tokens", content=[_FakeTextBlock("(cut)")], usage=_FakeUsage(200, 4096)
+    )
+    _patch_client_side_effect(monkeypatch, [first_response, cut_off])
+
+    result = await _extract_from_tmp_file(tmp_path)
+
+    assert result.repaired is False
+    assert result.stop_reasons == [{"first": "tool_use", "repair": "max_tokens"}]
+
+
+async def test_an_accepted_repair_records_both_stop_reasons(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_response = _FakeMessage(
+        stop_reason="tool_use",
+        content=[_FakeToolUseBlock(_MALFORMED_TOOL_INPUT, tool_use_id="toolu_1")],
+        usage=_FakeUsage(1000, 500),
+    )
+    second_response = _FakeMessage(
+        stop_reason="tool_use",
+        content=[_FakeToolUseBlock(REALISTIC_TOOL_INPUT, tool_use_id="toolu_2")],
+        usage=_FakeUsage(200, 100),
+    )
+    _patch_client_side_effect(monkeypatch, [first_response, second_response])
+
+    result = await _extract_from_tmp_file(tmp_path)
+
+    assert result.stop_reasons == [{"first": "tool_use", "repair": "tool_use"}]
+
+
+async def test_a_first_call_cut_off_at_max_tokens_carries_its_stop_reason_on_the_error(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = _FakeMessage(
+        stop_reason="max_tokens", content=[_FakeTextBlock("(cut)")], usage=_FakeUsage(4000, 4096)
+    )
+    _patch_client(monkeypatch, response)
+
+    with pytest.raises(NonRetryableExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    assert exc_info.value.stop_reasons == [{"first": "max_tokens", "repair": None}]

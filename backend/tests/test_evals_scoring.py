@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 import app.evals.dataset as dataset_module
+from app.evals.checks import label_tool_input
 from app.evals.dataset import (
+    CORE_DOC_IDS,
     FIELD_KEYS,
     EvalCase,
     _validate_document_date,
@@ -24,15 +26,22 @@ from app.evals.dataset import (
 from app.evals.report import load_results
 from app.evals.scoring import (
     CaseScore,
+    EvidenceCounts,
     FieldScore,
     aggregate,
     match_amount,
+    match_card_last4,
     match_currency,
     match_date,
+    match_identifier,
     match_line_items,
+    match_rate,
+    match_tax_lines,
+    match_terms,
     match_vendor,
     score_case,
 )
+from app.extraction_fields import SCHEMA_V1, SCHEMA_V2
 
 
 def _leaf(value, confidence: float = 0.9) -> dict:
@@ -846,3 +855,582 @@ def test_rescoring_the_committed_runs_reproduces_their_scores():
             assert score.item_accuracy == doc["item_accuracy"], doc["doc_id"]
             assert score.schema_violations == doc["schema_violations"], doc["doc_id"]
             assert score.hallucinations == doc["hallucinations"], doc["doc_id"]
+
+
+# --- schema v2 matchers --------------------------------------------------------
+
+
+class TestMatchIdentifier:
+    @pytest.mark.parametrize(
+        ("expected", "actual"),
+        [
+            ("INV-2026-0417", "INV-2026-0417"),
+            ("INV-2026-0417", "inv 2026 0417"),
+            ("INV-2026-0417", "INV20260417"),
+            ("PO #88213", "po88213"),
+            ("91-4827365", "91 4827365"),
+            ("AB_12", "ab12"),
+        ],
+    )
+    def test_case_and_punctuation_do_not_matter(self, expected, actual):
+        assert match_identifier(expected, actual) is True
+
+    @pytest.mark.parametrize(
+        ("expected", "actual"),
+        [
+            ("INV-2026-0417", "INV-2026-0471"),
+            ("INV-2026-0417", "INV-2026-041"),
+            ("INV-0417", "0417"),
+            ("A0", "AO"),
+        ],
+    )
+    def test_one_character_off_is_wrong(self, expected, actual):
+        assert match_identifier(expected, actual) is False
+
+    def test_an_expected_value_with_nothing_to_compare_never_matches(self):
+        assert match_identifier("---", "---") is False
+        assert match_identifier("", "") is False
+
+    def test_non_strings_are_a_non_match(self):
+        assert match_identifier("7745", 7745) is False
+        assert match_identifier(None, "x") is False
+
+
+class TestMatchTerms:
+    @pytest.mark.parametrize(
+        ("expected", "actual"),
+        [
+            ("Net 30", "Net 30"),
+            ("Net 30", "net 30 days"),
+            ("Net 30", "Net 30 days from invoice date"),
+            ("Net 30", "Terms: Net 30"),
+            ("Net 30", "NET-30"),
+            ("Net 30 days", "Net 30"),
+            ("Due on receipt", "Due upon receipt"),
+            ("Due on receipt", "due on receipt."),
+        ],
+    )
+    def test_the_same_terms_in_other_words_match(self, expected, actual):
+        assert match_terms(expected, actual) is True
+
+    @pytest.mark.parametrize(
+        ("expected", "actual"),
+        [
+            ("Net 30", "Net 300"),
+            ("Net 300", "Net 30"),
+            ("Net 30", "Net 3"),
+            ("Net 30", "Net 60"),
+            ("Net 30", "Net 31 days"),
+            ("Net 30", "Due on receipt"),
+            ("Due on receipt", "Net 30"),
+            ("2/10 net 30", "Net 30"),
+        ],
+    )
+    def test_different_terms_never_match(self, expected, actual):
+        assert match_terms(expected, actual) is False
+
+    def test_an_expected_value_of_only_filler_never_matches(self):
+        assert match_terms("Terms", "Terms") is False
+
+    def test_non_strings_are_a_non_match(self):
+        assert match_terms("Net 30", 30) is False
+        assert match_terms(None, "Net 30") is False
+
+
+class TestMatchCardLast4:
+    def test_exact_after_strip(self):
+        assert match_card_last4("1111", "1111") is True
+        assert match_card_last4("1111", " 1111 ") is True
+
+    def test_a_different_or_longer_value_is_wrong(self):
+        assert match_card_last4("1111", "1112") is False
+        assert match_card_last4("1111", "****1111") is False
+        assert match_card_last4("1111", 1111) is False
+
+
+class TestMatchRate:
+    def test_exact_decimal(self):
+        assert match_rate(8.875, 8.875) == (True, False)
+        assert match_rate(6.5, 6.50) == (True, False)
+        assert match_rate(7, 7.0) == (True, False)
+
+    def test_no_cent_of_tolerance(self):
+        assert match_rate(8.875, 8.88) == (False, False)
+        assert match_rate(6.5, 6.51) == (False, False)
+
+    def test_a_string_is_coerced_and_counted(self):
+        assert match_rate(6.5, "6.5") == (True, True)
+        assert match_rate(6.5, "6.5%") == (False, True)
+
+    def test_a_fraction_is_not_the_percent(self):
+        assert match_rate(8.875, 0.08875) == (False, False)
+
+
+def _tax_row(label="State sales tax", rate=6.5, base=454.48, amount=29.54):
+    return {"label": label, "rate": rate, "base": base, "amount": amount}
+
+
+def _tax_cells(row):
+    return {key: _leaf(value) for key, value in row.items()}
+
+
+class TestMatchTaxLines:
+    def test_equal_rows_match(self):
+        gold = [_tax_row(), _tax_row("County transit tax", 1.25, 454.48, 5.68)]
+        pred = [_tax_cells(row) for row in gold]
+
+        assert match_tax_lines(gold, pred) == (True, 1.0, 0)
+
+    def test_both_empty_or_null_match(self):
+        assert match_tax_lines(None, []) == (True, 1.0, 0)
+        assert match_tax_lines([], None) == (True, 1.0, 0)
+
+    def test_a_missing_or_extra_row_is_wrong_with_partial_credit(self):
+        gold = [_tax_row(), _tax_row("County transit tax", 1.25, 454.48, 5.68)]
+
+        correct, accuracy, _ = match_tax_lines(gold, [_tax_cells(gold[0])])
+        assert (correct, accuracy) == (False, 0.5)
+        assert match_tax_lines([], [_tax_cells(gold[0])]) == (False, 0.0, 0)
+
+    def test_rows_are_compared_in_the_order_printed(self):
+        gold = [_tax_row(), _tax_row("County transit tax", 1.25, 454.48, 5.68)]
+        pred = [_tax_cells(gold[1]), _tax_cells(gold[0])]
+
+        assert match_tax_lines(gold, pred) == (False, 0.0, 0)
+
+    def test_the_label_is_fuzzy(self):
+        gold = [_tax_row("State sales tax")]
+
+        assert match_tax_lines(gold, [_tax_cells(_tax_row("State Sales Tax."))])[0] is True
+        assert match_tax_lines(gold, [_tax_cells(_tax_row("Excise duty"))])[0] is False
+
+    def test_the_rate_is_exact(self):
+        gold = [_tax_row(rate=8.875)]
+
+        assert match_tax_lines(gold, [_tax_cells(_tax_row(rate=8.875))])[0] is True
+        assert match_tax_lines(gold, [_tax_cells(_tax_row(rate=8.88))])[0] is False
+
+    def test_the_base_and_amount_tolerate_a_cent(self):
+        gold = [_tax_row()]
+
+        assert match_tax_lines(gold, [_tax_cells(_tax_row(base=454.49, amount=29.55))])[0] is True
+        assert match_tax_lines(gold, [_tax_cells(_tax_row(amount=29.60))])[0] is False
+
+    def test_a_null_cell_matches_only_a_null_cell(self):
+        gold = [_tax_row(rate=None, base=None)]
+
+        assert match_tax_lines(gold, [_tax_cells(_tax_row(rate=None, base=None))])[0] is True
+        assert match_tax_lines(gold, [_tax_cells(_tax_row(rate=6.5, base=None))])[0] is False
+        assert match_tax_lines([_tax_row()], [_tax_cells(_tax_row(base=None))])[0] is False
+
+    def test_a_string_amount_is_a_schema_violation(self):
+        gold = [_tax_row()]
+        row = _tax_cells(_tax_row())
+        row["amount"] = _leaf("29.54")
+        row["rate"] = _leaf("6.5")
+
+        assert match_tax_lines(gold, [row]) == (True, 1.0, 2)
+
+    @pytest.mark.parametrize(
+        ("gold", "predicted"),
+        [
+            ("VAT", "VAT 19%"),
+            ("VAT", "VAT 19% on 125,19 EUR"),
+            ("State sales tax", "State sales tax 4% on $1,018.00"),
+            ("State sales tax", "State sales tax 6.5%"),
+            ("County transit tax", "County transit tax 1.25 %"),
+        ],
+    )
+    def test_a_rate_and_base_left_in_the_label_are_not_a_wrong_tax(self, gold, predicted):
+        assert match_tax_lines([_tax_row(gold)], [_tax_cells(_tax_row(predicted))])[0] is True
+
+    def test_stripping_the_rate_does_not_make_another_label_match(self):
+        assert match_tax_lines([_tax_row("VAT")], [_tax_cells(_tax_row("Excise duty 19%"))])[0] is False
+        assert match_tax_lines([_tax_row("VAT")], [_tax_cells(_tax_row("19%"))])[0] is False
+
+    def test_a_bare_null_row_degrades_instead_of_raising(self):
+        assert match_tax_lines([_tax_row()], [None]) == (False, 0.0, 0)
+
+
+# --- scoring a v2 case -----------------------------------------------------------
+
+
+def _label_case(prefix: str) -> EvalCase:
+    return next(case for case in load_cases() if case.doc_id.startswith(prefix))
+
+
+def _gold_tool_input(case: EvalCase) -> dict:
+    """The answer a flawless reader gives for a label, quotes and all."""
+    return label_tool_input(case.fields, 0.9, case.evidence)
+
+
+def _score_v2(case: EvalCase, tool_input: dict) -> CaseScore:
+    return score_case(case, tool_input, 0.8, SCHEMA_V2)
+
+
+class TestScoreCaseV2:
+    @pytest.mark.parametrize("prefix", ["001", "026", "028", "029", "030", "031", "032"])
+    def test_the_gold_answer_scores_every_field_correct(self, prefix):
+        case = _label_case(prefix)
+
+        score = _score_v2(case, _gold_tool_input(case))
+
+        assert list(score.fields) == list(SCHEMA_V2.field_names)
+        assert all(field.correct for field in score.fields.values()), prefix
+        assert (score.hallucinations, score.schema_violations) == (0, 0)
+
+    def test_an_identifier_is_exact_on_its_letters_and_digits(self):
+        case = _label_case("026")
+        tool = _gold_tool_input(case)
+
+        tool["invoice_number"]["value"] = "inv 2026 0417"
+        tool["po_number"]["value"] = "PO-88231"
+        score = _score_v2(case, tool)
+
+        assert score.fields["invoice_number"].correct is True
+        assert score.fields["po_number"].correct is False
+
+    def test_payment_terms_match_by_their_words_and_numbers(self):
+        case = _label_case("026")
+        tool = _gold_tool_input(case)
+
+        tool["payment_terms"]["value"] = "net 30 days"
+        assert _score_v2(case, tool).fields["payment_terms"].correct is True
+        tool["payment_terms"]["value"] = "Net 300"
+        assert _score_v2(case, tool).fields["payment_terms"].correct is False
+        tool["payment_terms"]["value"] = "Due on receipt"
+        assert _score_v2(case, tool).fields["payment_terms"].correct is False
+
+    def test_a_due_date_is_normalized_like_a_date(self):
+        case = _label_case("026")
+        tool = _gold_tool_input(case)
+
+        tool["due_date"]["value"] = "09/02/2026"
+        assert _score_v2(case, tool).fields["due_date"].correct is True
+        tool["due_date"]["value"] = "2026-09-03"
+        assert _score_v2(case, tool).fields["due_date"].correct is False
+
+    def test_the_card_digits_are_exact(self):
+        case = _label_case("029")
+        tool = _gold_tool_input(case)
+
+        tool["payment_card_last4"]["value"] = "1112"
+        score = _score_v2(case, tool)
+
+        assert score.fields["payment_card_last4"].correct is False
+        assert score.fields["payment_method"].correct is True
+
+    @pytest.mark.parametrize("name", ["discount", "shipping", "amount_paid", "amount_due", "tip"])
+    def test_a_new_amount_is_within_a_cent(self, name):
+        case = next(c for c in load_cases() if c.fields[name] is not None)
+        tool = _gold_tool_input(case)
+
+        tool[name]["value"] = round(case.fields[name] + 0.01, 2)
+        assert _score_v2(case, tool).fields[name].correct is True
+        tool[name]["value"] = round(case.fields[name] + 0.02, 2)
+        assert _score_v2(case, tool).fields[name].correct is False
+
+    def test_a_new_amount_as_a_string_is_a_schema_violation(self):
+        case = _label_case("026")
+        tool = _gold_tool_input(case)
+
+        tool["shipping"]["value"] = "$18.50"
+        score = _score_v2(case, tool)
+
+        assert score.fields["shipping"].correct is False
+        assert score.schema_violations == 1
+
+    def test_a_tax_line_misread_makes_the_field_wrong_and_the_rest_right(self):
+        case = _label_case("026")
+        tool = _gold_tool_input(case)
+
+        tool["tax_lines"]["value"][1]["amount"]["value"] = 5.86
+        score = _score_v2(case, tool)
+
+        assert score.fields["tax_lines"].correct is False
+        assert score.fields["tax"].correct is True
+        assert score.fields["line_items"].correct is True
+
+    def test_a_hallucinated_new_field_is_counted(self):
+        case = _label_case("001")
+        tool = _gold_tool_input(case)
+
+        tool["po_number"] = _leaf("PO-1")
+        tool["tax_lines"]["value"].append(_tax_cells(_tax_row()))
+        score = _score_v2(case, tool)
+
+        assert score.fields["po_number"].correct is False
+        # The extra tax line makes tax_lines wrong, but gold has tax lines, so it is no hallucination.
+        assert score.hallucinations == 1
+        assert score.fields["tax_lines"].correct is False
+
+    def test_tax_lines_hallucinated_where_gold_has_none(self):
+        case = _label_case("030")
+        no_tax_lines = replace_fields(case, tax_lines=None)
+
+        score = _score_v2(no_tax_lines, _gold_tool_input(case))
+
+        assert score.fields["tax_lines"].correct is False
+        assert score.hallucinations == 1
+
+    def test_the_default_schema_is_v1_and_reads_only_its_fields(self):
+        case = _label_case("026")
+
+        score = score_case(case, _gold_tool_input(case), 0.8)
+
+        assert tuple(score.fields) == SCHEMA_V1.field_names
+        assert score.evidence is None
+
+    def test_v1_scoring_of_a_v2_label_is_the_same_as_before(self):
+        case = _label_case("026")
+
+        v1 = score_case(case, _gold_tool_input(case), 0.8, SCHEMA_V1)
+        v2 = _score_v2(case, _gold_tool_input(case))
+
+        for name in SCHEMA_V1.field_names:
+            assert v1.fields[name].correct == v2.fields[name].correct
+        assert v1.item_accuracy == v2.item_accuracy
+
+    def test_the_card_number_never_reaches_the_score(self):
+        # extract_document masks card data, but a score is the artifact: whatever
+        # extract_fn produced, an unmasked number must not be written into it.
+        case = _label_case("029")
+        tool = _gold_tool_input(case)
+        tool["payment_method"]["value"] = "VISA 4111 1111 1111 1111"
+        tool["payment_method"]["evidence"] = {"page": 1, "quote": "Paid by VISA 4111 1111 1111 1111 $88.57"}
+        tool["amount_paid"]["evidence"] = {"page": 1, "quote": "Paid by VISA 4111 1111 1111 1111 $88.57"}
+
+        score = _score_v2(case, tool)
+        artifact = json.dumps(score.to_dict())
+
+        assert "4111" not in artifact
+        assert score.fields["payment_method"].actual == "VISA ****1111"
+        assert score.fields["payment_method"].evidence["quote"] == "Paid by VISA ****1111 $88.57"
+
+
+def replace_fields(case: EvalCase, **overrides) -> EvalCase:
+    return EvalCase(
+        doc_id=case.doc_id,
+        image_path=case.image_path,
+        mime_type=case.mime_type,
+        source=case.source,
+        dataset_version=case.dataset_version,
+        difficulty=case.difficulty,
+        fields={**case.fields, **overrides},
+        evidence=case.evidence,
+    )
+
+
+# --- evidence in a score -----------------------------------------------------------
+
+
+class TestFieldScoreEvidence:
+    def test_a_v1_field_score_keeps_its_exact_shape(self):
+        assert FieldScore(True, 1.0, 1.0, 0.9).to_dict() == {
+            "correct": True,
+            "expected": 1.0,
+            "actual": 1.0,
+            "confidence": 0.9,
+        }
+
+    def test_evidence_is_serialized_only_when_present(self):
+        cited = {"page": 1, "quote": "Tax: $1.00"}
+
+        assert FieldScore(True, 1.0, 1.0, 0.9, evidence=cited).to_dict()["evidence"] == cited
+        assert "evidence" not in FieldScore(True, 1.0, 1.0, 0.9, evidence=None).to_dict()
+
+    def test_a_v1_score_has_no_evidence_anywhere(self):
+        score = score_case(_case(), _base_tool_input(), 0.8)
+
+        assert score.evidence is None
+        assert all("evidence" not in field for field in score.to_dict()["fields"].values())
+        assert aggregate([score]).evidence_coverage is None
+        assert "evidence_coverage" not in aggregate([score]).to_dict()
+
+    def test_a_v2_header_field_records_the_evidence_it_cited(self):
+        case = _label_case("001")
+        score = _score_v2(case, _gold_tool_input(case))
+
+        assert score.fields["total"].evidence == case.evidence["total"]
+        assert score.to_dict()["fields"]["total"]["evidence"] == case.evidence["total"]
+        # A null value has no evidence, and an array's cells keep theirs inside `actual`.
+        assert "evidence" not in score.to_dict()["fields"]["po_number"]
+        assert score.fields["line_items"].evidence is None
+        assert score.fields["line_items"].actual[0]["total"]["evidence"] == case.evidence["line_items[0].total"]
+
+
+def _counts(case: EvalCase, mutate=None) -> dict[str, EvidenceCounts]:
+    tool = _gold_tool_input(case)
+    if mutate is not None:
+        mutate(tool)
+    return _score_v2(case, tool).evidence
+
+
+class TestEvidenceCounts:
+    def test_the_gold_answer_is_fully_covered_and_agrees_everywhere(self):
+        case = _label_case("026")
+
+        counts = _counts(case)
+
+        total = sum(counts.values(), EvidenceCounts())
+        assert total.leaves == total.with_quote == total.gold_judged == total.page_agree == total.quote_agree
+        assert counts["invoice_number"] == EvidenceCounts(1, 1, 1, 1, 1)
+        assert counts["po_number"] == EvidenceCounts(1, 1, 1, 1, 1)
+        # Every cell of every line item and tax line is a leaf.
+        assert counts["line_items"].leaves == 4 * 4
+        assert counts["tax_lines"].leaves == 2 * 4
+
+    def test_a_null_value_is_no_leaf(self):
+        case = _label_case("001")
+
+        assert _counts(case)["po_number"] == EvidenceCounts()
+
+    def test_a_value_with_no_quote_is_a_coverage_miss_and_a_page_miss(self):
+        case = _label_case("001")
+
+        counts = _counts(case, lambda tool: tool["total"].update(evidence=None))
+
+        assert counts["total"] == EvidenceCounts(1, 0, 1, 0, 0)
+
+    def test_a_null_page_is_a_page_miss_not_a_coverage_miss(self):
+        case = _label_case("001")
+
+        def drop_page(tool):
+            tool["total"]["evidence"] = {"page": None, "quote": case.evidence["total"]["quote"]}
+
+        counts = _counts(case, drop_page)
+
+        assert counts["total"] == EvidenceCounts(1, 1, 1, 0, 1)
+
+    def test_a_wrong_page_is_a_page_miss(self):
+        case = _label_case("032")
+
+        def wrong_page(tool):
+            tool["total"]["evidence"] = {"page": 1, "quote": case.evidence["total"]["quote"]}
+
+        assert case.evidence["total"]["page"] == 2
+        assert _counts(case, wrong_page)["total"] == EvidenceCounts(1, 1, 1, 0, 1)
+
+    def test_a_quote_is_compared_with_its_whitespace_collapsed(self):
+        case = _label_case("001")
+        gold_quote = case.evidence["line_items[0].total"]["quote"]
+        assert "  " in gold_quote
+
+        def tidy(tool):
+            tool["line_items"]["value"][0]["total"]["evidence"] = {
+                "page": 1,
+                "quote": " ".join(gold_quote.split()),
+            }
+
+        counts = _counts(case, tidy)["line_items"]
+
+        assert counts.quote_agree == counts.gold_judged == counts.leaves
+
+    def test_another_quote_is_a_quote_miss_but_still_covered(self):
+        case = _label_case("001")
+
+        counts = _counts(
+            case, lambda tool: tool["total"].update(evidence={"page": 1, "quote": "Amount due $1.00"})
+        )
+
+        assert counts["total"] == EvidenceCounts(1, 1, 1, 1, 0)
+
+    def test_a_quote_that_is_not_usable_does_not_cover(self):
+        case = _label_case("001")
+
+        counts = _counts(
+            case, lambda tool: tool["total"].update(evidence={"page": 1, "quote": "x" * 201})
+        )
+
+        assert counts["total"].with_quote == 0
+
+    def test_a_value_the_gold_label_does_not_cite_is_covered_but_not_judged(self):
+        case = _label_case("001")
+
+        def invent(tool):
+            tool["po_number"] = {"value": "PO-1", "confidence": 0.9, "evidence": {"page": 1, "quote": "PO-1"}}
+
+        assert _counts(case, invent)["po_number"] == EvidenceCounts(1, 1, 0, 0, 0)
+
+    def test_the_masked_payment_quote_agrees_with_the_gold_one(self):
+        case = _label_case("029")
+
+        counts = _counts(case)
+
+        assert case.evidence["payment_method"]["quote"] == "Paid by VISA ****1111 $88.57"
+        assert counts["payment_method"] == EvidenceCounts(1, 1, 1, 1, 1)
+        assert counts["payment_card_last4"] == EvidenceCounts(1, 1, 1, 1, 1)
+
+    def test_a_row_past_the_gold_rows_is_covered_but_not_judged(self):
+        case = _label_case("001")
+
+        def extra_row(tool):
+            row = {key: dict(cell) for key, cell in tool["line_items"]["value"][0].items()}
+            tool["line_items"]["value"].append(row)
+
+        counts = _counts(case, extra_row)["line_items"]
+        base = _counts(case)["line_items"]
+
+        assert counts.leaves == base.leaves + 4
+        assert counts.gold_judged == base.gold_judged
+
+    def test_rates_are_none_where_nothing_was_counted(self):
+        assert EvidenceCounts().to_dict()["coverage"] is None
+        assert EvidenceCounts(2, 1, 0, 0, 0).to_dict()["page_agreement"] is None
+        assert EvidenceCounts(2, 1, 2, 1, 0).to_dict()["coverage"] == 0.5
+
+
+class TestAggregateEvidence:
+    def test_the_run_totals_are_the_sum_of_its_cases_and_fields(self):
+        cases = [_label_case("001"), _label_case("026")]
+        scores = [_score_v2(case, _gold_tool_input(case)) for case in cases]
+
+        coverage = aggregate(scores).evidence_coverage
+
+        per_field = coverage["per_field"]
+        assert list(per_field) == list(SCHEMA_V2.field_names)
+        assert coverage["leaves"] == sum(field["leaves"] for field in per_field.values())
+        assert coverage["leaves"] == sum(
+            counts.leaves for score in scores for counts in score.evidence.values()
+        )
+        assert coverage["coverage"] == coverage["page_agreement"] == coverage["quote_agreement"] == 1.0
+        assert per_field["vendor"]["leaves"] == 2
+        assert per_field["po_number"]["leaves"] == 1
+
+    def test_a_missing_quote_lowers_coverage_and_both_agreements(self):
+        case = _label_case("001")
+        tool = _gold_tool_input(case)
+        tool["total"]["evidence"] = None
+
+        coverage = aggregate([_score_v2(case, tool)]).evidence_coverage
+
+        assert coverage["per_field"]["total"]["coverage"] == 0.0
+        assert coverage["per_field"]["subtotal"]["coverage"] == 1.0
+        assert coverage["coverage"] < 1.0
+        assert coverage["page_agreement"] < 1.0
+
+    def test_it_is_part_of_the_summary_dict_for_v2_only(self):
+        case = _label_case("001")
+
+        summary = aggregate([_score_v2(case, _gold_tool_input(case))]).to_dict()
+
+        assert summary["evidence_coverage"]["leaves"] > 0
+        assert json.loads(json.dumps(summary)) == summary
+
+
+# --- the core documents ------------------------------------------------------------
+
+
+class TestCoreDocuments:
+    def test_the_core_is_the_first_25_labels(self):
+        assert [case.doc_id for case in load_cases(limit=25)] == list(CORE_DOC_IDS)
+
+    def test_documents_can_be_selected_by_doc_id(self):
+        cases = load_cases(doc_ids=["032-multipage-invoice-totals-page-two", "026-invoice-discount-shipping-two-taxes"])
+
+        assert [case.doc_id[:3] for case in cases] == ["026", "032"]
+        assert len(load_cases(doc_ids=["026-invoice-discount-shipping-two-taxes"], limit=5)) == 1
+
+    def test_an_unknown_doc_id_is_an_error(self):
+        with pytest.raises(ValueError, match="no-such-doc"):
+            load_cases(doc_ids=["026-invoice-discount-shipping-two-taxes", "no-such-doc"])

@@ -15,6 +15,7 @@ sibling module that scores what this one loads.
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -33,6 +34,37 @@ from app.pii import (
 
 EVALS_DIR = BACKEND_DIR.parent / "evals"
 LABELS_DIR = EVALS_DIR / "labels"
+
+# The 25 documents every extraction run since the first has been scored on,
+# images generated before dataset v2 added more. A run is compared with another
+# on these (the "Core" column of the report), whatever else it was run on.
+CORE_DOC_IDS = (
+    "001-clean-coffee-receipt",
+    "002-clean-hardware-invoice",
+    "003-clean-stationery-order",
+    "004-clean-bike-shop-ticket",
+    "005-clean-bakery-receipt",
+    "006-clean-electronics-invoice",
+    "007-skewed-garden-center",
+    "008-skewed-pet-supply",
+    "009-skewed-outdoor-supply",
+    "010-skewed-general-store",
+    "011-noisy-print-shop",
+    "012-noisy-florist-glare",
+    "013-noisy-tea-house",
+    "014-noisy-home-goods",
+    "015-handwriting-candle-co",
+    "016-handwriting-bakery-note",
+    "017-handwriting-farm-stand",
+    "018-dense-office-outfitters",
+    "019-dense-hardware-warehouse",
+    "020-dense-electronics-order",
+    "021-missing-field-grocery-no-tax",
+    "022-missing-field-receipt-no-vendor",
+    "023-missing-field-order-no-currency",
+    "024-eur-bakery-berlin",
+    "025-adversarial-office-order-injection",
+)
 
 # The exact key set fields must have -- no more, no less. A dataset entry
 # with a stray or missing key is a labeling bug worth failing loudly on,
@@ -349,7 +381,7 @@ def _load_case(label_path: Path, evals_dir: Path = EVALS_DIR) -> EvalCase:
     )
 
 
-def load_cases(limit: int | None = None) -> list[EvalCase]:
+def load_cases(limit: int | None = None, doc_ids: Sequence[str] | None = None) -> list[EvalCase]:
     """Load every label in evals/labels/, sorted by doc_id.
 
     Each label JSON is validated loudly (ValueError naming the offending
@@ -358,13 +390,21 @@ def load_cases(limit: int | None = None) -> list[EvalCase]:
     label-filename-stem check above ensures that pairing lines up with
     the image's own `NNN-slug` filename rather than silently drifting.
 
-    `limit` slices AFTER sorting, so `load_cases(limit=5)` deterministically
-    returns the first 5 cases by doc_id regardless of directory iteration
-    order.
+    `doc_ids` keeps only the cases with those doc_ids (ValueError naming any
+    that no label has), in doc_id order whatever order they were given in.
+    `limit` slices AFTER sorting and selecting, so `load_cases(limit=5)`
+    deterministically returns the first 5 cases by doc_id regardless of
+    directory iteration order.
     """
     label_paths = sorted(LABELS_DIR.glob("*.json"))
     cases = [_load_case(p) for p in label_paths]
     cases.sort(key=lambda c: c.doc_id)
+    if doc_ids is not None:
+        known = {c.doc_id for c in cases}
+        unknown = sorted(set(doc_ids) - known)
+        if unknown:
+            raise ValueError(f"no label with doc_id {', '.join(map(repr, unknown))}")
+        cases = [c for c in cases if c.doc_id in set(doc_ids)]
     if limit is not None:
         cases = cases[:limit]
     return cases
