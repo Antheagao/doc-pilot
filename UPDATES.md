@@ -25,6 +25,21 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-15 (macOS: batch-loop through Batch B's zero-spend tasks; stopped at the first paid run)
+- Batch B expanded by the planner into twelve tasks (`edbd2b5`), every one implemented by a coder and passed through a deep review before its commit, with no Co-Authored-By trailers:
+  - B1 schema registry, v1 byte-identical (`edbd2b5`).
+  - B2 rules_v2: discounts, shipping, tips, tax lines, balances; v1 reports unchanged, pinned by 151 golden reports and a 3000-case differential (`c9c7392`).
+  - B3 the value-quote check and the `quote:` review reason (`59b9eb3`).
+  - B4 the extract_v2 schema and prompt, with card numbers masked in code across every leaf, quote, and writer (`2dbed60`).
+  - B5 evidence pages through single and chunked PDFs (`838630c`).
+  - B6 dataset v2: 32 labels, seven new documents, gold evidence (`b4e7976`).
+  - B7 v2 scoring, the quote eval, the Core column, and `evals/check_bar.py` (`7dbf2b4`).
+  - B8 the UI for v2 fields and evidence, and the demo seed for 026-032, checked in a browser on the demo stack (`8ad1c60`).
+  - B9 prices confirmed against the published page and pinned (`21c9f86`).
+- The reviews earned their keep: a v2 card number reaching `raw_response` through a list or an extra key, a 1000x error passing the quote check on round thousands, a tax-line base that false-failed real VAT receipts with a wrong fix, and, once the mutation eval broke a number everywhere it was printed once, a real engine fault that blamed a correct total for a misread tax (87 wrong fixes, fixed in `a6b02a7` to 0, also with realistic quote variants).
+- The Mac dev database holds no extractions and predates A4 (backed up to `~/doc-pilot-backups/` before rules_v2); `reconcile_all.py` was verified on the demo database instead: 25 extractions, 0 routing changes.
+- Live spend this session: $0.00. Stopped at B10, the first paid task (about $0.08), which needs Anthony's approval; B11 (about $1.20) and the optional B11b (about $0.57) follow. 1682 tests pass.
+
 ### 2026-10-14 (macOS, continued: A5-A7, Batch A complete)
 - A5 (`5567f80`) resumed from `wip/a5-reconciliation-ui` and verified in a browser; the deep review found a quantity-0 line drawn as tax-inclusive, skipped lines counted as failures, two operands of one line cancelling each other's highlight, and a stale prefill note, all fixed. Found on the way: the review badge only refreshed on navigation.
 - A6 (`bbbc05b`), planned by the planner against the committed artifacts: `caught_by_checks` replays stored answers through review routing (Haiku 0.0% by review, 50.0% by checks); the mutation eval detects 1604 of 1628 single-amount misreads with 0 wrong fixes; the scorer reads amounts as exact decimals with no committed score moving. Review caught a tautological test and a missing-key crash path.
