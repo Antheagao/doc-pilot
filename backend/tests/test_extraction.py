@@ -2415,3 +2415,21 @@ async def test_a_first_call_cut_off_at_max_tokens_carries_its_stop_reason_on_the
         await _extract_from_tmp_file(tmp_path)
 
     assert exc_info.value.stop_reasons == [{"first": "max_tokens", "repair": None}]
+
+
+@pytest.mark.parametrize(
+    ("model", "dollars"),
+    [
+        # Input plus output price per million tokens, from the published
+        # pricing page (checked 2026-10-15): a million tokens of each.
+        ("claude-sonnet-5", 12.00),
+        ("claude-haiku-4-5", 6.00),
+        ("claude-opus-5", 30.00),
+        ("claude-opus-5-5", 24.00),
+        ("claude-sonnet-5-5", 12.00),
+        ("claude-opus-4-8", 30.00),
+    ],
+)
+def test_the_pricing_table_matches_the_published_prices(model: str, dollars: float) -> None:
+    assert extraction_module._compute_cost_usd(model, 1_000_000, 1_000_000) == pytest.approx(dollars)
+

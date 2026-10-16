@@ -68,10 +68,11 @@ logger = logging.getLogger(__name__)
 IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 PDF_MIME_TYPE = "application/pdf"
 
-# $ per million tokens (input, output). Cached from the claude-api skill,
-# 2026-06-24. Sonnet 5 is running introductory pricing ($2/$10) through
-# 2026-08-31, after which it reverts to standard $3/$15 -- update this
-# table when that happens (or when EXTRACTION_MODEL is changed).
+# $ per million tokens (input, output), checked against Anthropic's
+# published pricing page on 2026-10-15. Sonnet 5's $2/$10, first announced
+# as introductory pricing, became its standard price: the planned rise to
+# $3/$15 did not happen. Update this table when a price changes or when
+# EXTRACTION_MODEL names a model it lacks.
 PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-sonnet-5": (2.00, 10.00),
     "claude-opus-5": (5.00, 25.00),
