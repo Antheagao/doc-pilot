@@ -1568,6 +1568,173 @@ def test_a_reviewed_tax_line_field_is_never_suggested() -> None:
     assert report.suggestion is None
 
 
+# a tax printed once is held twice: as the tax and as its only tax line
+
+
+def test_a_misread_tax_that_reaches_its_only_tax_line_does_not_blame_the_total() -> None:
+    # The printed tax is 8.00; read as 9.00 in both places. The two agree, so only
+    # total_math fails, and changing the total would be the one fix that works.
+    report = run_v2(subtotal=100, tax=9, total=108, tax_lines=[(None, None, 9)])
+
+    assert failing_ids(report) == ["total_math"]
+    assert check_of(report, "tax_lines_sum").status == STATUS_PASS
+    assert report.suggestion is None
+
+
+def test_the_same_misread_without_tax_lines_is_ambiguous_too() -> None:
+    # What rules_v1 says about this record: the tax or the total, so no suggestion.
+    assert run_v2(subtotal=100, tax=9, total=108).suggestion is None
+
+
+def test_a_tax_that_only_the_pair_can_explain_is_fixed_through_the_header_field() -> None:
+    # 9.00 read as 90.00 in both places: the total (109.00) would have to become
+    # 190.00 and the rate would still be absurd, so the pair is the only fix.
+    report = run_v2(subtotal=100, tax=90, total=109, tax_lines=[(None, None, 90)])
+
+    assert failing_ids(report) == ["total_math", "tax_rate"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax", Decimal(9))
+    assert report.suggestion.current == Decimal(90)
+    assert report.suggestion.detail.endswith(
+        "The only tax line's amount is the same printed number and needs the same value."
+    )
+
+
+def test_a_tax_line_with_a_printed_rate_and_base_is_not_the_taxs_twin() -> None:
+    # tax_line_math holds the amount to 9% of 100.00 on its own, so the line is
+    # its own reading: the misread fails three checks and nothing is suggested.
+    report = run_v2(subtotal=100, tax=90, total=109, tax_lines=[("9", 100, 90)])
+
+    assert failing_ids(report) == ["tax_line_math[0]", "total_math", "tax_rate"]
+    assert report.suggestion is None
+
+
+def test_a_rate_only_tax_line_is_the_taxs_twin_when_its_check_is_loose() -> None:
+    # Printed 144.78 (7.25% of 1997.00 is 144.7825), read as 144.79 in both
+    # places: the line check allows a minor unit, so only total_math fails, and
+    # the freight (84.99) must not be blamed.
+    report = run_v2(
+        lines=((1, 1997, 1997),),
+        subtotal=1997,
+        shipping=85,
+        tax=144.79,
+        total=2226.78,
+        tax_lines=[("7.25", None, 144.79)],
+    )
+
+    assert failing_ids(report) == ["total_math"]
+    assert check_of(report, "tax_line_math[0]").status == STATUS_PASS
+    assert report.suggestion is None
+
+
+def test_a_tax_and_a_tax_line_that_disagree_are_not_one_reading() -> None:
+    report = run_v2(subtotal=100, tax=8, total=108, tax_lines=[(None, None, 9)])
+
+    assert failing_ids(report) == ["tax_lines_sum"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax_lines[0].amount", Decimal(8))
+    assert report.suggestion.detail == "Setting tax_lines[0].amount to 8.00 fixes tax_lines_sum and breaks no passing check."
+
+
+def test_a_reviewed_tax_leaves_the_tax_line_as_the_next_suggestion() -> None:
+    # A reviewer who applied the pair's suggestion corrected only the tax: the
+    # stored tax line is still the misread, and is suggested on its own field.
+    misread = v2_input(subtotal=100, tax=8, total=108, tax_lines=[(None, None, 9)])
+    corrected = dataclasses.replace(misread, tax=FieldInput(8, "corrected", True))
+
+    report = reconcile(corrected)
+
+    assert failing_ids(report) == ["tax_lines_sum"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax_lines[0].amount", Decimal(8))
+
+
+def test_a_reviewed_tax_line_field_is_not_changed_with_the_tax() -> None:
+    # A person's word stands: the approved tax line is not the pair's second
+    # cell, so the only change left is the total, which is the intended answer.
+    misread = v2_input(subtotal=100, tax=9, total=108, tax_lines=[(None, None, 9)])
+    reviewed = dataclasses.replace(
+        misread,
+        tax_lines=tuple(
+            dataclasses.replace(row, source="approved", verified=True) for row in misread.tax_lines
+        ),
+    )
+
+    report = reconcile(reviewed)
+
+    assert report.suggestion is not None
+    assert report.suggestion.path == "total"
+
+
+# a tax or subtotal nobody printed is computed from cells that could be what is off
+
+
+def test_a_tax_computed_from_one_misread_tax_line_does_not_blame_the_total() -> None:
+    # extract_v2 leaves tax null when only tax lines are printed. The printed 8.00
+    # read as 9.00 makes the computed tax 9.00; the total (108.00, right) and the
+    # line amount are equally able to be the misread, so nothing is suggested.
+    report = run_v2(subtotal=100, tax=None, total=108, tax_lines=[(None, None, 9)])
+
+    assert failing_ids(report) == ["total_math"]
+    assert [d.path for d in report.derived] == ["tax"]
+    assert report.suggestion is None
+
+
+def test_a_tax_computed_from_two_base_less_tax_lines_with_one_misread_has_no_suggestion() -> None:
+    report = run_v2(
+        subtotal=100, tax=None, total=108, tax_lines=[(None, None, 5), (None, None, 4)]
+    )
+
+    assert failing_ids(report) == ["total_math"]
+    assert report.suggestion is None
+
+
+def test_a_misread_total_beside_a_computed_tax_is_ambiguous_too() -> None:
+    report = run_v2(subtotal=100, tax=None, total=109, tax_lines=[(None, None, 8)])
+
+    assert failing_ids(report) == ["total_math"]
+    assert report.suggestion is None
+
+
+def test_a_computed_tax_that_only_one_tax_line_can_explain_is_fixed_on_that_line() -> None:
+    # 8.00 read as 80.00: the total would have to become 180.00, and the rate of
+    # the computed tax would still be absurd.
+    report = run_v2(subtotal=100, tax=None, total=108, tax_lines=[(None, None, 80)])
+
+    assert failing_ids(report) == ["total_math", "tax_rate"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax_lines[0].amount", Decimal(8))
+    assert report.suggestion.current == Decimal(80)
+
+
+def test_a_subtotal_computed_from_line_totals_with_no_factors_does_not_blame_the_total() -> None:
+    # No quantity or unit price to check a line against: the lines (51 + 50) and
+    # the total (108 less tax 8) disagree, and either side could be the misread.
+    report = run_v2(
+        lines=((None, None, 51), (None, None, 50)), subtotal=None, tax=8, total=108
+    )
+
+    assert failing_ids(report) == ["total_math"]
+    assert report.suggestion is None
+
+
+def test_a_computed_amount_is_never_proposed_itself() -> None:
+    # A tax read from reviewed tax lines has no candidate input to move.
+    inp = v2_input(subtotal=100, tax=None, total=108, tax_lines=[(None, None, 9)])
+    reviewed = dataclasses.replace(
+        inp,
+        tax_lines=tuple(
+            dataclasses.replace(row, source="approved", verified=True) for row in inp.tax_lines
+        ),
+    )
+
+    report = reconcile(reviewed)
+
+    assert failing_ids(report) == ["total_math"]
+    assert report.suggestion is not None
+    assert report.suggestion.path == "total"
+
+
 # inputs
 
 
@@ -1807,15 +1974,33 @@ def test_the_net_amount_base_also_takes_the_discount_and_shipping() -> None:
 
 
 def test_a_single_misread_does_not_pass_on_the_shipping_base_and_get_a_wrong_fix() -> None:
-    # Tax 8.00 is a misread of 7.20, but the shipping-inclusive base (100.00)
-    # happens to fit it. The total 107.20 is right: the only single change that
-    # satisfies the re-run on the first base is none, so nothing is suggested.
+    # Tax 8.00 is a misread of 7.20 (in the tax and in its only tax line), but the
+    # shipping-inclusive base (100.00) happens to fit it. The total 107.20 is
+    # right: it is not changed, and the fix is the tax pair, which passes on the
+    # first base (8% of 90.00).
     report = run_v2(
         subtotal=100, discount=10, shipping=10, tax=8, total=107.2, tax_lines=[("8", None, 8)]
     )
 
     assert failing_ids(report) == ["total_math"]
     assert check_of(report, "tax_line_math[0]").status == STATUS_PASS
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax", Decimal("7.2"))
+
+
+def test_a_misread_amount_alone_does_not_pass_on_the_shipping_base_and_get_a_wrong_fix() -> None:
+    # The same document with two tax lines, so the amount is not the tax's twin:
+    # the passing second base must not make the misread a fix of the total.
+    report = run_v2(
+        subtotal=100,
+        discount=10,
+        shipping=10,
+        tax=8,
+        total=107.2,
+        tax_lines=[("4", None, 4), ("4", None, 4)],
+    )
+
+    assert failing_ids(report) == ["total_math"]
     assert report.suggestion is None
 
 

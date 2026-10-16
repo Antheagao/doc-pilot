@@ -498,7 +498,12 @@ Every label is a consistent document, and `rules_v2` passes all 32 unmutated, ea
 The eval then breaks one printed amount at a time (subtotal, tax, total, and every line's quantity, unit price, and total) in the ways a reader gets digits wrong, and replays each broken document with full confidence, so only the arithmetic can notice.
 A number printed once is broken everywhere it was read: a tax that is read as the tax and as its only tax line is broken in both.
 "Fix suggested" counts the cases where the engine proposes exactly the original value, and "Wrong fixes" counts any other suggestion.
-A wrong fix appears only for that kind of misread: the tax and its tax line still agree with each other, so the arithmetic blames the total.
+A wrong fix is a suggestion that changes something that was read correctly.
+The evidence-coupled eval at dataset v2 first measured 87 of them in 2165 mutations (82 on the 25 original labels, 5 on the seven new ones), all from that kind of misread: the tax and its only tax line still agreed with each other, so the arithmetic blamed the total.
+The engine now takes the two for one candidate (`_tax_is_one_reading` in `app/reconcile.py`), so the misread is ambiguous between the tax and the total, as it is for a document without tax lines, and gets no suggestion.
+The same holds for a tax computed from tax lines when the document prints no tax of its own.
+The table shows the measured result: no wrong fixes.
+What that cost is a few fixes (1086 before, 1081 now), a higher mean of correct fields sent to review (0.12 before, 0.16 now), and a higher "Field flagged" (2052 before, 2139 now, every detected misread), because a misread that is ambiguous flags every field the failing check names, its own included.
 The misses are a total read as the subtotal on a document with tax, which looks like a tax-inclusive receipt and is the known blind spot.
 `python evals/run_checks.py --update-readme` regenerates the table in a second or two, with no API calls, database, or key.
 
@@ -506,15 +511,15 @@ The misses are a total read as the subtotal on a document with tax, which looks 
 
 | Misread | Example | Mutations | Detected | Field flagged | Fix suggested | Wrong fixes | Correct fields flagged (mean) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| One minor unit off | 46.25 -> 46.26 | 348 | 348 (100.0%) | 322 (92.5%) | 189 (54.3%) | 26 | 0.12 |
-| Two digits swapped | 46.25 -> 46.52 | 355 | 355 (100.0%) | 330 (93.0%) | 188 (53.0%) | 25 | 0.13 |
-| Leading digit misread | 46.25 -> 96.25 | 475 | 475 (100.0%) | 455 (95.8%) | 192 (40.4%) | 20 | 0.09 |
-| Decimal point dropped | 46.25 -> 4625 | 348 | 348 (100.0%) | 348 (100.0%) | 191 (54.9%) | 0 | 0.19 |
-| Extra leading digit | 46.25 -> 146.25 | 475 | 475 (100.0%) | 459 (96.6%) | 191 (40.2%) | 16 | 0.11 |
+| One minor unit off | 46.25 -> 46.26 | 348 | 348 (100.0%) | 348 (100.0%) | 165 (47.4%) | 0 | 0.34 |
+| Two digits swapped | 46.25 -> 46.52 | 355 | 355 (100.0%) | 355 (100.0%) | 165 (46.5%) | 0 | 0.32 |
+| Leading digit misread | 46.25 -> 96.25 | 475 | 475 (100.0%) | 475 (100.0%) | 195 (41.1%) | 0 | 0.12 |
+| Decimal point dropped | 46.25 -> 4625 | 348 | 348 (100.0%) | 348 (100.0%) | 219 (62.9%) | 0 | 0.02 |
+| Extra leading digit | 46.25 -> 146.25 | 475 | 475 (100.0%) | 475 (100.0%) | 202 (42.5%) | 0 | 0.09 |
 | Wrong row read | total read as the subtotal | 164 | 138 (84.1%) | 138 (84.1%) | 135 (82.3%) | 0 | 0.05 |
-| All |  | 2165 | 2139 (98.8%) | 2052 (94.8%) | 1086 (50.2%) | 87 | 0.12 |
+| All |  | 2165 | 2139 (98.8%) | 2139 (98.8%) | 1081 (49.9%) | 0 | 0.16 |
 
-*All 32 labels pass rules_v2 unmutated; each row then breaks one printed amount (subtotal, tax, total, and every line's quantity, unit price, and total) in one way and replays the document with full confidence, so only the arithmetic can notice; a number printed once is broken everywhere it was read (a tax that is read as the tax and as its only tax line is broken in both), and the document keeps its other amounts and tax lines as the label has them, so a broken amount is checked against those too. Detected means a check fails. Field flagged means the broken field is routed to review because of a failing check. Fix suggested means the engine proposes exactly the original value for that field; Wrong fixes counts any other suggestion (it happens when a misread that reaches two fields leaves the arithmetic agreeing on both, so the total is blamed). Quantities and unit prices are never suggested, so those misreads are flagged but not fixed. Correct fields flagged is the mean number of other fields a mutation sends to review. Undetected: 26 wrong row read on total.*
+*All 32 labels pass rules_v2 unmutated; each row then breaks one printed amount (subtotal, tax, total, and every line's quantity, unit price, and total) in one way and replays the document with full confidence, so only the arithmetic can notice; a number printed once is broken everywhere it was read (a tax that is read as the tax and as its only tax line is broken in both), and the document keeps its other amounts and tax lines as the label has them, so a broken amount is checked against those too. Detected means a check fails. Field flagged means the broken field is routed to review because of a failing check. Fix suggested means the engine proposes exactly the original value for that field; Wrong fixes counts any other suggestion, a change to something that was read correctly (a tax and its only tax line that are one reading are one candidate, so a misread that reaches both is not blamed on the total). Quantities and unit prices are never suggested, so those misreads are flagged but not fixed. Correct fields flagged is the mean number of other fields a mutation sends to review. Undetected: 26 wrong row read on total.*
 
 <!-- CHECKS_TABLE:END -->
 

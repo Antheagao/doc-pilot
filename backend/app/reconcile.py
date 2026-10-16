@@ -114,7 +114,11 @@ price, the rate (as a fraction) of the base.
 
 The suggestion is deliberately strict. Candidates are the unverified header
 amounts, line totals, and tax line amounts that sit in a failing equation, plus
-an assumed (null) tax or amount paid. Each is solved for in each failing
+an assumed (null) tax or amount paid. A tax or subtotal the document does not
+print is computed from the tax line amounts or the line totals and is not a
+candidate itself; the cells it is the sum of are, each moved by the difference
+the equation asks of the sum, so a misread line is as likely a culprit as the
+total. Each is solved for in each failing
 equation that contains it, which gives proposals (path, value): exact in the
 minor unit, and not negative for a header amount or tax line amount (a line
 total may be negative: a discount or a return). Every proposal is applied and
@@ -129,6 +133,23 @@ prices, rates, and bases are never suggested, and neither is a reviewed field.
 The re-runs use the ordinary rules unless the document already leans on an
 included reading, so a fix cannot succeed merely by making the document look
 tax-inclusive or discount-net.
+
+A tax printed once is held twice in a v2 extraction: as `tax` and as the amount
+of its only tax line. When the two are one reading of one printed number
+(`_tax_is_one_reading`: exactly one tax line, both unreviewed and equal, and the
+same cited page and a printed number in common between their quotes, or without
+usable evidence a line with no base), they are one candidate. A misread of that number lands in both and they
+still agree, so only `total_math` fails; proposed one at a time, the header fix
+breaks `tax_lines_sum` and the line fix breaks `total_math`, which would leave
+the correctly read total as the one survivor and change it. As a pair the fix is
+the tax or the total, two candidates, and nothing is suggested (what `rules_v1`
+does for the same misread). A proposal for the pair changes both and is named by
+the header field `tax`, because a reviewer corrects one field at a time and the
+review page fills in a header field, not a cell of the tax lines rows. Applying
+it corrects `tax` only: the stored tax lines are the model's answer and stay, so
+`total_math` passes, the pair is gone (the tax is now reviewed), and the next
+reconciliation fails `tax_lines_sum` and suggests the line's amount on the
+`tax_lines` field. The suggestion's detail says the line needs the same value.
 
 A failing quote check proposes the one number its quote prints (none when the
 quote prints several, or an ambiguous one such as `1,234` that the field's
@@ -247,6 +268,9 @@ _HEADER_MONEY_PATHS = (
 )
 _NEVER_NEGATIVE_PATHS = tuple(path for path in _HEADER_MONEY_PATHS if path != "amount_due")
 _ASSUMED_NULL_PATHS = ("tax", "amount_paid")
+# The header amounts that are the sum of other cells when the document does not
+# print them (the tax lines, the line totals).
+_SUMMED_PATHS = ("tax", "subtotal")
 # The v2 amounts that get a non_negative check when the document has them.
 _NON_NEGATIVE_EXTRAS = ("discount", "shipping", "tip", "amount_paid")
 
@@ -275,6 +299,11 @@ def tax_line_path(index: int, key: str) -> str:
     return f"tax_lines[{index}].{key}"
 
 
+# The amount of a document's only tax line, which can be the header tax read a
+# second time (`_tax_is_one_reading`).
+_ONLY_TAX_LINE_AMOUNT = tax_line_path(0, "amount")
+
+
 # ---- Input ----------------------------------------------------------------
 
 
@@ -283,15 +312,16 @@ class FieldInput:
     """One field as the engine receives it: the raw value (anything JSON can
     hold, parsed and validated inside `reconcile`), where it came from, and
     whether a person has reviewed it. `has_evidence` is whether the leaf carried
-    an `evidence` key (v2; null counts), and `quote` the verbatim printed text
-    in it (None when there is none); a leaf with no `evidence` key (v1) is
-    checked against nothing."""
+    an `evidence` key (v2; null counts), `quote` the verbatim printed text in it
+    (None when there is none), and `page` the page it cites (None when there is
+    none); a leaf with no `evidence` key (v1) is checked against nothing."""
 
     value: Any = None
     source: str = SOURCE_EXTRACTED
     verified: bool = False
     quote: str | None = None
     has_evidence: bool = False
+    page: int | None = None
 
 
 @dataclass(frozen=True)
@@ -312,7 +342,7 @@ class TaxLineInput:
     decimal (`"8.875"` for 8.875%); the label plays no part in the rules. The
     tax lines are one field in storage, so every row carries that field's source
     and verified flag. `quotes` is as on `LineInput`, for the rate, base, and
-    amount."""
+    amount, and `pages` holds the page each of those cells cites."""
 
     label: Any = None
     rate: Any = None
@@ -321,6 +351,7 @@ class TaxLineInput:
     source: str = SOURCE_EXTRACTED
     verified: bool = False
     quotes: Mapping[str, str | None] = dataclasses.field(default_factory=dict)
+    pages: Mapping[str, int] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -359,7 +390,9 @@ class ReconcileInput:
 
         def amount(name: str) -> FieldInput:
             has_evidence, quote = _leaf_evidence(tool.get(name))
-            return FieldInput(leaf(name), quote=quote, has_evidence=has_evidence)
+            return FieldInput(
+                leaf(name), quote=quote, has_evidence=has_evidence, page=_leaf_page(tool.get(name))
+            )
 
         rows = leaf("line_items")
         tax_rows = leaf("tax_lines")
@@ -404,15 +437,17 @@ class ReconcileInput:
                 field.reviewed_at is not None,
                 quote,
                 has_evidence,
+                _leaf_page(field.value),
             )
 
         currency = by_name.get("currency")
         lines = by_name.get("line_items")
         rows = field_value(lines) if lines is not None else None
-        line_quotes = _stored_cell_quotes(lines, _LINE_NUMBER_KEYS)
+        line_quotes = _stored_cells(lines, _LINE_NUMBER_KEYS, _cell_quotes)
         tax_lines = by_name.get("tax_lines")
         tax_rows = _stored_tax_line_rows(tax_lines)
-        tax_quotes = _stored_cell_quotes(tax_lines, _TAX_LINE_NUMBER_KEYS)
+        tax_quotes = _stored_cells(tax_lines, _TAX_LINE_NUMBER_KEYS, _cell_quotes)
+        tax_pages = _stored_cells(tax_lines, _TAX_LINE_NUMBER_KEYS, _cell_pages)
         tax_source = _stored_source(tax_lines) if tax_lines is not None else SOURCE_EXTRACTED
         tax_verified = tax_lines is not None and tax_lines.reviewed_at is not None
         return cls(
@@ -421,7 +456,7 @@ class ReconcileInput:
             tax=read("tax"),
             total=read("total"),
             line_items=(
-                tuple(_line_from_plain(row, _quotes_at(line_quotes, i)) for i, row in enumerate(rows))
+                tuple(_line_from_plain(row, _cells_at(line_quotes, i)) for i, row in enumerate(rows))
                 if isinstance(rows, list)
                 else None
             ),
@@ -436,7 +471,13 @@ class ReconcileInput:
             due_date=read("due_date"),
             tax_lines=(
                 tuple(
-                    _tax_line_from_plain(row, tax_source, tax_verified, _quotes_at(tax_quotes, i))
+                    _tax_line_from_plain(
+                        row,
+                        tax_source,
+                        tax_verified,
+                        _cells_at(tax_quotes, i),
+                        _cells_at(tax_pages, i),
+                    )
                     for i, row in enumerate(tax_rows)
                 )
                 if isinstance(tax_rows, list)
@@ -458,6 +499,19 @@ def _leaf_evidence(raw: Any) -> tuple[bool, str | None]:
     return True, quote if isinstance(quote, str) else None
 
 
+def _leaf_page(raw: Any) -> int | None:
+    """The page a raw leaf's evidence cites as a whole number (`"2"` and `2.0`
+    are page 2), None when it has no evidence object, no page, or one that is
+    not a page number."""
+    evidence = raw.get("evidence") if isinstance(raw, dict) else None
+    page = evidence.get("page") if isinstance(evidence, dict) else None
+    if isinstance(page, str):
+        page = int(page) if page.strip().isdecimal() else None
+    elif isinstance(page, float):
+        page = int(page) if page.is_integer() else None
+    return page if isinstance(page, int) and not isinstance(page, bool) else None
+
+
 def _cell_quotes(item: Any, keys: Sequence[str]) -> dict[str, str | None]:
     """The quote of each cell of a raw row whose leaf carries an evidence
     object."""
@@ -467,19 +521,30 @@ def _cell_quotes(item: Any, keys: Sequence[str]) -> dict[str, str | None]:
     return {key: quote for key, (has_evidence, quote) in found.items() if has_evidence}
 
 
-def _stored_cell_quotes(
-    field: "ExtractedField | None", keys: Sequence[str]
-) -> list[dict[str, str | None]] | None:
-    """`_cell_quotes` for each row of a stored array field, in row order. None
-    when there is no stored array to read them from: a corrected field's rows
-    are a person's, and have no quotes."""
+def _cell_pages(item: Any, keys: Sequence[str]) -> dict[str, int]:
+    """The page cited by each cell of a raw row whose leaf carries an evidence
+    object with a page."""
+    if not isinstance(item, dict):
+        return {}
+    found = {key: _leaf_page(item.get(key)) for key in keys}
+    return {key: page for key, page in found.items() if page is not None}
+
+
+def _stored_cells(
+    field: "ExtractedField | None",
+    keys: Sequence[str],
+    read: Callable[[Any, Sequence[str]], dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    """`read` (`_cell_quotes` or `_cell_pages`) for each row of a stored array
+    field, in row order. None when there is no stored array to read them from:
+    a corrected field's rows are a person's, and have no evidence."""
     if field is None or field.review_action == "corrected" or not isinstance(field.value, list):
         return None
-    return [_cell_quotes(item, keys) for item in field.value]
+    return [read(item, keys) for item in field.value]
 
 
-def _quotes_at(quotes: list[dict[str, str | None]] | None, index: int) -> dict[str, str | None]:
-    return quotes[index] if quotes is not None and index < len(quotes) else {}
+def _cells_at(cells: list[dict[str, Any]] | None, index: int) -> dict[str, Any]:
+    return cells[index] if cells is not None and index < len(cells) else {}
 
 
 def _line_from_leaves(item: Any) -> LineInput:
@@ -508,11 +573,16 @@ def _tax_line_from_leaves(item: Any) -> TaxLineInput:
         base=_coerce_leaf(item.get("base"))[0],
         amount=_coerce_leaf(item.get("amount"))[0],
         quotes=_cell_quotes(item, _TAX_LINE_NUMBER_KEYS),
+        pages=_cell_pages(item, _TAX_LINE_NUMBER_KEYS),
     )
 
 
 def _tax_line_from_plain(
-    row: Any, source: str, verified: bool, quotes: Mapping[str, str | None]
+    row: Any,
+    source: str,
+    verified: bool,
+    quotes: Mapping[str, str | None],
+    pages: Mapping[str, int],
 ) -> TaxLineInput:
     if not isinstance(row, dict):
         return TaxLineInput(source=source, verified=verified)
@@ -524,6 +594,7 @@ def _tax_line_from_plain(
         source,
         verified,
         quotes,
+        pages,
     )
 
 
@@ -1713,6 +1784,65 @@ def _is_candidate(operand: Operand) -> bool:
     )
 
 
+def _cited_numbers(
+    quote: str | None, page: int | None, places: int
+) -> tuple[int, frozenset[Decimal]] | None:
+    """The page and the set of numbers a leaf's quote prints, or None when it
+    cannot say where a number was printed: no page, or a quote that is not text
+    or prints no number."""
+    if not isinstance(quote, str) or page is None:
+        return None
+    numbers = frozenset(printed_amounts(quote, places))
+    return (page, numbers) if numbers else None
+
+
+def _tax_is_one_reading(inp: ReconcileInput, report: Report) -> bool:
+    """True when the header `tax` and the amount of the only tax line are one
+    reading of one printed number, so a change to either is a change to both.
+
+    A document that prints its tax once has it twice in a v2 extraction: as
+    `tax` and as the amount of its single tax line (a lone "Tax" line with no
+    rate or base). A misread of that one number lands in both, and they still
+    agree. Proposed one at a time, the header fix breaks `tax_lines_sum` and the
+    line fix breaks `total_math`, so the only proposal left would be the correct
+    total, which a reader cannot tell from the misread. They pair when there is
+    exactly one tax line, both are unreviewed model answers that agree, and:
+
+    - both cite evidence on the same page and the two quotes print a number in
+      common. The quotes are not compared as text: the line cell may quote
+      "$0.80" where the header quotes "Tax 8%: $0.80", and spacing, labels, and
+      punctuation vary. A page that differs, or quotes that share no printed
+      number (a tax line and, apart from it, a total tax that prints another
+      number), keep two readings, or
+    - without usable evidence on both, the line prints no base. A printed base
+      makes `tax_line_math` constrain the amount on its own; a rate alone only
+      holds it to within a minor unit of rate x the subtotal, so a misread that
+      small passes and leaves the pair looking like a misread total.
+
+    Pairing errs toward "one reading": a false pair costs at most a fix the
+    engine could have offered, a false non-pair puts the correctly read total on
+    the table as the only survivor. Two values that already disagree are not one
+    reading: the ordinary rules name the cell that is off. The tax line check is
+    read from the report, so a value that did not parse never pairs. A v1 record
+    has no tax lines.
+    """
+    if len(inp.tax_lines or ()) != 1:
+        return False
+    line = inp.tax_lines[0]
+    if any(part.verified or part.source != SOURCE_EXTRACTED for part in (inp.tax, line)):
+        return False
+    sums = next((check for check in report.checks if check.id == TAX_LINES_SUM), None)
+    if sums is None or sums.status != STATUS_PASS or sums.rhs.source != SOURCE_EXTRACTED:
+        return False
+    tax_cited = _cited_numbers(inp.tax.quote, inp.tax.page, report.minor_units)
+    line_cited = _cited_numbers(
+        line.quotes.get("amount"), line.pages.get("amount"), report.minor_units
+    )
+    if tax_cited is not None and line_cited is not None:
+        return tax_cited[0] == line_cited[0] and not tax_cited[1].isdisjoint(line_cited[1])
+    return line.base is None
+
+
 def _never_negative(path: str) -> bool:
     """A header amount or tax line amount is not suggested as a negative number
     (a line total may be: a discount or a return; so may an amount due, which is
@@ -1801,6 +1931,17 @@ def _with_value(inp: ReconcileInput, path: str, value: Decimal, places: int) -> 
     return dataclasses.replace(inp, line_items=tuple(lines))
 
 
+def _with_proposal(
+    inp: ReconcileInput, path: str, value: Decimal, places: int, *, paired: bool
+) -> ReconcileInput:
+    """The input with one proposal applied: a paired `tax` proposal sets the
+    only tax line's amount to the same value."""
+    changed = _with_value(inp, path, value, places)
+    if paired and path == "tax":
+        changed = _with_value(changed, _ONLY_TAX_LINE_AMOUNT, value, places)
+    return changed
+
+
 def _fixes_everything(before: Report, after: Report) -> bool:
     """Every check that failed now passes, and nothing fails."""
     passing = {check.id for check in after.checks if check.status == STATUS_PASS}
@@ -1814,10 +1955,15 @@ def _suggest(inp: ReconcileInput, report: Report) -> Suggestion | None:
     # The proposals only a quote made: each also has to land on an equation that
     # can judge it (see below).
     quote_only: set[tuple[str, Decimal]] = set()
+    paired = _tax_is_one_reading(inp, report)
 
     def propose(operand: Operand, value: Decimal | None, *, from_quote: bool = False) -> None:
         if value is None or not fits_minor_unit(value, report.minor_units):
             return
+        if paired and operand.path == _ONLY_TAX_LINE_AMOUNT:
+            # One reading, one candidate, named by the header field: a reviewer
+            # corrects one field at a time, and `tax` is the one they can.
+            operand = dataclasses.replace(operand, path="tax")
         if value == operand.value or (value < 0 and _never_negative(operand.path)):
             return
         key = (operand.path, value)
@@ -1827,6 +1973,9 @@ def _suggest(inp: ReconcileInput, report: Report) -> Suggestion | None:
             quote_only.discard(key)
         proposals.setdefault(key, operand)
 
+    operands_by_path = {
+        operand.path: operand for check in report.checks for operand in check.operands
+    }
     for check in report.failing_checks:
         if check.kind == KIND_QUOTE:
             operand = check.terms[0].operand
@@ -1846,6 +1995,14 @@ def _suggest(inp: ReconcileInput, report: Report) -> Suggestion | None:
                 # An equation loose because of rounding has no exact solution; the
                 # re-run below judges it instead.
                 propose(operand, _solve(check, operand.path))
+            elif operand.source == SOURCE_COMPUTED and operand.path in _SUMMED_PATHS:
+                # A tax or subtotal nobody printed is the sum of the cells it was
+                # computed from: any one of them could be what is off by the
+                # difference the equation asks of the sum.
+                solved = _solve(check, operand.path)
+                for part in map(operands_by_path.get, operand.inputs):
+                    if solved is not None and part is not None and _is_candidate(part):
+                        propose(part, part.value + (solved - operand.value))
     # A fix has to work under the ordinary rules, unless this document already
     # leans on a tax-included reading: otherwise changing the tax could "fix" a
     # document by making it look tax-inclusive. The same goes for the second
@@ -1858,7 +2015,7 @@ def _suggest(inp: ReconcileInput, report: Report) -> Suggestion | None:
     )
     def survives(key: tuple[str, Decimal]) -> bool:
         after = _run(
-            _with_value(inp, *key, report.minor_units),
+            _with_proposal(inp, *key, report.minor_units, paired=paired),
             allow_included=keep_included,
             allow_fallbacks=False,
         )
@@ -1879,16 +2036,13 @@ def _suggest(inp: ReconcileInput, report: Report) -> Suggestion | None:
     (path, value), operand = survivors[0]
     current = operand.value
     fixed = tuple(check.id for check in report.failing_checks)
-    return Suggestion(
-        path=path,
-        value=value,
-        current=current,
-        check_ids=fixed,
-        detail=(
-            f"Setting {path} to {to_api_string(value, report.minor_units)} fixes "
-            f"{', '.join(fixed)} and breaks no passing check."
-        ),
+    detail = (
+        f"Setting {path} to {to_api_string(value, report.minor_units)} fixes "
+        f"{', '.join(fixed)} and breaks no passing check."
     )
+    if paired and path == "tax":
+        detail += " The only tax line's amount is the same printed number and needs the same value."
+    return Suggestion(path=path, value=value, current=current, check_ids=fixed, detail=detail)
 
 
 # ---- JSON -----------------------------------------------------------------

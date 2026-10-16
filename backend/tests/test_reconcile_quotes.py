@@ -23,6 +23,7 @@ from app.reconcile import (
     STATUS_PASS,
     STATUS_SKIPPED,
     ReconcileInput,
+    _tax_is_one_reading,
     reconcile,
     report_to_json,
 )
@@ -642,6 +643,212 @@ def test_a_reviewed_field_is_never_suggested_even_by_its_quote() -> None:
     report = reconcile(ReconcileInput.from_fields(stored_record(subtotal=subtotal)))
 
     assert report.suggestion is None
+
+
+# ---- A tax printed once, held as the tax and as its only tax line -------------
+
+
+def lone_tax_line(*, tax, amount, total=108, rate=None, base=None):
+    """A 100.00 document with one tax line. `tax` and `amount` are (value,
+    quote) specs; `rate` and `base`, when given, are (value, quote) too."""
+    row = {"amount": amount}
+    if rate is not None:
+        row["rate"] = rate
+    if base is not None:
+        row["base"] = base
+    return v2_input(
+        subtotal=100,
+        tax=tax,
+        total=total,
+        extra={
+            "tax_lines": [
+                {"label": leaf("Tax", evidence=False)} | {k: leaf(*spec) for k, spec in row.items()}
+            ]
+        },
+    )
+
+
+def suggestion_of(tool):
+    return reconcile(ReconcileInput.from_tool_input(tool)).suggestion
+
+
+def test_a_tax_and_a_tax_line_citing_one_quote_are_one_reading() -> None:
+    # Misread as 9.00 in both places, quotes showing the misread: only total_math
+    # fails, and the total (108.00, right) is not blamed.
+    tool = lone_tax_line(tax=(9, "Tax: 9.00"), amount=(9, "Tax: 9.00"))
+
+    report = reconcile(ReconcileInput.from_tool_input(tool))
+
+    assert failing_ids(report) == ["total_math"]
+    assert report.suggestion is None
+
+
+def test_a_pair_misread_that_the_quote_exposes_is_fixed_through_the_header_field() -> None:
+    tool = lone_tax_line(tax=(9, "Tax: 8.00"), amount=(9, "Tax: 8.00"))
+
+    report = reconcile(ReconcileInput.from_tool_input(tool))
+
+    assert failing_ids(report) == ["quote:tax", "quote:tax_lines[0].amount", "total_math"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax", Decimal(8))
+    assert report.suggestion.current == Decimal(9)
+    assert report.suggestion.check_ids == tuple(failing_ids(report))
+
+
+@pytest.mark.parametrize(
+    ("tax_quote", "amount_quote"),
+    [
+        ("Total tax: 9.00", "Sales tax 9.00"),
+        ("Tax: $9.00", "$9.00"),
+        ("Tax:  $9.00", "Tax: $9.00"),
+        ("Tax $9.00", "Tax: $9.00"),
+        ("Tax: $9.00", "Tax $9.00 "),
+    ],
+    ids=["other-label", "bare-number", "doubled-space", "dropped-colon", "trailing-space"],
+)
+def test_quotes_printing_the_same_number_are_one_reading_whatever_their_words(
+    tax_quote, amount_quote
+) -> None:
+    # The quotes are not compared as text: a model writes the row cell and the
+    # header differently, and that must not put the correct total up for a fix.
+    tool = lone_tax_line(tax=(9, tax_quote), amount=(9, amount_quote))
+
+    assert suggestion_of(tool) is None
+
+
+def test_a_row_quote_with_the_amount_alone_pairs_with_a_header_quote_that_adds_the_rate() -> None:
+    tool = lone_tax_line(tax=(9, "Sales tax 8%: $9.00"), amount=(9, "$9.00"))
+
+    assert suggestion_of(tool) is None
+
+
+def test_quotes_sharing_no_printed_number_are_two_readings() -> None:
+    def paired(tax_quote, amount_quote):
+        inp = ReconcileInput.from_tool_input(
+            lone_tax_line(tax=(9, tax_quote), amount=(9, amount_quote))
+        )
+        return _tax_is_one_reading(inp, reconcile(inp))
+
+    assert paired("Total tax: 9.00 of 109.00", "Sales tax 9.00")
+    assert not paired("Total tax: 10.00", "Sales tax 9.00")
+
+
+def test_a_tax_line_citing_another_page_is_a_second_reading() -> None:
+    tool = lone_tax_line(tax=(9, "Tax: 9.00"), amount=(9, "Tax: 9.00"))
+    tool["tax_lines"]["value"][0]["amount"]["evidence"]["page"] = 2
+
+    suggestion = suggestion_of(tool)
+
+    assert suggestion is not None
+    assert (suggestion.path, suggestion.value) == ("total", Decimal(109))
+
+
+def test_a_page_given_as_text_is_the_same_page() -> None:
+    tool = lone_tax_line(tax=(9, "Tax: 9.00"), amount=(9, "Tax: 9.00"))
+    tool["tax_lines"]["value"][0]["amount"]["evidence"]["page"] = "1"
+
+    assert suggestion_of(tool) is None
+
+
+def test_a_quote_with_no_number_is_no_usable_evidence() -> None:
+    tool = lone_tax_line(tax=(9, "Tax: 9.00"), amount=(9, "Sales tax"))
+
+    # Falls back to the no-base rule, which pairs a lone line.
+    assert suggestion_of(tool) is None
+
+
+def test_a_tax_line_with_no_usable_quote_falls_back_to_the_rate_and_base_rule() -> None:
+    no_quote = lone_tax_line(tax=(9, "Tax: 9.00"), amount=(9, None))
+    blank_quote = lone_tax_line(tax=(9, "Tax: 9.00"), amount=(9, "  "))
+    with_base = lone_tax_line(
+        tax=(9, "Tax: 9.00"), amount=(9, None), rate=("9", None), base=(100, None)
+    )
+
+    assert suggestion_of(no_quote) is None
+    assert suggestion_of(blank_quote) is None
+    # A printed base constrains the line on its own (9% of 100.00 is 9.00, which
+    # agrees with the tax), so it is not the tax's twin and the total is blamed.
+    suggestion = suggestion_of(with_base)
+    assert suggestion is not None
+    assert (suggestion.path, suggestion.value) == ("total", Decimal(109))
+
+
+def test_equal_quotes_make_one_reading_even_with_a_printed_rate_and_base() -> None:
+    # 9% of 100.00 is 9.00; one printed line, read as 90.00 in the tax and its tax
+    # line. The pair is the only fix that satisfies tax_line_math and total_math.
+    tool = lone_tax_line(
+        tax=(90, "Tax 9% on 100.00: 9.00"),
+        amount=(90, "Tax 9% on 100.00: 9.00"),
+        total=109,
+        rate=("9", "9%"),
+        base=(100, "100.00"),
+    )
+
+    suggestion = suggestion_of(tool)
+
+    assert suggestion is not None
+    assert (suggestion.path, suggestion.value) == ("tax", Decimal(9))
+
+
+def test_a_stored_pair_reads_its_pages_and_quotes_from_the_stored_leaves() -> None:
+    def record(*, amount_page, tax_quote="Tax: 9.00"):
+        amount = leaf(9, "Tax: 9.00", evidence=True)
+        amount["evidence"]["page"] = amount_page
+        rows = [
+            {
+                "label": leaf("Tax", evidence=False),
+                "rate": leaf(None, evidence=False),
+                "base": leaf(None, evidence=False),
+                "amount": amount,
+            }
+        ]
+        return reconcile(
+            ReconcileInput.from_fields(
+                [
+                    stored("currency", "USD", evidence=False),
+                    stored("line_items", one_line(100)),
+                    stored("subtotal", 100, quote="Subtotal 100.00"),
+                    stored("tax", 9, quote=tax_quote),
+                    stored("total", 108, quote="Total 108.00"),
+                    stored("tax_lines", rows),
+                ]
+            )
+        )
+
+    same_page = record(amount_page=1)
+    other_page = record(amount_page=2)
+
+    assert same_page.suggestion is None
+    assert other_page.suggestion is not None
+    assert other_page.suggestion.path == "total"
+
+
+def test_a_corrected_tax_is_not_paired_and_the_tax_line_is_suggested_next() -> None:
+    rows = [
+        {
+            "label": leaf("Tax", evidence=False),
+            "rate": leaf(None, evidence=False),
+            "base": leaf(None, evidence=False),
+            "amount": leaf(9, "Tax: 8.00"),
+        }
+    ]
+
+    report = reconcile(
+        ReconcileInput.from_fields(
+            [
+                stored("currency", "USD", evidence=False),
+                stored("line_items", one_line(100)),
+                stored("subtotal", 100, quote="Subtotal 100.00"),
+                stored("tax", 9, quote="Tax: 8.00", reviewed=True, action="corrected", corrected=8),
+                stored("total", 108, quote="Total 108.00"),
+                stored("tax_lines", rows),
+            ]
+        )
+    )
+
+    assert failing_ids(report) == ["quote:tax_lines[0].amount", "tax_lines_sum"]
+    assert report.suggestion is not None
+    assert (report.suggestion.path, report.suggestion.value) == ("tax_lines[0].amount", Decimal(8))
 
 
 # ---- The committed labels, quoted the way a document prints them -------------

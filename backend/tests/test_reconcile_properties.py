@@ -517,3 +517,61 @@ def test_a_v1_shaped_record_never_emits_a_v2_check_or_assumption(inp, data) -> N
     }
     assert all("tax line" not in a and "payment" not in a and "discount" not in a for a in report.assumptions)
     assert report.rules_version == "rules_v2"
+
+
+# ---- A tax printed once, held as the tax and as its only tax line -------------
+
+
+@st.composite
+def mirrored_tax_inputs(draw) -> ReconcileInput:
+    """A consistent document whose printed tax is also its only tax line (no
+    rate, no base), as a model holds a tax that is printed once, with a discount,
+    shipping, and a tip beside it. Half the time both cite the same page and
+    quote, which print the true tax."""
+    inp = draw(consistent_inputs().filter(lambda i: i.tax.value is not None))
+    unit = unit_of(inp.currency)
+    tax, subtotal = inp.tax.value, inp.subtotal.value
+    discount = draw(st.one_of(st.none(), st.integers(1, 25).map(lambda n: (subtotal * n / 100).quantize(unit, rounding=ROUND_DOWN))))
+    shipping = draw(st.one_of(st.none(), st.integers(0, 400).map(lambda n: n * unit)))
+    tip = draw(st.one_of(st.none(), st.integers(0, 400).map(lambda n: n * unit)))
+    total = subtotal - (discount or 0) + (shipping or 0) + tax + (tip or 0)
+    cited = draw(st.booleans())
+    quote = f"Tax: {tax}"
+    return dataclasses.replace(
+        inp,
+        tax=FieldInput(tax, quote=quote if cited else None, has_evidence=cited, page=1 if cited else None),
+        total=FieldInput(total),
+        discount=FieldInput(discount),
+        shipping=FieldInput(shipping),
+        tip=FieldInput(tip),
+        tax_lines=(
+            TaxLineInput(
+                "Tax",
+                None,
+                None,
+                tax,
+                quotes={"amount": quote} if cited else {},
+                pages={"amount": 1} if cited else {},
+            ),
+        ),
+    )
+
+
+@given(mirrored_tax_inputs(), st.data())
+def test_misreading_a_tax_held_twice_never_changes_a_correctly_read_field(inp, data) -> None:
+    unit = unit_of(inp.currency)
+    original = inp.tax.value
+    shift = data.draw(st.integers(1, 60)) * unit * data.draw(st.sampled_from([1, -1]))
+    assume(original + shift >= 0)
+    line = inp.tax_lines[0]
+    # The quote keeps printing the true tax; the value, in both places, is read wrong.
+    broken = dataclasses.replace(
+        inp,
+        tax=dataclasses.replace(inp.tax, value=original + shift),
+        tax_lines=(dataclasses.replace(line, amount=original + shift),),
+    )
+
+    suggestion = reconcile(broken).suggestion
+
+    event("suggested" if suggestion is not None else "none")
+    assert suggestion is None or (suggestion.path, suggestion.value) == ("tax", original)

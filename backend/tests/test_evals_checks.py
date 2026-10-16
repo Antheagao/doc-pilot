@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from app import reconcile as reconcile_module
 from app.evals import checks
 from app.evals.checks import (
     CHECKS_END_MARKER,
@@ -35,7 +36,8 @@ from app.evals.checks import (
     run_mutation_eval,
 )
 from app.evals.dataset import EVALS_DIR, load_cases
-from app.extraction_fields import SCHEMA_V1
+from app.extraction_fields import SCHEMA_V1, SCHEMA_V2
+from app.money import currency_precision, to_api_string
 from app.reconcile import RULES_VERSION
 from app.review_routing import Routing
 
@@ -308,6 +310,17 @@ class TestReplay:
 # --- reconciliation eval -------------------------------------------------------
 
 
+def _put_evidence(tool_input, path, evidence):
+    """Set the evidence of the leaf at a path (a header field or one row cell)."""
+    if "[" not in path:
+        if isinstance(tool_input.get(path), dict):
+            tool_input[path]["evidence"] = evidence
+        return
+    head, key = path.rsplit(".", 1)
+    name, index = head.removesuffix("]").split("[")
+    tool_input[name]["value"][int(index)][key]["evidence"] = evidence
+
+
 @pytest.fixture(scope="module")
 def evaluated():
     return run_mutation_eval(load_cases())
@@ -332,29 +345,88 @@ class TestMutationEval:
 
         assert tuple(got) == MUTATION_KINDS
         assert got == {
-            "one_minor_unit": (348, 348, 322, 189, 26, 43),
-            "transposed_digits": (355, 355, 330, 188, 25, 46),
-            "misread_digit": (475, 475, 455, 192, 20, 43),
-            "dropped_point": (348, 348, 348, 191, 0, 66),
-            "extra_leading_digit": (475, 475, 459, 191, 16, 50),
+            "one_minor_unit": (348, 348, 348, 165, 0, 118),
+            "transposed_digits": (355, 355, 355, 165, 0, 115),
+            "misread_digit": (475, 475, 475, 195, 0, 55),
+            "dropped_point": (348, 348, 348, 219, 0, 7),
+            "extra_leading_digit": (475, 475, 475, 202, 0, 42),
             "wrong_row": (164, 138, 138, 135, 0, 9),
         }
         overall = evaluated.overall
-        assert (overall.mutations, overall.detected, overall.fixed) == (2165, 2139, 1086)
-        assert overall.wrong_fixes == 87
+        assert (overall.mutations, overall.detected, overall.flagged, overall.fixed) == (
+            2165,
+            2139,
+            2139,
+            1081,
+        )
+        assert overall.wrong_fixes == 0
         assert evaluated.n_labels == 32
         assert evaluated.rules_version == RULES_VERSION
 
-    def test_wrong_fixes_come_only_from_a_misread_that_reaches_two_fields(self, evaluated):
+    def test_a_misread_that_reaches_two_fields_is_never_a_wrong_fix(self, evaluated, monkeypatch):
         # Broken in one cell only, as if the two readings of a once-printed tax
         # were independent, the engine never suggests a wrong value.
         uncoupled = [replace(case, evidence={}) for case in load_cases()]
 
         assert all(t.wrong_fixes == 0 for t in run_mutation_eval(uncoupled).by_kind)
-        # Broken in both (the tax and its only tax line), the two still agree, the
-        # total is the one number that disagrees, and the engine blames it.
-        assert evaluated.overall.wrong_fixes == 87
-        assert evaluated.by_kind[MUTATION_KINDS.index("dropped_point")].wrong_fixes == 0
+        # Broken in both (the tax and its only tax line), the two still agree. Taken
+        # one at a time, the total is the one number that disagrees and was blamed
+        # (87 wrong fixes); as one candidate they are as ambiguous as the tax and
+        # the total of a document with no tax lines.
+        assert all(t.wrong_fixes == 0 for t in evaluated.by_kind)
+        monkeypatch.setattr(reconcile_module, "_tax_is_one_reading", lambda inp, report: False)
+        assert run_mutation_eval(load_cases()).overall.wrong_fixes == 87
+
+    @pytest.mark.parametrize(
+        "perturb",
+        [
+            None,
+            lambda quote: quote.split(":", 1)[-1].strip(),
+            lambda quote: quote.replace(" ", "  ", 1),
+            lambda quote: quote.replace(":", "", 1),
+            lambda quote: quote + " ",
+        ],
+        ids=["as-gold", "label-stripped", "doubled-space", "colon-dropped", "trailing-space"],
+    )
+    def test_a_misread_with_quotes_in_front_of_the_engine_is_never_a_wrong_fix(self, perturb):
+        # The eval above replays no quotes, so it cannot see how the engine
+        # decides that a tax and its only tax line are one reading when both cite
+        # evidence. Here every broken document carries the gold evidence, the quote
+        # of each broken cell is rewritten the way its value was (a same-digit
+        # misread), and the tax line's quote is then written as another reader
+        # might: the pairing must not depend on the words. The gold quotes are
+        # replayed against every mutation; the rewordings against the tax's, the
+        # only cell with a twin.
+        wrong = fixed = 0
+        for case in load_cases():
+            minor_units = currency_precision(case.fields.get("currency")).minor_units
+            for mutation in _mutations(case.doc_id, case.fields):
+                if perturb is not None and mutation.path != "tax":
+                    continue
+                tool = _broken_tool_input(case.fields, mutation, case.evidence)
+                broken = {mutation.path, *_coupled_paths(case.fields, case.evidence, mutation)}
+                before = to_api_string(mutation.original, minor_units)
+                after = to_api_string(mutation.mutated, minor_units)
+                for path, cited in case.evidence.items():
+                    quote = cited["quote"]
+                    if path in broken:
+                        if before not in quote:
+                            continue  # printed in another style: no quote rather than a false one
+                        quote = quote.replace(before, after)
+                    if path == "tax_lines[0].amount" and perturb is not None:
+                        quote = perturb(quote)
+                    _put_evidence(tool, path, {"page": cited["page"], "quote": quote})
+                report = replay(tool, 1.0, SCHEMA_V2)[0]
+                suggestion = report.suggestion
+                if suggestion is None:
+                    continue
+                if (suggestion.path, suggestion.value) == (mutation.path, mutation.original):
+                    fixed += 1
+                else:
+                    wrong += 1
+
+        assert wrong == 0
+        assert fixed > 0
 
     def test_a_number_printed_once_is_broken_everywhere_it_was_read(self):
         case = next(case for case in load_cases() if case.doc_id.startswith("001"))
