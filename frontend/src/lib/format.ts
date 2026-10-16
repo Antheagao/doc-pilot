@@ -3,6 +3,34 @@
 /** What a missing value renders as. */
 export const EMPTY_VALUE = "-";
 
+/** The extracted fields that hold an amount of money in the document currency
+ * (the money fields of the backend's extraction schema, SCHEMA_V2 in
+ * app/extraction_fields.py): the panel groups their digits and the review form
+ * takes them as plain decimals. */
+export const MONEY_FIELDS: ReadonlySet<string> = new Set([
+  "subtotal",
+  "discount",
+  "shipping",
+  "tax",
+  "tip",
+  "total",
+  "amount_paid",
+  "amount_due",
+]);
+
+// How a person says a field; anything not listed is its name with spaces.
+const FIELD_LABELS: Readonly<Record<string, string>> = {
+  po_number: "PO number",
+  vendor_tax_id: "vendor tax ID",
+  payment_terms: "terms",
+  payment_card_last4: "card last 4",
+};
+
+/** A field's name as a person reads it: "document date", "PO number". */
+export function fieldLabel(fieldName: string): string {
+  return FIELD_LABELS[fieldName] ?? fieldName.replace(/_/g, " ");
+}
+
 const integerFormatter = new Intl.NumberFormat("en-US");
 
 // What the API serves for a document amount or quantity: an optional minus
@@ -30,6 +58,28 @@ export function formatAmount(value: unknown): string {
   return `${sign}${integerFormatter.format(BigInt(integer))}${fraction}`;
 }
 
+/** A tax rate: the API serves the printed percent as a plain decimal string
+ * ("8.875"), shown with its sign ("8.875%"). A missing value renders as
+ * EMPTY_VALUE and a non-numeric stored value as stored, like formatAmount. */
+export function formatRate(value: unknown): string {
+  if (value === null || value === undefined || value === "") return EMPTY_VALUE;
+  if (typeof value === "number") return `${value}%`;
+  if (typeof value !== "string") return EMPTY_VALUE;
+  return DECIMAL_STRING.test(value) ? `${value}%` : value;
+}
+
+/** Where a value was read, for people: "p. 2", or "page unknown" when the
+ * model cited text on a page the document does not have (the API serves that
+ * page as null). */
+export function formatPage(page: number | null | undefined): string {
+  return typeof page === "number" ? `p. ${page}` : "page unknown";
+}
+
+/** A quote with its column padding collapsed to single spaces. */
+export function formatQuote(quote: string): string {
+  return `“${quote.trim().replace(/\s+/g, " ")}”`;
+}
+
 /** A duration given in milliseconds: "850 ms" below a second, "5.2 s" from
  * a second up. */
 export function formatDuration(ms: number): string {
@@ -49,4 +99,15 @@ const TIMESTAMP_FORMAT: Intl.DateTimeFormatOptions = {
 /** A timestamp in the viewer's locale and time zone, to the minute. */
 export function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString(undefined, TIMESTAMP_FORMAT);
+}
+
+/** Where a value was read, as one line: "p. 1 · “Total: $508.20”". */
+export function formatEvidence(evidence: { page: number | null; quote: string }): string {
+  return `${formatPage(evidence.page)} · ${formatQuote(evidence.quote)}`;
+}
+
+/** A phrase that opens a sentence, with its first letter in capitals:
+ * "amount due" becomes "Amount due". */
+export function sentenceCase(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

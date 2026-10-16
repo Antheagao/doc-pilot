@@ -91,6 +91,12 @@ _PRINTED_NUMBER_RE = re.compile(
     r"(?<!\d)(?<!\d[.,])(?:(\d+(?:[.,]\d+)*)|[.,](\d+))(\s*%)?", re.ASCII
 )
 _SEPARATOR_RE = re.compile(r"[.,]")
+# A date printed with slashes or dashes (06/30/2026, 30-06-26, 2026-06-30,
+# 2026/6/30): its parts are not amounts. Dotted dates are already not numbers (`_token_readings`).
+_DATE_RE = re.compile(
+    r"(?<![\d/.-])(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})(?!\d)(?![/.-]\d)",
+    re.ASCII,
+)
 # A number grouped by spaces (a space, no-break, narrow no-break, or thin space)
 # or by an apostrophe (Swiss), with an optional decimal part: "1 234,56",
 # "1'234.56".
@@ -370,8 +376,11 @@ def printed_amounts(text: str, places: int | None = None) -> tuple[Decimal, ...]
     allows, rules the decimal one out (see `_token_readings`); None keeps both.
     A space or an apostrophe between groups of three digits is read as grouping
     (`1 234,56`, `CHF 1'234.56`) in addition to the pieces on either side of it,
-    since a space can also just separate two numbers. No number gives `()`.
+    since a space can also just separate two numbers. A date written with
+    slashes or dashes (`06/30/2026`, `2026-06-30`) shows no amount. No number
+    gives `()`.
     """
+    text = _DATE_RE.sub(" ", text)
     found: list[tuple[int, list[Decimal]]] = []
     for match in _PRINTED_NUMBER_RE.finditer(text):
         if match.group(2) is not None:

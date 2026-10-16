@@ -38,8 +38,9 @@ class ExtractedFieldOut(BaseModel):
     value: Any
     confidence: float
     needs_review: bool
-    # Why the field is flagged: "confidence" or "reconciliation:<check id>";
-    # null exactly when needs_review is false. A reviewed field keeps both.
+    # Why the field is flagged: "confidence", "reconciliation:<check id>", or
+    # "quote:<path>"; null exactly when needs_review is false. A reviewed field
+    # keeps both.
     review_reason: str | None = None
     reviewed_at: datetime | None = None
     review_action: Literal["approved", "corrected"] | None = None

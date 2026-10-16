@@ -71,6 +71,17 @@ def test_the_mismatch_detail_shows_both_numbers_in_plain_words() -> None:
     )
 
 
+def test_a_date_in_the_quote_is_not_a_number_the_detail_lists() -> None:
+    verdict = quote_agreement(
+        Decimal(300), "Deposit received 06/30/2026: -$250.00", minor_units=2
+    )
+
+    assert verdict.status == STATUS_FAIL_MISMATCH
+    assert verdict.numbers == (Decimal("250.00"),)
+    assert verdict.detail == "The value is 300.00, but its quote shows 250.00."
+    assert quote_agreement(Decimal(250), "Deposit received 06/30/2026: -$250.00", minor_units=2).status == STATUS_PASS
+
+
 def test_amounts_in_the_detail_follow_the_currency_places_and_quantities_stay_plain() -> None:
     assert quote_agreement(Decimal("46.2"), "46.52", minor_units=2).detail == (
         "The value is 46.20, but its quote shows 46.52."

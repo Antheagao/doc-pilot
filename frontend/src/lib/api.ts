@@ -22,10 +22,21 @@ export interface DocumentCreateResponse {
   created_at: string;
 }
 
+// Where a value was read: the page (1-based; null when the model cited a page
+// the document does not have, the quote still stands) and the verbatim text.
+export interface Evidence {
+  page: number | null;
+  quote: string;
+}
+
 // A leaf value as stored by the backend: { value: <scalar|null>, confidence }.
+// A schema v2 leaf also carries `evidence`: the page and quote the value was
+// read from, or null when the model cited none. A v1 leaf has no `evidence`
+// key at all, which is told apart from a null one.
 export interface FieldLeaf<T = unknown> {
   value: T;
   confidence: number;
+  evidence?: Evidence | null;
 }
 
 // Every number read from a document is a canonical decimal string in the API
@@ -44,19 +55,32 @@ export interface LineItem {
   total: FieldLeaf<DecimalString | null> | null;
 }
 
-// ExtractedFieldOut.value shape depends on field_name: line_items stores the
-// array directly (its own confidence lives in the `confidence` column below),
-// every other field stores the {value, confidence} leaf as-is. For subtotal,
-// tax, and total the leaf's value is DecimalString | null.
-export type ExtractedFieldValue = FieldLeaf | LineItem[] | null;
+// One row of the tax_lines field (schema v2): every printed tax line, with the
+// rate as the printed percent ("8.875" for 8.875%) and the base it applies to.
+export interface TaxLine {
+  label: FieldLeaf<string | null> | null;
+  rate: FieldLeaf<DecimalString | null> | null;
+  base: FieldLeaf<DecimalString | null> | null;
+  amount: FieldLeaf<DecimalString | null> | null;
+}
+
+// ExtractedFieldOut.value shape depends on field_name: line_items and
+// tax_lines store the array directly (their own confidence lives in the
+// `confidence` column below), every other field stores the {value, confidence}
+// leaf as-is. For the money fields (subtotal, tax, total, and the v2 discount,
+// shipping, tip, amount_paid, amount_due) the leaf's value is
+// DecimalString | null.
+export type ExtractedFieldValue = FieldLeaf | LineItem[] | TaxLine[] | null;
 
 // Set once a human has resolved the field from the review queue.
 export type ReviewAction = "approved" | "corrected";
 
-// Why a field is flagged: the model's own doubt, or the failing arithmetic
-// check that names it ("reconciliation:lines_sum"). Null exactly when
-// needs_review is false; a reviewed field keeps the reason it had.
-export type ReviewReason = "confidence" | `reconciliation:${string}`;
+// Why a field is flagged: the model's own doubt, the failing arithmetic
+// check that names it ("reconciliation:lines_sum"), or the number in its
+// evidence quote not being its value ("quote:amount_paid", the path of the
+// value). Null exactly when needs_review is false; a reviewed field keeps the
+// reason it had.
+export type ReviewReason = "confidence" | `reconciliation:${string}` | `quote:${string}`;
 
 export interface ExtractedField {
   id: string;
@@ -68,7 +92,8 @@ export interface ExtractedField {
   reviewed_at: string | null;
   review_action: ReviewAction | null;
   // The human-supplied *semantic* value (scalar for scalar fields, the
-  // plain-value line-item array for line_items; amounts are DecimalString).
+  // plain-value row array for line_items and tax_lines; amounts are
+  // DecimalString).
   // Only set when
   // review_action === "corrected". The original `value` is never
   // overwritten by a correction.
@@ -82,6 +107,7 @@ export type CheckStatus = "pass" | "fail" | "skipped";
 
 export interface ReconciliationOperand {
   path: string;
+  // An amount, or an ISO date (YYYY-MM-DD) for document_date and due_date.
   value: DecimalString | null;
   source: "extracted" | "approved" | "corrected" | "computed" | "assumed" | "included";
   verified: boolean;
@@ -89,7 +115,7 @@ export interface ReconciliationOperand {
 
 export interface ReconciliationCheck {
   id: string;
-  kind: "equation" | "bound" | "presence" | "format";
+  kind: "equation" | "bound" | "presence" | "format" | "quote";
   formula: string;
   terms: { coef: string | null; operand: ReconciliationOperand }[];
   rhs: ReconciliationOperand | null;
@@ -103,8 +129,8 @@ export interface ReconciliationCheck {
   all_operands_verified: boolean;
 }
 
-// The one change that fixes every failing check: set `path` (a field name or
-// `line_items[i].total`) to `value`.
+// The one change that fixes every failing check: set `path` (a field name,
+// `line_items[i].total`, or `tax_lines[i].amount`) to `value`.
 export interface ReconciliationSuggestion {
   path: string;
   value: DecimalString;

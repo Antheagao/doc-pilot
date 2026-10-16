@@ -3,16 +3,21 @@
 import Link from "next/link";
 import type {
   CheckStatus,
+  Evidence,
   Reconciliation,
   ReconciliationCheck,
   ReconciliationOperand,
 } from "@/lib/api";
-import { formatAmount } from "@/lib/format";
+import { formatAmount, formatPage, formatQuote } from "@/lib/format";
 import {
   amountText,
   equationView,
   humanize,
+  includedNote,
+  isComputedBase,
   pathLabel,
+  quotePath,
+  suggestionWhy,
   type EquationView,
 } from "@/lib/reconciliation";
 
@@ -37,7 +42,21 @@ function quietName(id: string): string {
   if (id.startsWith("non_negative:")) return "no negative amounts";
   if (id === "tax_rate") return "tax rate";
   if (id === "lines_present") return "line items present";
+  if (id === "due_date_order") return "due date not before the document date";
+  if (id.startsWith("quote:")) return "values match their quotes";
   return id.replace(/[_:]/g, " ");
+}
+
+// The quote checks have their own group; the arithmetic is everything else.
+function isQuote(check: ReconciliationCheck): boolean {
+  return check.kind === "quote";
+}
+
+// The report's own rule for a set of checks: any failure fails it, else any
+// pass passes it, else nothing was judged.
+function statusOf(checks: ReconciliationCheck[]): CheckStatus {
+  if (checks.some((c) => c.status === "fail")) return "fail";
+  return checks.some((c) => c.status === "pass") ? "pass" : "skipped";
 }
 
 function StatusMark({ status }: { status: CheckStatus }) {
@@ -81,6 +100,19 @@ function Operand({
       </span>
     );
   }
+  // A base worked out for a tax line that printed none has no cell in the
+  // tax lines table: said, not selectable.
+  if (isComputedBase(operand)) {
+    return (
+      <>
+        <span className="operand static">
+          {text}
+          <span className="visually-hidden"> {named}</span>
+        </span>
+        <SourceTag source={operand.source} />
+      </>
+    );
+  }
   const pressed = picked === operand.path;
   const tagged = operand.source === "computed" || operand.source === "assumed";
   return (
@@ -109,7 +141,11 @@ function Equation({ view, ...pick }: PickProps & { view: EquationView }) {
         view.terms.map((term, i) => (
           <span key={`${term.operand.path}-${i}`} className="recon-term">
             {(i > 0 || term.sign === "-") && <span className="recon-sign">{term.sign}</span>}
-            {term.coef !== null && <span className="recon-sign">{term.coef} ×</span>}
+            {term.coef !== null && (
+              <span className="recon-sign">
+                {term.coef} {term.rate ? "of" : "×"}
+              </span>
+            )}
             <Operand operand={term.operand} {...pick} />
           </span>
         ))
@@ -117,7 +153,11 @@ function Equation({ view, ...pick }: PickProps & { view: EquationView }) {
       {view.included.map((operand) => (
         <span key={operand.path} className="recon-term">
           <span className="recon-sign">(</span>
-          <Operand operand={operand} label={`${pathLabel(operand.path)} included`} {...pick} />
+          <Operand
+            operand={operand}
+            label={`${pathLabel(operand.path)} ${includedNote(operand)}`}
+            {...pick}
+          />
           <span className="recon-sign">)</span>
         </span>
       ))}
@@ -221,6 +261,81 @@ function SkippedChecks({ checks }: { checks: ReconciliationCheck[] }) {
   );
 }
 
+function QuoteCheckRow({
+  check,
+  evidence,
+  ...pick
+}: PickProps & { check: ReconciliationCheck; evidence: Evidence | null | undefined }) {
+  const path = quotePath(check);
+  const operand = check.terms[0]?.operand;
+  return (
+    <li className="recon-check fail">
+      <div className="recon-check-head">
+        <StatusMark status="fail" />
+        <span className="recon-formula">{humanize(check.formula)}</span>
+      </div>
+      <p className="recon-equation">
+        {operand && <Operand operand={operand} label={pathLabel(path)} {...pick} />}
+        <span className="recon-detail">{humanize(check.detail ?? check.formula)}</span>
+      </p>
+      {evidence && (
+        <p className="recon-quote">
+          <span className="recon-quote-page">{formatPage(evidence.page)}</span>{" "}
+          {formatQuote(evidence.quote)}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** Whether each value agrees with the number printed in the quote it was read
+ * from: the failures with the value, the printed number and the quote, the
+ * passes counted. */
+function EvidenceGroup({
+  checks,
+  evidenceOf,
+  ...pick
+}: PickProps & {
+  checks: ReconciliationCheck[];
+  evidenceOf: (path: string) => Evidence | null | undefined;
+}) {
+  if (checks.length === 0) return null;
+  const failing = checks.filter((c) => c.status === "fail");
+  const passing = checks.filter((c) => c.status === "pass").length;
+  const skipped = checks.filter((c) => c.status === "skipped").length;
+  const judged = passing + failing.length;
+  return (
+    <div className="recon-evidence" role="group" aria-labelledby="recon-evidence-heading">
+      <h3 className="recon-heading" id="recon-evidence-heading">
+        Evidence <StatusMark status={statusOf(checks)} />
+      </h3>
+      <p className="recon-summary">
+        {judged === 0
+          ? "No quoted value could be compared with its quote."
+          : failing.length === 0
+            ? passing === 1
+              ? "The quoted value matches its quote."
+              : `All ${passing} quoted values match their quotes.`
+            : `${passing} of ${judged} quoted values match their quotes.`}
+        {skipped > 0 &&
+          ` ${skipped} not compared (no quote, or a zero said in words).`}
+      </p>
+      {failing.length > 0 && (
+        <ul className="recon-checks">
+          {failing.map((check) => (
+            <QuoteCheckRow
+              key={check.id}
+              check={check}
+              evidence={evidenceOf(quotePath(check))}
+              {...pick}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Whether the document's amounts add up, from the stored report. It sits
  * under the line items; selecting an operand highlights that amount above.
  * The suggestion is display-only here: it is applied from the review queue. */
@@ -228,7 +343,13 @@ export default function ReconciliationPanel({
   reconciliation,
   picked,
   onPick,
-}: PickProps & { reconciliation: Reconciliation | null }) {
+  evidenceOf,
+}: PickProps & {
+  reconciliation: Reconciliation | null;
+  /** The page and quote a value at a report path was read from, for the
+   * evidence group (undefined or null when it cites none). */
+  evidenceOf: (path: string) => Evidence | null | undefined;
+}) {
   if (reconciliation === null) {
     return (
       <section className="recon recon-muted" aria-label="Arithmetic check">
@@ -237,7 +358,9 @@ export default function ReconciliationPanel({
     );
   }
   const pick = { picked, onPick };
-  const { checks, suggestion, derived, assumptions } = reconciliation;
+  const { suggestion, derived, assumptions } = reconciliation;
+  const quoteChecks = reconciliation.checks.filter(isQuote);
+  const checks = reconciliation.checks.filter((c) => !isQuote(c));
   // Skipped line checks (no quantity or unit price printed) are listed with
   // the other skipped checks, not counted as lines that fail to add up.
   const lineChecks = checks.filter((c) => LINE_CHECK.test(c.id) && c.status !== "skipped");
@@ -260,7 +383,7 @@ export default function ReconciliationPanel({
   return (
     <section className="recon" aria-labelledby="recon-heading">
       <h2 className="recon-heading" id="recon-heading">
-        Arithmetic check <StatusMark status={reconciliation.status} />
+        Arithmetic check <StatusMark status={statusOf(checks)} />
       </h2>
 
       {lineChecks.length > 0 && (
@@ -285,6 +408,8 @@ export default function ReconciliationPanel({
       )}
 
       <SkippedChecks checks={skipped} />
+
+      <EvidenceGroup checks={quoteChecks} evidenceOf={evidenceOf} {...pick} />
 
       {derived.length > 0 && (
         <div className="recon-muted">
@@ -317,7 +442,7 @@ export default function ReconciliationPanel({
             <strong>
               Suggested: {pathLabel(suggestion.path)} {formatAmount(suggestion.value)}
             </strong>{" "}
-            - one change that makes every check pass
+            - {suggestionWhy(suggestion)}
             {suggestion.current !== null && ` (now ${formatAmount(suggestion.current)})`}.
           </p>
           <p className="recon-muted">

@@ -1946,3 +1946,213 @@ button.operand:hover {
 .review-prefill-note:not(:empty) {
   margin-top: 0.4rem;
 }
+
+/* ---- Schema v2: field groups, tax lines, evidence ---- */
+
+/* A group of rows sets its own spacing, so the list inside it adds none. */
+.field-group,
+.field-block {
+  margin-bottom: 1.25rem;
+}
+
+.field-group .field-list {
+  margin-bottom: 0;
+}
+
+.field-group-title {
+  margin-bottom: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* The tax lines table sits among the amounts rows, under its own header. */
+.field-array {
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.field-array:last-child {
+  border-bottom: none;
+}
+
+/* Fields the document does not carry, folded into one line. */
+.field-absent {
+  margin-bottom: 1.25rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.evidence-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.75rem;
+}
+
+.evidence-toggle {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.evidence-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--confidence-ok-bg);
+  color: var(--confidence-ok-fg);
+}
+
+/* Where a value was read: the page and the quote, small and muted. */
+.field-evidence {
+  display: block;
+  max-width: 30rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.field-evidence.none {
+  font-style: italic;
+}
+
+.evidence-row td {
+  padding-top: 0;
+  display: table-cell;
+}
+
+.evidence-row .field-evidence {
+  max-width: none;
+}
+
+/* A row's quote line belongs to the row above it: no rule between them. */
+.line-items-table tr:has(+ .evidence-row) td {
+  border-bottom: none;
+}
+
+/* A value that disagrees with the number printed in its quote. */
+.quote-chip {
+  display: inline-block;
+  padding: 0 0.5rem;
+  border: 1px solid var(--status-failed);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-failed) 10%, transparent);
+  color: var(--status-failed);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: left;
+}
+
+td .quote-chip {
+  display: block;
+  margin-top: 0.2rem;
+  border-radius: var(--radius-control);
+  font-weight: 600;
+}
+
+.recon-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.recon-quote {
+  margin-top: 0.4rem;
+  padding-left: 0.6rem;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.recon-quote-page {
+  font-weight: 700;
+}
+
+/* A number in an equation that is said, not selectable (a computed base). */
+.operand.static {
+  border-style: dashed;
+  background: transparent;
+  cursor: default;
+}
+
+/* The review queue: the quote beside the value, and the tax lines editor. */
+.review-evidence {
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+ul.review-evidence {
+  list-style: none;
+}
+
+/* Under the field name and value, on a line of its own. */
+.review-row-main > .review-evidence {
+  flex-basis: 100%;
+  margin-top: 0;
+}
+
+.review-tax-lines {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.review-tax-lines th {
+  text-align: left;
+  padding: 0.2rem 0.3rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.review-tax-lines td {
+  padding: 0.2rem 0.3rem;
+  vertical-align: top;
+}
+
+.review-tax-lines .review-input {
+  min-width: 4.5rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.review-tax-lines-actions {
+  margin-top: 0.5rem;
+}
+
+/* Phones: each tax line becomes a block of labelled inputs, so no column is
+   squeezed to a few characters. */
+@media (max-width: 560px) {
+  .review-tax-lines,
+  .review-tax-lines tbody,
+  .review-tax-lines tr,
+  .review-tax-lines td {
+    display: block;
+  }
+
+  .review-tax-lines thead {
+    display: none;
+  }
+
+  .review-tax-lines tr {
+    margin-bottom: 0.6rem;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-control);
+  }
+
+  .review-tax-lines td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+}

@@ -1,11 +1,18 @@
-"""Seed the demo database from the committed Sonnet extraction run.
+"""Seed the demo database from the committed Sonnet extraction runs.
 
 The demo stack (docker-compose.demo.yml) needs a believable history without
 spending a cent: every document is the eval corpus image, and its extraction
 replays what claude-sonnet-5 really returned for it (values, confidences,
-cost, latency, tokens) from the committed artifact in evals/results/. The
-page text is the gold text, indexed with the same embedder the API queries
-with. The only invented data is STAGED_REVIEW_CASES, marked as such.
+cost, latency, tokens) from a committed artifact in evals/results/. The
+documents 001-025 replay the v1 run (REPLAY_ARTIFACT). A later document replays
+the newest committed extract_v2 run of the same model that scored it, and a
+document no run has scored (today: 026-032, until the paid v2 run is committed)
+replays its label at full confidence with its gold evidence, tagged
+`_demo_replay.source = "label"` and counted in the summary (`label_replays`),
+so the demo never shows a model answer that was not one. The page text is the
+gold text, indexed with the same embedder the API queries with; a document with
+no gold text (the v2 documents) is simply not indexed. The only invented data is
+STAGED_REVIEW_CASES, marked as such.
 
 Document ids are uuid5 of the doc_id, so recorded scenarios can deep-link a
 document across resets, and created_at is staggered over the 14 days before
@@ -36,10 +43,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.budget import day_start
 from app.config import Settings, resolve_upload_dir
 from app.db import Base
+from app.evals.checks import label_tool_input
 from app.evals.dataset import EVALS_DIR, EvalCase, load_cases
 from app.evals.retrieval import load_gold_corpus
 from app.extraction import build_extracted_fields
-from app.extraction_fields import ExtractionSchema, schema_for
+from app.extraction_fields import SCHEMA_V2, ExtractionSchema, schema_for
 from app.models import (
     REVIEW_REASON_CONFIDENCE,
     Document,
@@ -52,7 +60,12 @@ from app.retrieval.indexing import ChunkingConfig, PageText, index_document_page
 from app.review_routing import refresh_reconciliation
 from app.routers.documents import ALLOWED_MIME_TYPES
 
-REPLAY_ARTIFACT = EVALS_DIR / "results" / "20260731T064853Z_claude-sonnet-5_extract_v1.json"
+RESULTS_DIR = EVALS_DIR / "results"
+REPLAY_ARTIFACT = RESULTS_DIR / "20260731T064853Z_claude-sonnet-5_extract_v1.json"
+
+# What a document that no run scored shows as its model: its label, replayed.
+LABEL_REPLAY_MODEL = "gold-label"
+LABEL_REPLAY_PROMPT_VERSION = SCHEMA_V2.prompt_version
 
 # Random but fixed: changing it changes every demo document id.
 DEMO_NAMESPACE = uuid.UUID("5f0c1d6e-7a3b-4c52-9e8d-2b4f6a1c3d70")
@@ -72,10 +85,11 @@ _UPLOAD_SUFFIXES = frozenset(ALLOWED_MIME_TYPES.values())
 
 @dataclass(frozen=True)
 class StagedReviewCase:
-    """STAGED, not model output: a field forced to a low-confidence misread
-    so the review queue and the correction scenario have a known case. The
-    replayed Sonnet run is nearly perfect, so on its own the queue would
-    hold only its three genuinely uncertain fields."""
+    """STAGED, not model output: a field forced to a misread so the review
+    queue and the scenarios have a known case: a doubtful one (016, caught by
+    the arithmetic and the confidence) or a confident one (028, caught only by
+    its quote). The replayed Sonnet run is nearly perfect, so on its own the
+    queue would hold only its three genuinely uncertain fields."""
 
     doc_id: str
     field_name: str
@@ -90,6 +104,13 @@ STAGED_REVIEW_CASES = (
     StagedReviewCase(
         "016-handwriting-bakery-note", "subtotal", 46.25, 0.68, "reconciliation scenario"
     ),
+    # The partial-payment invoice's deposit and balance moved 50.00 in opposite
+    # directions (printed 250.00 and 314.98), at the confidence of a model that
+    # is sure. Total - paid = due still holds, so the arithmetic passes; both
+    # keep the quote they were read from, which still shows the printed number.
+    # That is what the quote check adds: a confident, consistent misread.
+    StagedReviewCase("028-invoice-partial-payment", "amount_paid", 300.0, 0.95, "quote scenario"),
+    StagedReviewCase("028-invoice-partial-payment", "amount_due", 264.98, 0.95, "quote scenario"),
 )
 
 
@@ -100,6 +121,9 @@ class SeedSummary:
     total_cost_usd: float
     # Entries whose artifact record had no "actual" and fell back to the label.
     label_fallbacks: int
+    # Documents no committed run scored, replayed from their label and gold
+    # evidence (`_demo_replay.source` is "label").
+    label_replays: int
     staged: int
     stored_files: list[Path]
 
@@ -108,38 +132,86 @@ def demo_document_id(doc_id: str) -> uuid.UUID:
     return uuid.uuid5(DEMO_NAMESPACE, doc_id)
 
 
-def _leaf(value: Any) -> dict:
-    return {"value": value, "confidence": 1.0}
-
-
 def _label_tool_input(case: EvalCase, schema: ExtractionSchema) -> dict:
     """The label as a tool_input at confidence 1.0, shaped like
-    seed_labeled_corpus's fields."""
-    tool_input: dict[str, Any] = {}
-    for name in schema.field_names:
-        value = case.fields[name]
-        if name == "line_items":
-            value = [{key: _leaf(cell) for key, cell in row.items()} for row in value or []]
-        tool_input[name] = _leaf(value)
-    return tool_input
+    seed_labeled_corpus's fields: a schema with evidence also gets the label's
+    gold evidence on every leaf."""
+    full = label_tool_input(case.fields, evidence=case.evidence if schema.evidence else None)
+    return {name: full[name] for name in schema.field_names}
 
 
 def _replayed_tool_input(
     entry: dict, case: EvalCase, schema: ExtractionSchema
 ) -> tuple[dict, bool]:
     """Rebuild the tool_input the model returned from an artifact per_doc
-    entry: each field's `actual` and `confidence`. Returns (tool_input,
+    entry: each field's `actual` and `confidence`, and for a schema with
+    evidence the evidence the entry kept for a header field (the cells of an
+    array field keep theirs inside `actual`; a leaf with none replays as
+    evidence null, as the worker stores it). Returns (tool_input,
     used_label_fallback). An entry with no `actual` key at all (an older
     artifact shape) falls back to the label at confidence 1.0 for the whole
     document; the committed Sonnet run has none, and the seed counts them."""
     fields = entry["fields"]
-    if any("actual" not in fields[name] for name in schema.field_names):
+    if any("actual" not in fields.get(name, {}) for name in schema.field_names):
         return _label_tool_input(case, schema), True
-    tool_input = {
-        name: {"value": fields[name]["actual"], "confidence": fields[name]["confidence"]}
-        for name in schema.field_names
-    }
+    tool_input = {}
+    for name in schema.field_names:
+        leaf = {"value": fields[name]["actual"], "confidence": fields[name]["confidence"]}
+        if schema.evidence:
+            leaf["evidence"] = fields[name].get("evidence")
+        tool_input[name] = leaf
     return tool_input, False
+
+
+@dataclass(frozen=True)
+class Replay:
+    """Where one document's replayed extraction comes from: a committed
+    artifact and its scored entry, or (`artifact` and `entry` None) the label."""
+
+    schema: ExtractionSchema
+    model: str
+    artifact: Path | None = None
+    entry: dict | None = None
+
+
+def _scored_entries(artifact: dict) -> dict[str, dict]:
+    return {e["doc_id"]: e for e in artifact["per_doc"] if e["status"] == "scored"}
+
+
+def _v2_artifacts(model: str) -> list[tuple[Path, dict]]:
+    """The committed extract_v2 runs of `model` in RESULTS_DIR, newest first
+    (the file names start with their UTC start time). A run of another model is
+    not shown as this one's answer."""
+    runs = []
+    for path in sorted(RESULTS_DIR.glob(f"*_{SCHEMA_V2.prompt_version}.json"), reverse=True):
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        if artifact["model"] == model and artifact["prompt_version"] == SCHEMA_V2.prompt_version:
+            runs.append((path, artifact))
+    return runs
+
+
+def choose_replays(doc_ids: list[str], primary: dict) -> dict[str, Replay]:
+    """The replay of each document: the primary artifact's entry when it scored
+    the document (001-025, unchanged), else the newest committed v2 run of the
+    same model that did, else the label with its gold evidence."""
+    primary_schema = schema_for(primary["prompt_version"])
+    primary_entries = _scored_entries(primary)
+    if len(primary_entries) != len(primary["per_doc"]):
+        raise ValueError(f"{REPLAY_ARTIFACT.name} holds entries that were not scored")
+    later_runs = [(path, _scored_entries(a)) for path, a in _v2_artifacts(primary["model"])]
+    replays = {}
+    for doc_id in doc_ids:
+        if doc_id in primary_entries:
+            replays[doc_id] = Replay(
+                primary_schema, primary["model"], REPLAY_ARTIFACT, primary_entries[doc_id]
+            )
+            continue
+        found = next(((p, e[doc_id]) for p, e in later_runs if doc_id in e), None)
+        if found is None:
+            replays[doc_id] = Replay(SCHEMA_V2, LABEL_REPLAY_MODEL)
+        else:
+            replays[doc_id] = Replay(SCHEMA_V2, primary["model"], *found)
+    return replays
 
 
 def _created_at(index: int, count: int, today: datetime) -> datetime:
@@ -163,7 +235,9 @@ def _apply_staged_cases(
             continue
         field = next(f for f in fields if f.field_name == case.field_name)
         replayed = {"value": field.value["value"], "confidence": field.confidence}
-        field.value = {"value": case.value, "confidence": case.confidence}
+        # A leaf that carries evidence keeps its quote: the staged value is a
+        # misread that still cites what was printed.
+        field.value = {**field.value, "value": case.value, "confidence": case.confidence}
         field.confidence = case.confidence
         field.needs_review = case.confidence < review_threshold
         field.review_reason = REVIEW_REASON_CONFIDENCE if field.needs_review else None
@@ -185,7 +259,6 @@ async def seed_demo_data(
     page index. `now` only anchors the created_at stagger. Callers that seed
     a real database check ensure_demo_database first."""
     artifact = json.loads(REPLAY_ARTIFACT.read_text(encoding="utf-8"))
-    schema = schema_for(artifact["prompt_version"])
     cases = {case.doc_id: case for case in load_cases()}
     gold_text = {doc.doc_id: doc.text for doc in load_gold_corpus(list(cases.values()))}
     embedder = embedder or build_embedder(settings)
@@ -195,24 +268,33 @@ async def seed_demo_data(
     _unreferenced_uploads(upload_dir, set())  # refuse before copying into a foreign directory
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    entries = sorted(artifact["per_doc"], key=lambda e: e["doc_id"])
-    unknown = {case.doc_id for case in STAGED_REVIEW_CASES} - {e["doc_id"] for e in entries}
+    doc_ids = sorted(cases)
+    replays = choose_replays(doc_ids, artifact)
+    unknown = {case.doc_id for case in STAGED_REVIEW_CASES} - set(doc_ids)
     if unknown:
-        raise ValueError(f"staged review cases name documents not in the replay: {sorted(unknown)}")
+        raise ValueError(f"staged review cases name documents not in the dataset: {sorted(unknown)}")
 
     document_ids: dict[str, uuid.UUID] = {}
     stored_files: list[Path] = []
     pending = 0
     staged_count = 0
     label_fallbacks = 0
+    label_replays = 0
     total_cost = 0.0
-    for index, entry in enumerate(entries):
-        doc_id = entry["doc_id"]
-        if entry["status"] != "scored" or doc_id not in cases or doc_id not in gold_text:
-            raise ValueError(f"{doc_id}: not a scored replay entry with a label and gold text")
+    for index, doc_id in enumerate(doc_ids):
         case = cases[doc_id]
-        tool_input, fallback = _replayed_tool_input(entry, case, schema)
+        replay = replays[doc_id]
+        schema, entry = replay.schema, replay.entry
+        if entry is None:
+            tool_input, fallback = _label_tool_input(case, schema), False
+            provenance: dict[str, Any] = {"source": "label"}
+            label_replays += 1
+        else:
+            tool_input, fallback = _replayed_tool_input(entry, case, schema)
+            provenance = {"artifact": replay.artifact.name}
         label_fallbacks += fallback
+        latency_ms = entry["latency_ms"] if entry else 0
+        cost_usd = entry["cost_usd"] if entry else 0.0
 
         document_id = demo_document_id(doc_id)
         extension = ALLOWED_MIME_TYPES[case.mime_type]
@@ -220,8 +302,8 @@ async def seed_demo_data(
         shutil.copyfile(case.image_path, stored)
         stored_files.append(stored)
 
-        uploaded_at = _created_at(index, len(entries), today)
-        extracted_at = uploaded_at + timedelta(milliseconds=entry["latency_ms"]) + timedelta(seconds=1)
+        uploaded_at = _created_at(index, len(doc_ids), today)
+        extracted_at = uploaded_at + timedelta(milliseconds=latency_ms) + timedelta(seconds=1)
         # Flushed parent first throughout: the models declare no
         # relationships, so a single flush would not order the inserts.
         session.add(
@@ -242,22 +324,18 @@ async def seed_demo_data(
             Extraction(
                 id=extraction_id,
                 document_id=document_id,
-                prompt_version=artifact["prompt_version"],
-                model=artifact["model"],
+                prompt_version=schema.prompt_version,
+                model=replay.model,
                 # The model's leaves stay exactly as returned; a staged
                 # override is recorded beside them, never merged into them.
                 raw_response={
                     **tool_input,
-                    "_demo_replay": {
-                        "artifact": REPLAY_ARTIFACT.name,
-                        "doc_id": doc_id,
-                        "staged": staged,
-                    },
+                    "_demo_replay": {**provenance, "doc_id": doc_id, "staged": staged},
                 },
-                input_tokens=entry["input_tokens"],
-                output_tokens=entry["output_tokens"],
-                cost_usd=entry["cost_usd"],
-                latency_ms=entry["latency_ms"],
+                input_tokens=entry["input_tokens"] if entry else 0,
+                output_tokens=entry["output_tokens"] if entry else 0,
+                cost_usd=cost_usd,
+                latency_ms=latency_ms,
                 created_at=extracted_at,
             )
         )
@@ -271,24 +349,31 @@ async def seed_demo_data(
         pending += sum(f.needs_review for f in fields)
         staged_count += len(staged)
         document_ids[doc_id] = document_id
-        total_cost += entry["cost_usd"]
+        total_cost += cost_usd
 
-        await index_document_pages(
-            session,
-            document_id,
-            [PageText(page_number=1, text=gold_text[doc_id], source="gold")],
-            embedder,
-            chunking,
-        )
-        await session.execute(
-            update(DocumentPage)
-            .where(DocumentPage.document_id == document_id)
-            .values(created_at=extracted_at + timedelta(seconds=3))
-        )
+        if doc_id in gold_text:
+            await index_document_pages(
+                session,
+                document_id,
+                [PageText(page_number=1, text=gold_text[doc_id], source="gold")],
+                embedder,
+                chunking,
+            )
+            await session.execute(
+                update(DocumentPage)
+                .where(DocumentPage.document_id == document_id)
+                .values(created_at=extracted_at + timedelta(seconds=3))
+            )
 
     await session.flush()
     return SeedSummary(
-        document_ids, pending, round(total_cost, 6), label_fallbacks, staged_count, stored_files
+        document_ids,
+        pending,
+        round(total_cost, 6),
+        label_fallbacks,
+        label_replays,
+        staged_count,
+        stored_files,
     )
 
 

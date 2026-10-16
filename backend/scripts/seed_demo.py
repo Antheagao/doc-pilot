@@ -1,7 +1,7 @@
 """Load the deterministic demo dataset (app/demo_seed.py) into the database.
 
-Replays the committed Sonnet extraction run for the 25 eval documents; no
-model call is made. Normally run in the demo stack's one-shot seed service:
+Replays the committed Sonnet extraction runs for the eval documents (a
+document no run scored replays its label); no model call is made. Normally run in the demo stack's one-shot seed service:
 
     backend\\.venv\\Scripts\\python scripts\\demos\\demo.py seed [--reset]
 
@@ -55,7 +55,8 @@ async def run(session: AsyncSession, settings: Settings, reset: bool) -> int:
         f"{summary.pending_review} fields pending review "
         f"({summary.staged} staged), "
         f"replayed cost ${summary.total_cost_usd:.4f}, "
-        f"{summary.label_fallbacks} label fallbacks"
+        f"{summary.label_fallbacks} label fallbacks, "
+        f"{summary.label_replays} label replays"
     )
     return 0
 

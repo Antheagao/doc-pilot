@@ -290,6 +290,14 @@ def test_label_numbers_round_trip(text) -> None:
         ("7,5 %", ["7.5"]),
         ("2 x 4.50 = 9.00", ["2", "4.50", "9.00"]),
         ("Subtotal 5.00 ... 5.0 ... 5", ["5.00"]),
+        # A date with slashes or dashes shows no amount; the amount beside it does.
+        ("Deposit received 06/30/2026: -$250.00", ["250.00"]),
+        ("Paid 30-06-26: 12.50", ["12.50"]),
+        ("2026-06-30 total 9.00", ["9.00"]),
+        ("due 6/3/26.", []),
+        ("Paid 2026/10/15: 40.00", ["40.00"]),
+        ("Paid 2026-6-30: 40.00", ["40.00"]),
+        ("Tax 8.875% on 06/30/2026", ["8.875"]),
     ],
 )
 def test_printed_amounts_reads_the_formats_a_document_prints(text: str, expected: list[str]) -> None:
@@ -305,7 +313,7 @@ def test_printed_amounts_gives_both_readings_of_an_ambiguous_number(text: str) -
     assert amounts[0] * 1000 == amounts[1]
 
 
-@pytest.mark.parametrize("text", ["", "   ", "no digits here", "n/a", "$", "-", "12.05.2024", "1.2.3", "1,23.45"])
+@pytest.mark.parametrize("text", ["", "   ", "no digits here", "n/a", "$", "-", "12.05.2024", "1.2.3", "1,23.45", "06/30/2026", "2026-06-30", "30-06-26", "2026/10/15", "2026-6-30"])
 def test_printed_amounts_gives_nothing_for_text_without_an_amount(text: str) -> None:
     assert printed_amounts(text) == ()
 
