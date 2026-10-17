@@ -218,7 +218,9 @@ def current_v1_shaped_reports() -> dict[str, dict]:
     for case in v1_cases():
         report, _ = checks.replay(checks.label_tool_input(v1_fields(case)), 1.0, SCHEMA_V1)
         reports[f"label:{case.doc_id}"] = report_to_json(report)
-    for path in sorted(RESULTS_DIR.glob("*.json")):
+    # Only the extract_v1 artifacts the fixture was frozen from: a later run
+    # (extract_v3, with evidence) has no key in it and is not v1-shaped.
+    for path in sorted(RESULTS_DIR.glob("*_extract_v1.json")):
         artifact = json.loads(path.read_text(encoding="utf-8"))
         schema = SCHEMAS[artifact["prompt_version"]]
         threshold = artifact["review_threshold"]

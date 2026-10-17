@@ -41,7 +41,7 @@ from app.evals.scoring import (
     match_vendor,
     score_case,
 )
-from app.extraction_fields import SCHEMA_V1, SCHEMA_V2
+from app.extraction_fields import SCHEMA_V1, SCHEMA_V2, schema_for
 
 
 def _leaf(value, confidence: float = 0.9) -> dict:
@@ -834,27 +834,54 @@ class TestLoadRealDataset:
         assert [c.doc_id for c in limited] == [c.doc_id for c in all_cases[:3]]
 
 
+def _rebuilt_tool_input(doc: dict) -> dict:
+    """The tool_input a scored artifact document was stored from: every field a
+    {value, confidence} leaf, plus the evidence its schema stored (an array's
+    cells keep theirs inside `actual`)."""
+    tool_input = {}
+    for name, field in doc["fields"].items():
+        leaf = {"value": field["actual"], "confidence": field["confidence"]}
+        if "evidence" in field:
+            leaf["evidence"] = field["evidence"]
+        tool_input[name] = leaf
+    return tool_input
+
+
 def test_rescoring_the_committed_runs_reproduces_their_scores():
     # The scorer reads amounts through the product's parser; this pins that the
     # change moved no committed score. Each artifact's stored answers are
-    # rebuilt into a tool_input and scored again.
+    # rebuilt into a tool_input and scored again with the schema its own prompt
+    # version was extracted with (its stored evidence included), and the run's
+    # evidence totals are rolled up again from the same scores.
     cases = {case.doc_id: case for case in load_cases()}
     results = load_results()
     assert results
+    assert {run["prompt_version"] for run in results} >= {"extract_v1", "extract_v3"}
     for run in results:
+        schema = schema_for(run["prompt_version"])
+        case_scores = []
         for doc in run["per_doc"]:
             if doc.get("status") != "scored":
                 continue
-            tool_input = {
-                name: {"value": field["actual"], "confidence": field["confidence"]}
-                for name, field in doc["fields"].items()
-            }
-            score = score_case(cases[doc["doc_id"]], tool_input, run["review_threshold"])
+            score = score_case(
+                cases[doc["doc_id"]],
+                _rebuilt_tool_input(doc),
+                run["review_threshold"],
+                schema,
+            )
+            case_scores.append(score)
+            assert set(score.fields) == set(doc["fields"]), doc["doc_id"]
             for name, field in doc["fields"].items():
                 assert score.fields[name].correct == field["correct"], (doc["doc_id"], name)
+                assert score.fields[name].evidence == field.get("evidence"), (doc["doc_id"], name)
             assert score.item_accuracy == doc["item_accuracy"], doc["doc_id"]
             assert score.schema_violations == doc["schema_violations"], doc["doc_id"]
             assert score.hallucinations == doc["hallucinations"], doc["doc_id"]
+        assert len(case_scores) == run["n_scored"]
+        summary = aggregate(case_scores).to_dict()
+        assert summary.get("evidence_coverage") == run["summary"].get("evidence_coverage")
+        assert summary["total_hallucinations"] == run["summary"]["total_hallucinations"]
+        assert summary["total_schema_violations"] == run["summary"]["total_schema_violations"]
 
 
 # --- schema v2 matchers --------------------------------------------------------

@@ -483,6 +483,8 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 | claude-sonnet-5 | extract_v1 | 3 | 100.0% | 21/21 (100.0%) | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
 | claude-sonnet-5 | extract_v1 | 25 | 99.4% | 174/175 (99.4%) | 100.0% | 100.0% | 96.0% | 100.0% | 100.0% | 100.0% | 100.0% |
 | claude-haiku-4-5 | extract_v1 | 25 | 95.4% | 167/175 (95.4%) | 100.0% | 96.0% | 96.0% | 96.0% | 96.0% | 96.0% | 88.0% |
+| claude-sonnet-5 | extract_v3 | 32 | 99.8% | 174/175 (99.4%) | 100.0% | 100.0% | 96.9% | 100.0% | 100.0% | 100.0% | 100.0% |
+| claude-haiku-4-5 | extract_v3 | 32 | 98.1% | 168/175 (96.0%) | 100.0% | 96.9% | 96.9% | 96.9% | 93.8% | 100.0% | 90.6% |
 
 *Percentages are field-level accuracy (see this README's Evals section for the per-field match rules); Docs is n_scored for that run, with `+N err` appended when the run had N extraction errors. Each row is one eval run, tied to its own model / prompt_version / dataset_version, ordered oldest to newest by started_at_utc. Core is the accuracy over the seven v1 fields of documents 001-025 only, the ground every prompt version has been run on, so a v1 run and a v2 run compare there whatever else each was run on.*
 
@@ -493,8 +495,66 @@ On this dataset Haiku costs ~2.4x less per document than Sonnet ($0.0052 vs $0.0
 | claude-sonnet-5 | extract_v1 | 0.97 / n/a | n/a | n/a | n/a | 0 | $0.0110 | $0.0329 | 4368ms / 5943ms |
 | claude-sonnet-5 | extract_v1 | 0.96 / 0.60 | 100.0% | 0.0% | n/a | 1 | $0.0125 | $0.3123 | 5165ms / 12929ms |
 | claude-haiku-4-5 | extract_v1 | 0.96 / 0.93 | 0.0% | 50.0% | n/a | 1 | $0.0052 | $0.1305 | 3651ms / 8414ms |
+| claude-sonnet-5 | extract_v3 | 0.43 / 0.60 | 100.0% | 0.0% | 0.0% | 1 | $0.0263 | $0.8411 | 13740ms / 29527ms |
+| claude-haiku-4-5 | extract_v3 | 0.48 / 0.86 | 16.7% | 58.3% | 8.3% | 3 | $0.0179 | $0.5735 | 19810ms / 36862ms |
 
 *Conf ✓/✗ is mean model confidence on correct vs. incorrect fields; Caught by review is the share of incorrect fields whose confidence fell below that run's review_threshold -- the empirical case for the human-review queue; Caught by checks is the share of incorrect fields the deterministic checks route to review: the arithmetic (app/reconcile.py, rules_v2) and, for a run whose answers carry evidence quotes, the agreement of each value with the number in its quote (app/quotes.py), replayed from each run's stored answers whenever this table is rendered (a field can count in both); Caught by quotes is the part of that share that the quote check made, n/a for a prompt version whose answers carry no quotes; $/doc and Total $ are extraction spend in USD; latency is wall-clock p50/p95 per document.*
+
+### Schema v2 fields
+
+#### claude-sonnet-5 / extract_v3 (32 docs)
+
+| Field | Accuracy | Values | Evidence coverage | Page agreement | Quote agreement |
+| --- | --- | --- | --- | --- | --- |
+| vendor | 100.0% | 31 | 100.0% | 100.0% | 100.0% |
+| invoice_number | 100.0% | 5 | 100.0% | 100.0% | 100.0% |
+| po_number | 100.0% | 3 | 100.0% | 100.0% | 100.0% |
+| vendor_tax_id | 100.0% | 3 | 100.0% | 100.0% | 100.0% |
+| document_date | 100.0% | 32 | 100.0% | 100.0% | 100.0% |
+| due_date | 100.0% | 4 | 100.0% | 100.0% | 100.0% |
+| payment_terms | 100.0% | 5 | 100.0% | 100.0% | 100.0% |
+| payment_method | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| payment_card_last4 | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| line_items | 100.0% | 508 | 100.0% | 100.0% | 98.4% |
+| subtotal | 100.0% | 32 | 100.0% | 100.0% | 100.0% |
+| discount | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| shipping | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| tax | 100.0% | 30 | 100.0% | 100.0% | 100.0% |
+| tax_lines | 100.0% | 85 | 100.0% | 100.0% | 100.0% |
+| tip | 100.0% | 1 | 100.0% | 100.0% | 100.0% |
+| total | 100.0% | 32 | 100.0% | 100.0% | 100.0% |
+| amount_paid | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| amount_due | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| currency | 96.9% | 32 | 100.0% | 100.0% | 100.0% |
+| All | 99.8% | 815 | 100.0% | 100.0% | 99.0% |
+
+#### claude-haiku-4-5 / extract_v3 (32 docs)
+
+| Field | Accuracy | Values | Evidence coverage | Page agreement | Quote agreement |
+| --- | --- | --- | --- | --- | --- |
+| vendor | 100.0% | 31 | 100.0% | 100.0% | 93.5% |
+| invoice_number | 100.0% | 5 | 100.0% | 100.0% | 100.0% |
+| po_number | 100.0% | 3 | 100.0% | 100.0% | 100.0% |
+| vendor_tax_id | 100.0% | 3 | 100.0% | 100.0% | 100.0% |
+| document_date | 96.9% | 32 | 100.0% | 100.0% | 96.9% |
+| due_date | 100.0% | 4 | 100.0% | 100.0% | 100.0% |
+| payment_terms | 100.0% | 5 | 100.0% | 100.0% | 100.0% |
+| payment_method | 100.0% | 2 | 100.0% | 100.0% | 50.0% |
+| payment_card_last4 | 100.0% | 2 | 100.0% | 100.0% | 50.0% |
+| line_items | 90.6% | 508 | 100.0% | 100.0% | 51.2% |
+| subtotal | 96.9% | 32 | 100.0% | 100.0% | 96.9% |
+| discount | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| shipping | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| tax | 93.8% | 31 | 100.0% | 100.0% | 93.3% |
+| tax_lines | 90.6% | 82 | 98.8% | 100.0% | 95.1% |
+| tip | 100.0% | 1 | 100.0% | 100.0% | 100.0% |
+| total | 100.0% | 32 | 100.0% | 100.0% | 100.0% |
+| amount_paid | 96.9% | 3 | 100.0% | 100.0% | 100.0% |
+| amount_due | 100.0% | 2 | 100.0% | 100.0% | 100.0% |
+| currency | 96.9% | 32 | 100.0% | 100.0% | 100.0% |
+| All | 98.1% | 814 | 99.9% | 100.0% | 67.9% |
+
+*Accuracy is the field-level accuracy of that field over the run's documents. Values counts the non-null values the model extracted for the field (every cell of a line item or tax line counts). Evidence coverage is the share of them that cite a usable quote. Page agreement and Quote agreement are the shares of the values the gold label cites that name the gold page and copy the gold quote (whitespace collapsed); the gold quote of a line-item or tax-line cell is the whole printed row, so a cell agrees when its quote is the gold row or whole words of it; a value with no quote, or with a quote and no page, is a miss on both, and the first is a coverage miss too.*
 
 <!-- EVAL_TABLE:END -->
 

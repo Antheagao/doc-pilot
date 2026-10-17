@@ -332,9 +332,11 @@ class TestCoreColumn:
             correct = scored = 0
             for doc in run["per_doc"]:
                 if doc["doc_id"] in CORE_DOC_IDS:
-                    for field in doc["fields"].values():
+                    # Only the seven v1 fields count, whatever more the run's
+                    # schema scored on the same documents.
+                    for name in SCHEMA_V1.field_names:
                         scored += 1
-                        correct += field["correct"]
+                        correct += doc["fields"][name]["correct"]
             assert (correct, scored) == core_counts(run)
             assert (
                 _accuracy_cell(row, "Core (v1 fields, docs 001-025)")
@@ -344,16 +346,25 @@ class TestCoreColumn:
     def test_the_committed_runs_core_values(self):
         runs = load_results()
 
-        values = [(run["model"], run["n_scored"], core_counts(run)) for run in runs]
+        values = [(run["model"], run["prompt_version"], run["n_scored"], core_counts(run)) for run in runs]
 
+        # The three extract_v1 artifacts, then the two extract_v3 ones. The v3
+        # counts are the same seven fields of the same 25 documents, summed from
+        # each artifact's per_doc, out of the 20 fields and 32 documents it scored.
         assert values == [
-            ("claude-sonnet-5", 3, (21, 21)),
-            ("claude-sonnet-5", 25, (174, 175)),
-            ("claude-haiku-4-5", 25, (167, 175)),
+            ("claude-sonnet-5", "extract_v1", 3, (21, 21)),
+            ("claude-sonnet-5", "extract_v1", 25, (174, 175)),
+            ("claude-haiku-4-5", "extract_v1", 25, (167, 175)),
+            ("claude-sonnet-5", "extract_v3", 32, (174, 175)),
+            ("claude-haiku-4-5", "extract_v3", 32, (168, 175)),
         ]
-        # On the 25 documents the core is the run's own accuracy: nothing moved.
+        # On the 25 documents a v1 run scored, the core is the run's own accuracy:
+        # nothing moved. A v3 run's overall covers more fields and documents.
         for run in runs:
-            assert core_counts(run)[0] / core_counts(run)[1] == run["summary"]["overall_accuracy"]
+            if run["prompt_version"] == "extract_v1":
+                assert core_counts(run)[0] / core_counts(run)[1] == run["summary"]["overall_accuracy"]
+            else:
+                assert core_counts(run)[0] / core_counts(run)[1] != run["summary"]["overall_accuracy"]
 
     async def test_a_v2_run_compares_with_a_v1_run_on_the_same_documents(self):
         cases = load_cases()
@@ -368,7 +379,9 @@ class TestCoreColumn:
 
 class TestSchemaV2Table:
     def test_v1_only_results_render_no_such_section(self):
-        markdown = render_tables(load_results())
+        v1_only = [run for run in load_results() if run["prompt_version"] == "extract_v1"]
+        assert len(v1_only) == 3
+        markdown = render_tables(v1_only)
 
         assert "Schema v2 fields" not in markdown
         assert markdown.count("### ") == 2

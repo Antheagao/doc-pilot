@@ -27,6 +27,7 @@ from app.demo_seed import (
     HISTORY_DAYS,
     LABEL_REPLAY_MODEL,
     REPLAY_ARTIFACT,
+    RESULTS_DIR,
     STAGED_REVIEW_CASES,
     SeedSummary,
     _wipe,
@@ -52,8 +53,14 @@ from app.routers.documents import ALLOWED_MIME_TYPES
 NOW = datetime(2026, 10, 10, 15, 30, tzinfo=UTC)
 STAGED = STAGED_REVIEW_CASES[0]
 QUOTE_STAGED = [case for case in STAGED_REVIEW_CASES if case.doc_id.startswith("028")]
-# The v2 documents no committed run has scored: replayed from their labels.
+# The v2 documents the committed v1 run did not score (026-032). With the
+# committed Sonnet extract_v3 run they replay that run; with no such run in
+# RESULTS_DIR they replay their labels (see label_results_dir).
 LABEL_DOC_IDS = sorted(case.doc_id for case in load_cases() if case.doc_id[:3] >= "026")
+# The committed runs that scored them, from the paid extract_v3 smoke: the seed
+# replays the Sonnet one (the primary artifact's model) and ignores the Haiku one.
+V3_ARTIFACT = RESULTS_DIR / "20261017T063559Z_claude-sonnet-5_extract_v3.json"
+HAIKU_V3_ARTIFACT = RESULTS_DIR / "20261017T063918Z_claude-haiku-4-5_extract_v3.json"
 
 
 @pytest.fixture
@@ -66,8 +73,36 @@ def artifact() -> dict:
     return json.loads(REPLAY_ARTIFACT.read_text(encoding="utf-8"))
 
 
+@pytest.fixture
+def v3_artifact() -> dict:
+    return json.loads(V3_ARTIFACT.read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def v3_entries(v3_artifact: dict) -> dict[str, dict]:
+    """The scored entries of the committed Sonnet v3 run for the documents the
+    seed replays from it."""
+    entries = {e["doc_id"]: e for e in v3_artifact["per_doc"] if e["doc_id"] in LABEL_DOC_IDS}
+    assert sorted(entries) == LABEL_DOC_IDS
+    assert all(e["status"] == "scored" for e in entries.values())
+    return entries
+
+
 @pytest_asyncio.fixture
 async def seeded(db_session: AsyncSession, settings: Settings) -> SeedSummary:
+    return await seed_demo_data(db_session, settings, HashingEmbedder(), now=NOW)
+
+
+@pytest_asyncio.fixture
+async def label_seeded(
+    db_session: AsyncSession, settings: Settings, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> SeedSummary:
+    """The seed with no committed run past the v1 one, as before extract_v3 was
+    run: 026-032 replay their labels. REPLAY_ARTIFACT (v1) is a fixed path, so
+    only the later runs are swapped for an empty directory."""
+    empty = tmp_path.parent / f"{tmp_path.name}-no-later-runs"
+    empty.mkdir()
+    monkeypatch.setattr(demo_seed, "RESULTS_DIR", empty)
     return await seed_demo_data(db_session, settings, HashingEmbedder(), now=NOW)
 
 
@@ -86,6 +121,8 @@ async def _count_seeded(session: AsyncSession, seeded: SeedSummary) -> int:
 async def test_seeds_every_document_with_all_the_fields_of_its_schema(
     db_session: AsyncSession, seeded: SeedSummary, artifact: dict
 ) -> None:
+    # 001-025 keep the v1 schema of the committed v1 run; 026-032 are v3, the
+    # committed Sonnet extract_v3 run having scored them.
     ids = list(seeded.document_ids.values())
     assert len(ids) == len(artifact["per_doc"]) + len(LABEL_DOC_IDS) == 32
     assert seeded.document_ids == {
@@ -112,10 +149,10 @@ async def test_seeds_every_document_with_all_the_fields_of_its_schema(
     by_version = {(version, count) for _, version, count in rows}
     assert by_version == {
         (SCHEMA_V1.prompt_version, len(SCHEMA_V1.field_names)),
-        (SCHEMA_V2.prompt_version, len(SCHEMA_V2.field_names)),
+        (SCHEMA_V3.prompt_version, len(SCHEMA_V3.field_names)),
     }
-    assert (len(SCHEMA_V1.field_names), len(SCHEMA_V2.field_names)) == (7, 20)
-    assert sum(version == SCHEMA_V2.prompt_version for _, version, _ in rows) == 7
+    assert (len(SCHEMA_V1.field_names), len(SCHEMA_V3.field_names)) == (7, 20)
+    assert sum(version == SCHEMA_V3.prompt_version for _, version, _ in rows) == 7
 
 
 async def test_extraction_replays_the_artifact_with_provenance(
@@ -146,23 +183,91 @@ async def test_extraction_replays_the_artifact_with_provenance(
             "confidence": entry["fields"][name]["confidence"],
         }
     assert seeded.label_fallbacks == 0
-    assert seeded.label_replays == 7
-    assert seeded.total_cost_usd == pytest.approx(artifact["total_cost_usd"])
+    # Nothing is left to the label: 026-032 replay the committed v3 run, whose
+    # recorded cost is part of the replayed total.
+    assert seeded.label_replays == 0
+    v3_cost = sum(
+        e["cost_usd"]
+        for e in json.loads(V3_ARTIFACT.read_text(encoding="utf-8"))["per_doc"]
+        if e["doc_id"] in LABEL_DOC_IDS
+    )
+    assert v3_cost == pytest.approx(0.213541)
+    assert seeded.total_cost_usd == pytest.approx(artifact["total_cost_usd"] + v3_cost)
+    assert seeded.total_cost_usd == pytest.approx(0.525823)
+
+
+async def test_the_documents_the_v1_run_did_not_score_replay_the_sonnet_v3_run(
+    db_session: AsyncSession, seeded: SeedSummary, v3_artifact: dict, v3_entries: dict[str, dict]
+) -> None:
+    assert (v3_artifact["model"], v3_artifact["prompt_version"]) == ("claude-sonnet-5", "extract_v3")
+    # The seed chooses the Sonnet v3 artifact for every one of them, and the
+    # Haiku v3 run (a different model, newer by name) is never shown as an answer.
+    replays = choose_replays(sorted(seeded.document_ids), json.loads(REPLAY_ARTIFACT.read_text(encoding="utf-8")))
+    for doc_id in LABEL_DOC_IDS:
+        assert replays[doc_id].artifact == V3_ARTIFACT
+        assert replays[doc_id].schema is SCHEMA_V3
+        assert replays[doc_id].model == "claude-sonnet-5"
+    assert HAIKU_V3_ARTIFACT.name > V3_ARTIFACT.name
+    assert all(r.artifact != HAIKU_V3_ARTIFACT for r in replays.values())
+
+    extractions = (
+        await db_session.execute(
+            select(Extraction).where(Extraction.document_id.in_(list(seeded.document_ids.values())))
+        )
+    ).scalars().all()
+    assert {e.model for e in extractions} == {"claude-sonnet-5"}
+    by_document = {e.document_id: e for e in extractions}
+    for doc_id, entry in v3_entries.items():
+        extraction = by_document[seeded.document_ids[doc_id]]
+        assert extraction.prompt_version == "extract_v3"
+        assert float(extraction.cost_usd) == entry["cost_usd"]
+        assert extraction.latency_ms == entry["latency_ms"]
+        assert (extraction.input_tokens, extraction.output_tokens) == (
+            entry["input_tokens"],
+            entry["output_tokens"],
+        )
+        assert extraction.cache_read_input_tokens == entry["cache_read_input_tokens"]
+        provenance = extraction.raw_response["_demo_replay"]
+        assert provenance["artifact"] == V3_ARTIFACT.name
+        assert provenance["doc_id"] == doc_id
+        assert set(extraction.raw_response) == {*SCHEMA_V3.field_names, "_demo_replay"}
+        # The model's own answer with its own evidence, not the label's.
+        for name in SCHEMA_V3.field_names:
+            assert extraction.raw_response[name]["value"] == entry["fields"][name]["actual"]
+            assert extraction.raw_response[name]["confidence"] == entry["fields"][name]["confidence"]
+            assert extraction.raw_response[name].get("evidence") == entry["fields"][name].get("evidence")
 
 
 async def test_pending_review_is_the_low_confidence_fields_plus_the_staged_ones(
-    db_session: AsyncSession, seeded: SeedSummary, artifact: dict, settings: Settings
+    db_session: AsyncSession,
+    seeded: SeedSummary,
+    artifact: dict,
+    v3_entries: dict[str, dict],
+    settings: Settings,
 ) -> None:
     staged = {(case.doc_id, case.field_name) for case in STAGED_REVIEW_CASES}
-    expected = {
+    uncertain_v1 = {
         (entry["doc_id"], name)
         for entry in artifact["per_doc"]
         for name, field in entry["fields"].items()
         if field["confidence"] < settings.review_threshold
-    } | staged
-    # The replayed run itself is uncertain about at least one field, so the
+    }
+    low_v3 = {
+        (doc_id, name)
+        for doc_id, entry in v3_entries.items()
+        for name, field in entry["fields"].items()
+        if field["confidence"] < settings.review_threshold
+    }
+    expected = uncertain_v1 | low_v3 | staged
+    # The replayed v1 run itself is uncertain about at least one field, so the
     # expectation is not just the staged cases.
     assert expected - staged
+    # The v3 run reports a field it did not read as null at confidence 0.0 (its
+    # prompt asks for a low confidence), and the seed stores it as the worker
+    # would: below the threshold, so pending. Every low field of the v3 run is
+    # such an absent field; none is a value the model read doubtfully.
+    assert all(v3_entries[doc_id]["fields"][name]["actual"] in (None, []) for doc_id, name in low_v3)
+    assert (len(uncertain_v1), len(low_v3), len(staged)) == (3, 52, 3)
 
     pending = (
         await db_session.execute(
@@ -177,7 +282,7 @@ async def test_pending_review_is_the_low_confidence_fields_plus_the_staged_ones(
     ).all()
     by_demo_id = {demo_id: doc_id for doc_id, demo_id in seeded.document_ids.items()}
     assert {(by_demo_id[document_id], name) for document_id, name in pending} == expected
-    assert seeded.pending_review == len(expected)
+    assert seeded.pending_review == len(expected) == 58
     assert seeded.staged == len(STAGED_REVIEW_CASES)
 
 
@@ -373,8 +478,9 @@ async def test_cli_refuses_a_non_empty_database_without_reset_and_replaces_it_wi
 
     assert await cli.run(db_session, settings, reset=True) == 0
     out = capsys.readouterr().out
-    assert "Seeded 32 documents, 6 fields pending review (3 staged)" in out
-    assert "7 label replays" in out
+    assert "Seeded 32 documents, 58 fields pending review (3 staged)" in out
+    assert "replayed cost $0.5258" in out
+    assert "0 label fallbacks, 0 label replays" in out
     assert (await db_session.execute(select(func.count()).select_from(Document))).scalar_one() == 32
     assert len(list(tmp_path.iterdir())) == 32
 
@@ -410,7 +516,7 @@ async def _flagged(db_session: AsyncSession, document_id: uuid.UUID) -> dict[str
     return {f.field_name: f.review_reason for f in fields if f.needs_review}
 
 
-async def test_the_staged_subtotal_is_flagged_by_the_arithmetic_and_pending_is_six(
+async def test_the_staged_subtotal_is_flagged_by_the_arithmetic_and_only_confidence_flags_the_rest(
     db_session: AsyncSession, seeded: SeedSummary
 ) -> None:
     # Only the subtotal: the suggestion names it, so the line items, tax, and
@@ -418,9 +524,10 @@ async def test_the_staged_subtotal_is_flagged_by_the_arithmetic_and_pending_is_s
     assert await _flagged(db_session, seeded.document_ids[STAGED.doc_id]) == {
         "subtotal": "reconciliation:lines_sum"
     }
-    # The three genuinely uncertain fields of the replayed run, the staged
-    # subtotal, and the two staged amounts of 028.
-    assert seeded.pending_review == 6
+    # The three uncertain fields of the replayed v1 run, the 52 fields the v3
+    # run left null at confidence 0.0, the staged subtotal, and the two staged
+    # amounts of 028 (see the pending-review test for the breakdown).
+    assert seeded.pending_review == 58
 
     every_field = (
         await db_session.execute(
@@ -436,8 +543,13 @@ async def test_the_staged_subtotal_is_flagged_by_the_arithmetic_and_pending_is_s
 
 
 async def test_a_document_no_run_scored_replays_its_label_with_gold_evidence(
-    db_session: AsyncSession, seeded: SeedSummary
+    db_session: AsyncSession, label_seeded: SeedSummary
 ) -> None:
+    seeded = label_seeded
+    # No later run in the (empty) results directory: all seven are label replays,
+    # and the queue holds the v1 run's three uncertain fields and the three staged.
+    assert seeded.label_replays == 7
+    assert seeded.pending_review == 6
     doc_id = "026-invoice-discount-shipping-two-taxes"
     case = next(c for c in load_cases() if c.doc_id == doc_id)
     extraction = (
@@ -470,10 +582,16 @@ async def test_a_document_no_run_scored_replays_its_label_with_gold_evidence(
 
 
 async def test_the_staged_028_amounts_pass_the_arithmetic_and_fail_their_quotes(
-    db_session: AsyncSession, seeded: SeedSummary
+    db_session: AsyncSession, seeded: SeedSummary, v3_entries: dict[str, dict]
 ) -> None:
     document_id = seeded.document_ids[QUOTE_STAGED[0].doc_id]
     case = next(c for c in load_cases() if c.doc_id == QUOTE_STAGED[0].doc_id)
+    # The staged leaf keeps the quote the committed v3 run cited, and that quote
+    # prints the true amount (here the gold one), so the staged value disagrees.
+    for staged_case in QUOTE_STAGED:
+        replayed = v3_entries[staged_case.doc_id]["fields"][staged_case.field_name]
+        assert replayed["actual"] == case.fields[staged_case.field_name]
+        assert replayed["evidence"] == case.evidence[staged_case.field_name]
     assert {c.field_name for c in QUOTE_STAGED} == {"amount_paid", "amount_due"}
     # The misreads are the printed amounts moved by one number in opposite
     # directions, so total - paid = due still holds.
