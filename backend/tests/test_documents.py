@@ -251,6 +251,35 @@ async def test_get_document_pads_to_the_document_currency(
     assert await total_of(extra_digits) == "46.255"
 
 
+async def test_get_document_serves_the_prompt_cache_tokens_beside_the_uncached_input(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document_id, extraction_id, _ = await seed_v2(db_session)
+    extraction = await db_session.get(Extraction, extraction_id)
+    extraction.input_tokens = 1329
+    extraction.cache_creation_input_tokens = 0
+    extraction.cache_read_input_tokens = 8000
+    await db_session.commit()
+
+    body = (await client.get(f"/documents/{document_id}")).json()["extraction"]
+
+    assert (body["input_tokens"], body["cache_creation_input_tokens"], body["cache_read_input_tokens"]) == (
+        1329,
+        0,
+        8000,
+    )
+
+
+async def test_an_extraction_without_a_cache_serves_zero_cache_tokens(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    document_id, _, _ = await seed_v2(db_session)
+
+    body = (await client.get(f"/documents/{document_id}")).json()["extraction"]
+
+    assert (body["cache_creation_input_tokens"], body["cache_read_input_tokens"]) == (0, 0)
+
+
 async def test_get_document_serves_a_v2_extraction_as_decimal_strings_with_evidence(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

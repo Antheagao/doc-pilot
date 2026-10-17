@@ -35,7 +35,9 @@ and, for values the gold label cites, page agreement and quote agreement are
 counted apart from it. A leaf with a quote but no page counts as covered and as
 a page miss; a leaf with no quote at all is both. The gold label's quotes keep
 the document's column padding, so quotes are compared with their whitespace
-collapsed.
+collapsed. A header field's quote must equal the gold quote; the cell of a line
+item or tax line may also quote just the cell, so it agrees when it is whole
+words of the gold quote, which cites the whole printed row.
 """
 
 import difflib
@@ -415,7 +417,8 @@ class EvidenceCounts:
     line counts as a leaf), `with_quote` those carrying a usable quote.
     `gold_judged` are the leaves whose path the gold label cites, and
     `page_agree` / `quote_agree` how many of those name the gold page and quote
-    the gold text (whitespace collapsed). A leaf with no quote is a page miss and
+    the gold text (whitespace collapsed; a cell may quote whole words of the gold
+    row, see _leaf_evidence_counts). A leaf with no quote is a page miss and
     a quote miss too; one with a quote and no page is covered but a page miss.
     """
 
@@ -457,20 +460,38 @@ def _collapse_whitespace(text: str) -> str:
 
 
 def _leaf_evidence_counts(
-    value: Any, evidence: dict[str, Any] | None, gold: dict[str, Any] | None
+    value: Any,
+    evidence: dict[str, Any] | None,
+    gold: dict[str, Any] | None,
+    *,
+    cell: bool = False,
 ) -> EvidenceCounts:
     """The counts for one leaf: nothing for a null value, else whether it has a
-    quote and, when the gold label cites the path, whether page and quote agree."""
+    quote and, when the gold label cites the path, whether page and quote agree.
+
+    A header field's quote agrees only when it equals the gold quote. The gold
+    quote of a line-item or tax-line cell is the whole printed row, and a model
+    that quotes just the cell ("Hydraulic Hose Assembly 3/4in") has read the
+    same line, so a `cell` agrees when its quote is the gold row or whole
+    whitespace-separated words of it, in order (exact characters, whitespace
+    collapsed on both sides). Words, not characters: a bare "$", or "154" against
+    a row that prints "$154.00", is part of a token and is not that cell's quote."""
     if value is None:
         return EvidenceCounts()
     has_quote = evidence is not None
     judged = gold is not None
     page_agree = judged and has_quote and evidence["page"] == gold["page"]
-    quote_agree = (
-        judged
-        and has_quote
-        and _collapse_whitespace(evidence["quote"]) == _collapse_whitespace(gold["quote"])
-    )
+    quote_agree = False
+    if judged and has_quote:
+        quoted = _collapse_whitespace(evidence["quote"])
+        printed = _collapse_whitespace(gold["quote"])
+        if cell:
+            quote_agree = (
+                bool(quoted)
+                and re.search(rf"(?<!\S){re.escape(quoted)}(?!\S)", printed) is not None
+            )
+        else:
+            quote_agree = quoted == printed
     return EvidenceCounts(1, int(has_quote), int(judged), int(page_agree), int(quote_agree))
 
 
@@ -489,6 +510,7 @@ def _array_evidence_counts(
                 _coerce_leaf(raw)[0],
                 _stored_leaf(raw, schema)["evidence"],
                 gold_evidence.get(f"{name}[{index}].{key}"),
+                cell=True,
             )
     return total
 

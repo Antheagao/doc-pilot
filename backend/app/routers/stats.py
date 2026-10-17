@@ -79,6 +79,8 @@ async def get_stats(
                 func.sum(Extraction.cost_usd),
                 func.sum(Extraction.input_tokens),
                 func.sum(Extraction.output_tokens),
+                func.sum(Extraction.cache_creation_input_tokens),
+                func.sum(Extraction.cache_read_input_tokens),
                 func.percentile_cont(0.5).within_group(Extraction.latency_ms.asc()),
                 func.percentile_cont(0.95).within_group(Extraction.latency_ms.asc()),
             ).select_from(Extraction)
@@ -90,6 +92,8 @@ async def get_stats(
         total_cost_usd_raw,
         total_input_tokens_raw,
         total_output_tokens_raw,
+        total_cache_creation_raw,
+        total_cache_read_raw,
         latency_p50_ms,
         latency_p95_ms,
     ) = extraction_row
@@ -101,6 +105,8 @@ async def get_stats(
     total_cost_usd = float(total_cost_usd_raw) if total_cost_usd_raw is not None else 0.0
     total_input_tokens = total_input_tokens_raw or 0
     total_output_tokens = total_output_tokens_raw or 0
+    total_cache_creation = total_cache_creation_raw or 0
+    total_cache_read = total_cache_read_raw or 0
     mean_cost_per_doc = (
         total_cost_usd / documents_processed if documents_processed else None
     )
@@ -178,6 +184,8 @@ async def get_stats(
         mean_cost_per_doc=mean_cost_per_doc,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
+        total_cache_creation_input_tokens=total_cache_creation,
+        total_cache_read_input_tokens=total_cache_read,
         latency_p50_ms=latency_p50_ms,
         latency_p95_ms=latency_p95_ms,
         review=StatsReview(

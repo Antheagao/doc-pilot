@@ -1326,6 +1326,72 @@ class TestEvidenceCounts:
 
         assert counts.quote_agree == counts.gold_judged == counts.leaves
 
+    def test_a_cell_may_quote_part_of_the_gold_row(self):
+        case = _label_case("001")
+        gold_quote = case.evidence["line_items[0].description"]["quote"]
+        description = case.fields["line_items"][0]["description"]
+        assert description in gold_quote and description != " ".join(gold_quote.split())
+
+        def quote_the_cell(tool):
+            tool["line_items"]["value"][0]["description"]["evidence"] = {
+                "page": 1,
+                "quote": description,
+            }
+
+        counts = _counts(case, quote_the_cell)["line_items"]
+
+        assert counts.quote_agree == counts.gold_judged == counts.leaves
+
+    def test_a_cell_quoting_something_outside_the_gold_row_is_a_quote_miss(self):
+        case = _label_case("001")
+
+        def quote_another_row(tool):
+            tool["line_items"]["value"][0]["description"]["evidence"] = {
+                "page": 1,
+                "quote": "Amount due $1.00",
+            }
+
+        counts = _counts(case, quote_another_row)["line_items"]
+
+        assert counts.quote_agree == counts.gold_judged - 1
+
+    @pytest.mark.parametrize(
+        ("quote", "agrees"),
+        [
+            ("Cat Litter 10lb", True),
+            ("1", True),  # a whole word of the row "... 1 $11.30 $11.30"
+            ("$11.30", True),
+            ("$11.30 $11.30", True),
+            ("$", False),  # part of a word, not a word
+            ("11.30", False),  # "$11.30" with its sign cut off
+            ("Cat Lit", False),  # the front of a word
+            ("Litter 10", False),  # the front of a word
+            ("$11.30 Cat", False),  # words out of order
+        ],
+    )
+    def test_a_cell_quote_agrees_only_as_whole_words_of_the_gold_row(self, quote, agrees):
+        case = _label_case("001")
+        assert case.evidence["line_items[0].total"]["quote"].split() == ["Cat", "Litter", "10lb", "1", "$11.30", "$11.30"]
+
+        def quote_total(tool):
+            tool["line_items"]["value"][0]["total"]["evidence"] = {"page": 1, "quote": quote}
+
+        counts = _counts(case, quote_total)["line_items"]
+
+        assert counts.quote_agree == counts.gold_judged - (0 if agrees else 1)
+
+    def test_a_header_field_must_quote_the_gold_text_exactly(self):
+        case = _label_case("001")
+        gold_quote = case.evidence["total"]["quote"]
+        part = gold_quote.split()[-1]
+        assert part != " ".join(gold_quote.split())
+
+        counts = _counts(
+            case, lambda tool: tool["total"].update(evidence={"page": 1, "quote": part})
+        )
+
+        assert counts["total"] == EvidenceCounts(1, 1, 1, 1, 0)
+
     def test_another_quote_is_a_quote_miss_but_still_covered(self):
         case = _label_case("001")
 

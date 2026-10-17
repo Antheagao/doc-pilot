@@ -48,7 +48,8 @@ def _parse_args() -> argparse.Namespace:
         "--prompt",
         type=str,
         default="extract_v1",
-        help="extraction prompt version to run and score: extract_v1 (default) or extract_v2",
+        help="extraction prompt version to run and score: extract_v1 (default), "
+        "extract_v2, or extract_v3",
     )
     parser.add_argument("--model", type=str, default=None, help="override EXTRACTION_MODEL")
     parser.add_argument(

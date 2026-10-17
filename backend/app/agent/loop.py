@@ -42,6 +42,7 @@ from app.extraction import (
     PRICING_PER_MTOK,
     _build_client,
     _classify_api_error,
+    _usage_cost_usd,
 )
 from app.extraction_fields import PROMPTS_DIR
 from app.langfuse_link import observation_attributes
@@ -96,14 +97,6 @@ DOCUMENT_CHAT_PROMPT = AgentPrompt(
 _EFFORT_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5", "claude-sonnet-5", "claude-opus-4-8"}
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5"}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
-
-# Prompt-cache pricing relative to base input: 5-minute cache writes bill
-# at 1.25x; reads at 0.1x, except Claude Opus 5.5 at 0.05x (claude-api
-# skill, 2026-09). usage.input_tokens counts only the uncached remainder,
-# so leaving these out would under-report every cached call.
-CACHE_WRITE_MULTIPLIER = 1.25
-CACHE_READ_MULTIPLIER = {"claude-opus-5-5": 0.05}
-CACHE_READ_MULTIPLIER_DEFAULT = 0.10
 
 Status_ = Literal["answered", "refused", "truncated", "step_limit", "budget_exceeded"]
 
@@ -187,15 +180,7 @@ def call_cost_usd(requested_model: str, response: Any) -> float:
     """Cost of one call, priced at the model that actually served it (a
     refusal fallback may have), including prompt-cache reads and writes."""
     model = response.model if response.model in PRICING_PER_MTOK else requested_model
-    price_in, price_out = PRICING_PER_MTOK[model]
-    usage = response.usage
-    cache_write = getattr(usage, "cache_creation_input_tokens", None) or 0
-    cache_read = getattr(usage, "cache_read_input_tokens", None) or 0
-    read_multiplier = CACHE_READ_MULTIPLIER.get(model, CACHE_READ_MULTIPLIER_DEFAULT)
-    input_cost = price_in * (
-        usage.input_tokens + cache_write * CACHE_WRITE_MULTIPLIER + cache_read * read_multiplier
-    )
-    return (input_cost + price_out * usage.output_tokens) / 1_000_000
+    return _usage_cost_usd(model, response.usage)
 
 
 def model_request_options(model: str, effort: str, refusal_fallback: bool) -> dict[str, Any]:

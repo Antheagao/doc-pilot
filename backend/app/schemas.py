@@ -133,8 +133,12 @@ class ExtractionOut(BaseModel):
     model: str
     cost_usd: float
     latency_ms: int
+    # input_tokens is the uncached remainder of the prompt; the prompt-cache
+    # tokens are counted apart, so the prompt's size is the three summed.
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
     created_at: datetime
     fields: list[ExtractedFieldOut]
     # Null for an extraction nobody has reconciled yet (scripts/reconcile_all.py
@@ -245,8 +249,11 @@ class StatsOut(BaseModel):
     extractions_total: int
     total_cost_usd: float
     mean_cost_per_doc: float | None
+    # Uncached input only; the prompt-cache tokens are the next two fields.
     total_input_tokens: int
     total_output_tokens: int
+    total_cache_creation_input_tokens: int = 0
+    total_cache_read_input_tokens: int = 0
     latency_p50_ms: float | None
     latency_p95_ms: float | None
     review: StatsReview

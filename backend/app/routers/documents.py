@@ -215,6 +215,8 @@ async def get_document(
             latency_ms=extraction.latency_ms,
             input_tokens=extraction.input_tokens,
             output_tokens=extraction.output_tokens,
+            cache_creation_input_tokens=extraction.cache_creation_input_tokens,
+            cache_read_input_tokens=extraction.cache_read_input_tokens,
             created_at=extraction.created_at,
             fields=[field_to_out(f, minor_units, schema) for f in fields],
             reconciliation=None if reconciliation is None else reconciliation_to_out(reconciliation),

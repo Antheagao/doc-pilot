@@ -35,7 +35,12 @@ from app.extraction import (
     merge_page_tool_inputs,
     process_document_job,
 )
-from app.extraction_fields import SCHEMA_V1, SCHEMA_V2, record_extraction_tool
+from app.extraction_fields import (
+    SCHEMA_V1,
+    SCHEMA_V2,
+    SCHEMA_V3,
+    record_extraction_tool,
+)
 from app.models import Document, ExtractedField, Extraction, Job, Reconciliation
 from app.reconcile import ReconcileInput, reconcile
 from app.review_routing import Routing
@@ -84,9 +89,17 @@ REALISTIC_TOOL_INPUT = {
 
 
 class _FakeUsage:
-    def __init__(self, input_tokens: int, output_tokens: int) -> None:
+    def __init__(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
+    ) -> None:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
 
 
 class _FakeToolUseBlock:
@@ -1611,7 +1624,9 @@ async def test_a_v2_extraction_is_requested_and_persisted_with_evidence(
 
     kwargs = fake_client.messages.create.await_args.kwargs
     assert kwargs["tools"] == [record_extraction_tool(SCHEMA_V2)]
-    assert kwargs["system"] == SCHEMA_V2.prompt_text
+    assert kwargs["system"] == [
+        {"type": "text", "text": SCHEMA_V2.prompt_text, "cache_control": {"type": "ephemeral"}}
+    ]
     assert kwargs["max_tokens"] == 16384
     assert kwargs["tool_choice"] == {"type": "tool", "name": "record_extraction"}
 
@@ -2433,3 +2448,221 @@ async def test_a_first_call_cut_off_at_max_tokens_carries_its_stop_reason_on_the
 def test_the_pricing_table_matches_the_published_prices(model: str, dollars: float) -> None:
     assert extraction_module._compute_cost_usd(model, 1_000_000, 1_000_000) == pytest.approx(dollars)
 
+
+
+# --- prompt caching (v2 only) --------------------------------------------
+
+
+def _cache_controls(value) -> list:
+    """Every cache_control anywhere in a request's keyword arguments."""
+    found: list = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "cache_control":
+                found.append(item)
+            else:
+                found.extend(_cache_controls(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_cache_controls(item))
+    return found
+
+
+async def test_a_v1_request_carries_no_cache_control(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_client = _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(10, 5)),
+    )
+
+    await _extract_from_tmp_file(tmp_path)
+
+    kwargs = fake_client.messages.create.await_args.kwargs
+    assert kwargs["system"] == SCHEMA_V1.prompt_text
+    assert isinstance(kwargs["system"], str)
+    assert _cache_controls(kwargs) == []
+    assert "cache_control" not in json.dumps(kwargs["tools"])
+
+
+async def test_a_v2_request_caches_the_tool_and_the_prompt_but_not_the_document(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_prompt_version(monkeypatch, "extract_v2")
+    fake_client = _patch_client(monkeypatch, _v2_response(v2_tool_input()))
+
+    await _extract_from_tmp_file(tmp_path)
+
+    kwargs = fake_client.messages.create.await_args.kwargs
+    # The breakpoint is the last system block, so the cache covers the tools
+    # (which render first) and the prompt; the document renders after it.
+    assert kwargs["system"] == [
+        {"type": "text", "text": SCHEMA_V2.prompt_text, "cache_control": {"type": "ephemeral"}}
+    ]
+    assert _cache_controls(kwargs) == [{"type": "ephemeral"}]
+    assert "cache_control" not in json.dumps(kwargs["tools"])
+    assert "cache_control" not in json.dumps(kwargs["messages"])
+
+
+async def test_a_failed_call_carries_its_cache_tokens_on_the_error(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_prompt_version(monkeypatch, "extract_v2")
+    response = _FakeMessage(
+        "max_tokens",
+        [_FakeTextBlock("(cut)")],
+        _FakeUsage(300, 16384, cache_creation_input_tokens=8000),
+    )
+    _patch_client(monkeypatch, response)
+
+    with pytest.raises(NonRetryableExtractionError) as exc_info:
+        await _extract_from_tmp_file(tmp_path)
+
+    exc = exc_info.value
+    assert (exc.input_tokens, exc.output_tokens) == (300, 16384)
+    assert (exc.cache_creation_input_tokens, exc.cache_read_input_tokens) == (8000, 0)
+    assert exc.cost_usd == pytest.approx(((300 + 8000 * 1.25) * 2.00 + 16384 * 10.00) / 1_000_000)
+
+
+async def test_a_v3_request_sends_the_v3_prompt_with_the_same_cache_breakpoint(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_prompt_version(monkeypatch, "extract_v3")
+    fake_client = _patch_client(monkeypatch, _v2_response(v2_tool_input()))
+
+    result = await _extract_from_tmp_file(tmp_path)
+
+    kwargs = fake_client.messages.create.await_args.kwargs
+    assert result.prompt_version == "extract_v3"
+    assert kwargs["system"] == [
+        {"type": "text", "text": SCHEMA_V3.prompt_text, "cache_control": {"type": "ephemeral"}}
+    ]
+    assert kwargs["tools"] == [record_extraction_tool(SCHEMA_V2)]
+    assert _cache_controls(kwargs) == [{"type": "ephemeral"}]
+    assert kwargs["max_tokens"] == SCHEMA_V2.max_tokens
+
+
+async def test_a_v2_repair_call_sends_the_same_cached_prefix(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_prompt_version(monkeypatch, "extract_v2")
+    broken = v2_tool_input()
+    broken["subtotal"] = 100  # a bare scalar where a leaf belongs
+    first = _FakeMessage(
+        "tool_use",
+        [_FakeToolUseBlock(broken, tool_use_id="toolu_1")],
+        _FakeUsage(300, 400, cache_creation_input_tokens=8000),
+    )
+    second = _FakeMessage(
+        "tool_use",
+        [_FakeToolUseBlock(v2_tool_input(), tool_use_id="toolu_2")],
+        _FakeUsage(350, 450, cache_read_input_tokens=8000),
+    )
+    fake_client = _patch_client_side_effect(monkeypatch, [first, second])
+
+    result = await _extract_from_tmp_file(tmp_path)
+
+    first_kwargs, second_kwargs = (c.kwargs for c in fake_client.messages.create.await_args_list)
+    assert result.repaired is True
+    for key in ("system", "tools", "tool_choice"):
+        assert second_kwargs[key] == first_kwargs[key]
+    assert _cache_controls(second_kwargs) == [{"type": "ephemeral"}]
+    # Both calls are summed, the written and the read tokens apart from the
+    # uncached remainder.
+    assert result.input_tokens == 300 + 350
+    assert result.output_tokens == 400 + 450
+    assert result.cache_creation_input_tokens == 8000
+    assert result.cache_read_input_tokens == 8000
+    expected = ((300 + 350) + 8000 * 1.25 + 8000 * 0.10) * 2.00 + (400 + 450) * 10.00
+    assert result.cost_usd == pytest.approx(expected / 1_000_000)
+
+
+async def test_a_cached_extraction_is_stored_with_its_cache_tokens(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_prompt_version(monkeypatch, "extract_v2")
+    response = _FakeMessage(
+        "tool_use",
+        [_FakeToolUseBlock(v2_tool_input())],
+        _FakeUsage(500, 600, cache_creation_input_tokens=8000, cache_read_input_tokens=0),
+    )
+    _patch_client(monkeypatch, response)
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    extraction = (
+        await db_session.execute(select(Extraction).where(Extraction.document_id == document.id))
+    ).scalars().one()
+    assert (extraction.input_tokens, extraction.output_tokens) == (500, 600)
+    assert extraction.cache_creation_input_tokens == 8000
+    assert extraction.cache_read_input_tokens == 0
+    assert float(extraction.cost_usd) == pytest.approx(
+        ((500 + 8000 * 1.25) * 2.00 + 600 * 10.00) / 1_000_000
+    )
+
+
+async def test_an_uncached_extraction_stores_zero_cache_tokens(
+    db_session: AsyncSession, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_client(
+        monkeypatch,
+        _FakeMessage("tool_use", [_FakeToolUseBlock(REALISTIC_TOOL_INPUT)], _FakeUsage(10, 5)),
+    )
+    document = await _make_document(db_session, tmp_path)
+    job = await _make_job(db_session, document.id)
+
+    await process_document_job(db_session, job)
+    await db_session.flush()
+
+    extraction = (
+        await db_session.execute(select(Extraction).where(Extraction.document_id == document.id))
+    ).scalars().one()
+    assert (extraction.cache_creation_input_tokens, extraction.cache_read_input_tokens) == (0, 0)
+
+
+# The published cache-read price as a multiple of the input price (claude-api
+# skill): 0.1x for most models, 0.05x for Claude Opus 5.5.
+_CACHE_READ_MULTIPLIERS = {
+    "claude-sonnet-5": 0.10,
+    "claude-opus-5": 0.10,
+    "claude-haiku-4-5": 0.10,
+    "claude-opus-5-5": 0.05,
+    "claude-sonnet-5-5": 0.10,
+    "claude-opus-4-8": 0.10,
+}
+
+
+def test_every_priced_model_has_a_checked_cache_read_multiplier() -> None:
+    assert set(extraction_module.PRICING_PER_MTOK) == set(_CACHE_READ_MULTIPLIERS)
+
+
+@pytest.mark.parametrize("model", sorted(extraction_module.PRICING_PER_MTOK))
+def test_cache_writes_bill_at_one_and_a_quarter_and_reads_at_the_models_multiplier(
+    model: str,
+) -> None:
+    price = extraction_module.PRICING_PER_MTOK[model]
+
+    cost = extraction_module._compute_cost_usd(
+        model, 0, 0, cache_creation_input_tokens=1_000_000, cache_read_input_tokens=1_000_000
+    )
+
+    assert price.cache_read_multiplier == _CACHE_READ_MULTIPLIERS[model]
+    assert cost == pytest.approx(price.input * (1.25 + _CACHE_READ_MULTIPLIERS[model]))
+
+
+def test_a_cost_without_cache_tokens_is_unchanged() -> None:
+    assert extraction_module._compute_cost_usd("claude-sonnet-5", 1000, 500) == (
+        (1000 * 2.00 + 500 * 10.00) / 1_000_000
+    )
+
+
+def test_a_usage_block_without_cache_fields_prices_as_uncached() -> None:
+    usage = type("Usage", (), {"input_tokens": 1000, "output_tokens": 500})()
+
+    assert extraction_module._cache_tokens(usage) == (0, 0)
+    assert extraction_module._usage_cost_usd("claude-sonnet-5", usage) == (
+        extraction_module._compute_cost_usd("claude-sonnet-5", 1000, 500)
+    )

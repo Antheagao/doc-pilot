@@ -153,6 +153,44 @@ async def test_stats_reflects_seeded_document_and_extractions(
     assert isinstance(after["mean_cost_per_doc"], float)
 
 
+async def test_stats_sums_the_prompt_cache_tokens_apart_from_the_uncached_input(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    before = (await client.get("/stats")).json()
+    document = Document(
+        filename="cached.png",
+        mime_type="image/png",
+        storage_path=f"/tmp/{uuid.uuid4()}.png",
+        status="extracted",
+    )
+    db_session.add(document)
+    await db_session.flush()
+    db_session.add_all(
+        Extraction(
+            document_id=document.id,
+            prompt_version="extract_v2",
+            model="claude-sonnet-5",
+            raw_response={},
+            input_tokens=500,
+            output_tokens=100,
+            cache_creation_input_tokens=creation,
+            cache_read_input_tokens=read,
+            cost_usd=0.01,
+            latency_ms=1000,
+        )
+        for creation, read in ((8000, 0), (0, 8000))
+    )
+    await db_session.commit()
+
+    after = (await client.get("/stats")).json()
+
+    assert after["total_input_tokens"] == before["total_input_tokens"] + 1000
+    assert after["total_cache_creation_input_tokens"] == (
+        before["total_cache_creation_input_tokens"] + 8000
+    )
+    assert after["total_cache_read_input_tokens"] == before["total_cache_read_input_tokens"] + 8000
+
+
 async def test_last_eval_is_null_or_has_documented_shape(client: AsyncClient) -> None:
     response = await client.get("/stats")
 

@@ -72,9 +72,17 @@ def _build_zero_page_pdf() -> bytes:
 
 
 class _FakeUsage:
-    def __init__(self, input_tokens: int, output_tokens: int) -> None:
+    def __init__(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
+    ) -> None:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
 
 
 class _FakeToolUseBlock:
@@ -1022,6 +1030,96 @@ async def test_chunked_page_failure_preserves_exception_type_and_prior_pages_spe
     assert exc.output_tokens == 50 + 10
     expected_cost = ((100 + 20) * 2.00 + (50 + 10) * 10.00) / 1_000_000
     assert exc.cost_usd == pytest.approx(expected_cost)
+
+
+def _chunked_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        extraction_module,
+        "get_settings",
+        lambda: Settings(
+            extraction_model="claude-sonnet-5", review_threshold=0.8, pdf_max_pages_per_call=2
+        ),
+    )
+
+
+async def test_a_chunked_extraction_prices_the_summed_tokens_once_and_sums_the_cache_tokens(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _chunked_settings(monkeypatch)
+    path = tmp_path / "invoice.pdf"
+    path.write_bytes(_build_multipage_pdf(3))
+    pages = [
+        _FakeMessage(
+            "tool_use",
+            [_FakeToolUseBlock(_minimal_page(vendor=_leaf("Acme", 0.9)), tool_use_id=f"toolu_{n}")],
+            usage,
+        )
+        for n, usage in enumerate(
+            [
+                _FakeUsage(100, 50, cache_creation_input_tokens=8000),
+                _FakeUsage(110, 60, cache_read_input_tokens=8000),
+                _FakeUsage(120, 70, cache_read_input_tokens=8000),
+            ]
+        )
+    ]
+    _patch_client_side_effect(monkeypatch, pages)
+
+    result = await extract_document(path, "application/pdf")
+
+    assert (result.input_tokens, result.output_tokens) == (330, 180)
+    assert (result.cache_creation_input_tokens, result.cache_read_input_tokens) == (8000, 16000)
+    assert result.cost_usd == extraction_module._compute_cost_usd(
+        "claude-sonnet-5", 330, 180, 8000, 16000
+    )
+
+
+async def test_an_uncached_chunked_extraction_keeps_its_exact_v1_cost(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _chunked_settings(monkeypatch)
+    path = tmp_path / "invoice.pdf"
+    path.write_bytes(_build_multipage_pdf(3))
+    usages = [(1234, 567), (2345, 678), (3456, 789)]
+    _patch_client_side_effect(
+        monkeypatch,
+        [
+            _FakeMessage(
+                "tool_use",
+                [_FakeToolUseBlock(_minimal_page(vendor=_leaf("Acme", 0.9)), tool_use_id=f"toolu_{n}")],
+                _FakeUsage(i, o),
+            )
+            for n, (i, o) in enumerate(usages)
+        ],
+    )
+
+    result = await extract_document(path, "application/pdf")
+
+    total_in, total_out = sum(i for i, _ in usages), sum(o for _, o in usages)
+    assert result.cost_usd == (total_in * 2.00 + total_out * 10.00) / 1_000_000
+
+
+async def test_a_chunked_failure_carries_the_cache_tokens_of_every_call_so_far(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _chunked_settings(monkeypatch)
+    path = tmp_path / "invoice.pdf"
+    path.write_bytes(_build_multipage_pdf(3))
+    page1 = _FakeMessage(
+        "tool_use",
+        [_FakeToolUseBlock(_minimal_page(vendor=_leaf("Acme", 0.9)), tool_use_id="toolu_1")],
+        _FakeUsage(100, 50, cache_creation_input_tokens=8000),
+    )
+    refusal = _FakeMessage(
+        "refusal", [], _FakeUsage(20, 10, cache_read_input_tokens=8000)
+    )
+    _patch_client_side_effect(monkeypatch, [page1, refusal])
+
+    with pytest.raises(ModelRefusalError) as exc_info:
+        await extract_document(path, "application/pdf")
+
+    exc = exc_info.value
+    assert (exc.cache_creation_input_tokens, exc.cache_read_input_tokens) == (8000, 8000)
+    assert exc.cost_usd == extraction_module._compute_cost_usd("claude-sonnet-5", 120, 60, 8000, 8000)
 
 
 async def test_every_pages_stop_reasons_are_recorded_and_a_failure_keeps_the_earlier_pages(

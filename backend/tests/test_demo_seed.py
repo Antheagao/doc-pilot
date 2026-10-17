@@ -38,7 +38,7 @@ from app.demo_seed import (
 )
 from app.evals.checks import label_tool_input
 from app.evals.dataset import load_cases
-from app.extraction_fields import SCHEMA_V1, SCHEMA_V2
+from app.extraction_fields import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3
 from app.models import (
     Document,
     DocumentPage,
@@ -515,9 +515,12 @@ async def test_the_staged_028_amounts_pass_the_arithmetic_and_fail_their_quotes(
     assert report["suggestion"] is None
 
 
-def _v2_artifact(model: str, doc_ids: list[str], started: str) -> dict:
-    """A scored extract_v2 artifact holding `doc_ids`, answered from their labels
-    at confidence 0.9, in the shape evals/run.py writes."""
+def _v2_artifact(
+    model: str, doc_ids: list[str], started: str, prompt_version: str = "extract_v2"
+) -> dict:
+    """A scored artifact of an evidence-carrying prompt version (extract_v2 unless
+    told otherwise) holding `doc_ids`, answered from their labels at confidence
+    0.9, in the shape evals/run.py writes."""
     cases = {c.doc_id: c for c in load_cases()}
     per_doc = []
     for doc_id in doc_ids:
@@ -538,7 +541,12 @@ def _v2_artifact(model: str, doc_ids: list[str], started: str) -> dict:
                 "output_tokens": 1500,
             }
         )
-    return {"model": model, "prompt_version": "extract_v2", "started_at_utc": started, "per_doc": per_doc}
+    return {
+        "model": model,
+        "prompt_version": prompt_version,
+        "started_at_utc": started,
+        "per_doc": per_doc,
+    }
 
 
 def test_a_later_run_replays_instead_of_the_label_and_only_for_the_same_model(
@@ -573,6 +581,55 @@ def test_a_later_run_replays_instead_of_the_label_and_only_for_the_same_model(
     assert all(r.model == artifact["model"] for d, r in replays.items() if r.entry is not None)
     # 001-025 still replay the committed v1 run.
     assert all(replays[e["doc_id"]].artifact == REPLAY_ARTIFACT for e in artifact["per_doc"])
+
+
+def test_a_v3_run_is_a_later_run_too_and_the_newest_one_wins(
+    artifact: dict, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doc_ids = sorted([e["doc_id"] for e in artifact["per_doc"]] + LABEL_DOC_IDS)
+    monkeypatch.setattr(demo_seed, "RESULTS_DIR", tmp_path)
+    v2 = _v2_artifact(artifact["model"], LABEL_DOC_IDS[:4], "v2")
+    v3 = _v2_artifact(artifact["model"], LABEL_DOC_IDS[:2], "v3", prompt_version="extract_v3")
+    unknown = _v2_artifact(artifact["model"], LABEL_DOC_IDS, "later", prompt_version="extract_v9")
+    for name, run in (
+        ("20260901T000000Z_claude-sonnet-5_extract_v2.json", v2),
+        ("20260902T000000Z_claude-sonnet-5_extract_v3.json", v3),
+        # A prompt version this code does not know is never replayed.
+        ("20260903T000000Z_claude-sonnet-5_extract_v9.json", unknown),
+    ):
+        (tmp_path / name).write_text(json.dumps(run), encoding="utf-8")
+
+    replays = choose_replays(doc_ids, artifact)
+
+    for doc_id in LABEL_DOC_IDS[:2]:
+        assert replays[doc_id].artifact.name == "20260902T000000Z_claude-sonnet-5_extract_v3.json"
+        assert replays[doc_id].schema is SCHEMA_V3
+    for doc_id in LABEL_DOC_IDS[2:4]:
+        assert replays[doc_id].artifact.name == "20260901T000000Z_claude-sonnet-5_extract_v2.json"
+        assert replays[doc_id].schema is SCHEMA_V2
+    for doc_id in LABEL_DOC_IDS[4:]:
+        assert replays[doc_id].entry is None
+
+
+async def test_a_v3_run_is_seeded_under_its_own_prompt_version(
+    db_session: AsyncSession, settings: Settings, artifact: dict, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path.parent / f"{tmp_path.name}-v3-runs"
+    runs.mkdir()
+    doc_id = LABEL_DOC_IDS[0]
+    name = "20260901T000000Z_claude-sonnet-5_extract_v3.json"
+    run = _v2_artifact(artifact["model"], [doc_id], "x", prompt_version="extract_v3")
+    (runs / name).write_text(json.dumps(run), encoding="utf-8")
+    monkeypatch.setattr(demo_seed, "RESULTS_DIR", runs)
+
+    seeded = await seed_demo_data(db_session, settings, HashingEmbedder(), now=NOW)
+
+    extraction = (
+        await db_session.execute(select(Extraction).where(Extraction.document_id == seeded.document_ids[doc_id]))
+    ).scalar_one()
+    assert (extraction.model, extraction.prompt_version) == (artifact["model"], "extract_v3")
+    assert extraction.raw_response["_demo_replay"]["artifact"] == name
+    assert extraction.raw_response["total"]["evidence"]["quote"]
 
 
 async def test_a_later_run_is_seeded_with_its_provenance_and_evidence(

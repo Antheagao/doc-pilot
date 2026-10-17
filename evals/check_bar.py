@@ -39,7 +39,7 @@ def _load(path: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check the schema v2 acceptance bar.")
     parser.add_argument("v1_artifact", help="the model's extract_v1 run (evals/results/*.json)")
-    parser.add_argument("v2_artifact", help="the same model's extract_v2 run")
+    parser.add_argument("v2_artifact", help="the same model's run with evidence (extract_v2 or extract_v3)")
     args = parser.parse_args()
 
     from app.evals.bar import evaluate_bar

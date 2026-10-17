@@ -5,7 +5,8 @@ spending a cent: every document is the eval corpus image, and its extraction
 replays what claude-sonnet-5 really returned for it (values, confidences,
 cost, latency, tokens) from a committed artifact in evals/results/. The
 documents 001-025 replay the v1 run (REPLAY_ARTIFACT). A later document replays
-the newest committed extract_v2 run of the same model that scored it, and a
+the newest committed run of the same model that scored it with a schema that
+carries evidence (extract_v2 or later), and a
 document no run has scored (today: 026-032, until the paid v2 run is committed)
 replays its label at full confidence with its gold evidence, tagged
 `_demo_replay.source = "label"` and counted in the summary (`label_replays`),
@@ -47,7 +48,7 @@ from app.evals.checks import label_tool_input
 from app.evals.dataset import EVALS_DIR, EvalCase, load_cases
 from app.evals.retrieval import load_gold_corpus
 from app.extraction import build_extracted_fields
-from app.extraction_fields import SCHEMA_V2, ExtractionSchema, schema_for
+from app.extraction_fields import SCHEMA_V2, SCHEMAS, ExtractionSchema, schema_for
 from app.models import (
     REVIEW_REASON_CONFIDENCE,
     Document,
@@ -178,27 +179,34 @@ def _scored_entries(artifact: dict) -> dict[str, dict]:
     return {e["doc_id"]: e for e in artifact["per_doc"] if e["status"] == "scored"}
 
 
-def _v2_artifacts(model: str) -> list[tuple[Path, dict]]:
-    """The committed extract_v2 runs of `model` in RESULTS_DIR, newest first
-    (the file names start with their UTC start time). A run of another model is
-    not shown as this one's answer."""
+def _evidence_artifacts(model: str) -> list[tuple[Path, dict]]:
+    """The committed runs of `model` in RESULTS_DIR whose schema carries
+    evidence (extract_v2, extract_v3, ...), newest first (the file names start
+    with their UTC start time). A run of another model is not shown as this
+    one's answer, and neither is one of a prompt version this code does not
+    know."""
     runs = []
-    for path in sorted(RESULTS_DIR.glob(f"*_{SCHEMA_V2.prompt_version}.json"), reverse=True):
+    for path in sorted(RESULTS_DIR.glob("*_extract_v*.json"), reverse=True):
         artifact = json.loads(path.read_text(encoding="utf-8"))
-        if artifact["model"] == model and artifact["prompt_version"] == SCHEMA_V2.prompt_version:
+        schema = SCHEMAS.get(artifact["prompt_version"])
+        if artifact["model"] == model and schema is not None and schema.evidence:
             runs.append((path, artifact))
     return runs
 
 
 def choose_replays(doc_ids: list[str], primary: dict) -> dict[str, Replay]:
     """The replay of each document: the primary artifact's entry when it scored
-    the document (001-025, unchanged), else the newest committed v2 run of the
-    same model that did, else the label with its gold evidence."""
+    the document (001-025, unchanged), else the newest committed run of the same
+    model that did under a schema with evidence (any such prompt version), else
+    the label with its gold evidence."""
     primary_schema = schema_for(primary["prompt_version"])
     primary_entries = _scored_entries(primary)
     if len(primary_entries) != len(primary["per_doc"]):
         raise ValueError(f"{REPLAY_ARTIFACT.name} holds entries that were not scored")
-    later_runs = [(path, _scored_entries(a)) for path, a in _v2_artifacts(primary["model"])]
+    later_runs = [
+        (path, schema_for(a["prompt_version"]), _scored_entries(a))
+        for path, a in _evidence_artifacts(primary["model"])
+    ]
     replays = {}
     for doc_id in doc_ids:
         if doc_id in primary_entries:
@@ -206,11 +214,12 @@ def choose_replays(doc_ids: list[str], primary: dict) -> dict[str, Replay]:
                 primary_schema, primary["model"], REPLAY_ARTIFACT, primary_entries[doc_id]
             )
             continue
-        found = next(((p, e[doc_id]) for p, e in later_runs if doc_id in e), None)
+        found = next(((p, s, e[doc_id]) for p, s, e in later_runs if doc_id in e), None)
         if found is None:
             replays[doc_id] = Replay(SCHEMA_V2, LABEL_REPLAY_MODEL)
         else:
-            replays[doc_id] = Replay(SCHEMA_V2, primary["model"], *found)
+            path, schema, entry = found
+            replays[doc_id] = Replay(schema, primary["model"], path, entry)
     return replays
 
 
@@ -334,6 +343,11 @@ async def seed_demo_data(
                 },
                 input_tokens=entry["input_tokens"] if entry else 0,
                 output_tokens=entry["output_tokens"] if entry else 0,
+                # Artifacts written before prompt caching have no such keys.
+                cache_creation_input_tokens=(
+                    entry.get("cache_creation_input_tokens", 0) if entry else 0
+                ),
+                cache_read_input_tokens=entry.get("cache_read_input_tokens", 0) if entry else 0,
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
                 created_at=extracted_at,

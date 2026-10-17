@@ -78,9 +78,15 @@ class RunResult:
     # scored documents; scoring's own count (summary.total_schema_violations) is
     # of what the scorer had to coerce, a different measure.
     total_residual_schema_violations: int = 0
+    # Prompt-cache tokens over the scored documents, None for a schema that does
+    # not cache (v1), whose artifact then keeps its shape. total_input_tokens is
+    # the uncached remainder only, so a cached run's whole input is the three
+    # summed.
+    total_cache_creation_input_tokens: int | None = None
+    total_cache_read_input_tokens: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "model": self.model,
             "prompt_version": self.prompt_version,
             "dataset_version": self.dataset_version,
@@ -104,6 +110,10 @@ class RunResult:
             "per_doc": self.per_doc,
             "total_residual_schema_violations": self.total_residual_schema_violations,
         }
+        if self.total_cache_creation_input_tokens is not None:
+            data["total_cache_creation_input_tokens"] = self.total_cache_creation_input_tokens
+            data["total_cache_read_input_tokens"] = self.total_cache_read_input_tokens
+        return data
 
 
 def _percentile(sorted_values: list[float], pct: float) -> float:
@@ -257,6 +267,13 @@ async def run_eval(
                     "cost_usd": error_cost_usd,
                     "stop_reasons": getattr(exc, "stop_reasons", None),
                 }
+                if schema.prompt_cache:
+                    doc_details[idx]["cache_creation_input_tokens"] = getattr(
+                        exc, "cache_creation_input_tokens", None
+                    )
+                    doc_details[idx]["cache_read_input_tokens"] = getattr(
+                        exc, "cache_read_input_tokens", None
+                    )
                 if error_cost_usd is not None:
                     async with cost_lock:
                         state["cap_cost"] += error_cost_usd
@@ -283,13 +300,25 @@ async def run_eval(
                 "residual_schema_violations": result.schema_violations,
                 "stop_reasons": result.stop_reasons,
             }
+            if schema.prompt_cache:
+                doc_details[idx]["cache_creation_input_tokens"] = result.cache_creation_input_tokens
+                doc_details[idx]["cache_read_input_tokens"] = result.cache_read_input_tokens
 
             async with cost_lock:
                 state["cap_cost"] += result.cost_usd
                 if state["cap_cost"] > max_cost_usd:
                     state["cap_hit"] = True
 
-    await asyncio.gather(*(_run_one(idx, case) for idx, case in enumerate(cases)))
+    # A schema that caches its prompt writes the cache on its first call, and a
+    # cache entry can be read only once that call has begun to answer: documents
+    # started together would each pay to write it. So the first document runs
+    # alone and the rest, which read it, run together.
+    first_batch = 1 if schema.prompt_cache else 0
+    for idx in range(first_batch):
+        await _run_one(idx, cases[idx])
+    await asyncio.gather(
+        *(_run_one(idx, case) for idx, case in enumerate(cases) if idx >= first_batch)
+    )
 
     results = [r for r in results_by_idx if r is not None]
     case_scores = [s for s in case_scores_by_idx if s is not None]
@@ -353,6 +382,12 @@ async def run_eval(
         skipped_cost_cap=[d["doc_id"] for d in skipped],
         per_doc=[d for d in doc_details if d is not None],
         total_residual_schema_violations=sum(r.schema_violations for r in results),
+        total_cache_creation_input_tokens=(
+            sum(r.cache_creation_input_tokens for r in results) if schema.prompt_cache else None
+        ),
+        total_cache_read_input_tokens=(
+            sum(r.cache_read_input_tokens for r in results) if schema.prompt_cache else None
+        ),
     )
 
 

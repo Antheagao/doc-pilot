@@ -128,6 +128,14 @@ class Extraction(Base):
     raw_response: Mapped[dict] = mapped_column(JSONB, nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    # input_tokens is the uncached remainder of the call; the prompt-cache
+    # tokens are counted apart, and cost_usd prices all three.
+    cache_creation_input_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    cache_read_input_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), nullable=False)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

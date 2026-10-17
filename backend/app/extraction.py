@@ -32,7 +32,7 @@ import uuid
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import anthropic
 import httpx
@@ -68,23 +68,41 @@ logger = logging.getLogger(__name__)
 IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 PDF_MIME_TYPE = "application/pdf"
 
-# $ per million tokens (input, output), checked against Anthropic's
-# published pricing page on 2026-10-15. Sonnet 5's $2/$10, first announced
-# as introductory pricing, became its standard price: the planned rise to
-# $3/$15 did not happen. Update this table when a price changes or when
-# EXTRACTION_MODEL names a model it lacks.
-PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
-    "claude-sonnet-5": (2.00, 10.00),
-    "claude-opus-5": (5.00, 25.00),
-    "claude-haiku-4-5": (1.00, 5.00),
+class ModelPrice(NamedTuple):
+    """What a model costs: dollars per million input and output tokens, and the
+    price of a prompt-cache read as a multiple of the input price. A cache read is
+    0.1x for most models and 0.05x for Claude Opus 5.5; a field of its own, so a
+    model cannot be priced without deciding it."""
+
+    input: float
+    output: float
+    cache_read_multiplier: float
+
+
+# $ per million tokens, checked against Anthropic's published pricing page on
+# 2026-10-15 (cache-read multipliers from the claude-api skill, 2026-09). Sonnet
+# 5's $2/$10, first announced as introductory pricing, became its standard
+# price: the planned rise to $3/$15 did not happen. Update this table when a
+# price changes or when EXTRACTION_MODEL names a model it lacks.
+PRICING_PER_MTOK: dict[str, ModelPrice] = {
+    "claude-sonnet-5": ModelPrice(2.00, 10.00, 0.10),
+    "claude-opus-5": ModelPrice(5.00, 25.00, 0.10),
+    "claude-haiku-4-5": ModelPrice(1.00, 5.00, 0.10),
     # Added with the /ask agent (app/agent/), from the claude-api skill's
     # model table (cached 2026-09-25). claude-opus-4-8 is here because it
     # is where server-side refusal fallbacks route some declines, and a
     # response served by the fallback is priced at the fallback's rates.
-    "claude-opus-5-5": (4.00, 20.00),
-    "claude-sonnet-5-5": (2.00, 10.00),
-    "claude-opus-4-8": (5.00, 25.00),
+    "claude-opus-5-5": ModelPrice(4.00, 20.00, 0.05),
+    "claude-sonnet-5-5": ModelPrice(2.00, 10.00, 0.10),
+    "claude-opus-4-8": ModelPrice(5.00, 25.00, 0.10),
 }
+
+# 5-minute prompt-cache writes bill at 1.25x the input price, for every model
+# (claude-api skill, 2026-09). usage.input_tokens counts only the uncached
+# remainder, so a cost that leaves cache writes and reads out under-reports every
+# cached call.
+CACHE_WRITE_MULTIPLIER = 1.25
+
 
 class ExtractionError(Exception):
     """Raised when the VLM call fails to produce a usable extraction.
@@ -125,10 +143,16 @@ class ExtractionError(Exception):
         cost_usd: float | None = None,
         retry_after_seconds: float | None = None,
         stop_reasons: list[dict[str, str | None]] | None = None,
+        cache_creation_input_tokens: int | None = None,
+        cache_read_input_tokens: int | None = None,
     ) -> None:
         super().__init__(message)
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        # Prompt-cache tokens of the billed call, counted apart from
+        # input_tokens (the uncached remainder), like on ExtractionResult.
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
         self.cost_usd = cost_usd
         self.retry_after_seconds = retry_after_seconds
         # The stop reasons of the calls made before this failure, one entry per
@@ -182,6 +206,10 @@ class ExtractionResult:
     # repair call, None when none was made or it failed. A "max_tokens" here
     # means an answer was cut off, which tool_use alone would hide.
     stop_reasons: list[dict[str, str | None]] = dataclass_field(default_factory=list)
+    # Prompt-cache tokens, summed over the calls like input_tokens (which is
+    # the uncached remainder only): written to the cache and read from it.
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 def _build_client(settings: Settings) -> anthropic.AsyncAnthropic:
@@ -218,18 +246,73 @@ def _ensure_model_priced(model: str) -> None:
         )
 
 
-def _compute_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+def _cache_tokens(usage: Any) -> tuple[int, int]:
+    """(cache_creation_input_tokens, cache_read_input_tokens) of a response's
+    usage, 0 where the field is absent: a call without a cache breakpoint
+    reports zeros, and older responses and test doubles omit them."""
+    creation = getattr(usage, "cache_creation_input_tokens", None)
+    read = getattr(usage, "cache_read_input_tokens", None)
+    return (
+        creation if isinstance(creation, int) else 0,
+        read if isinstance(read, int) else 0,
+    )
+
+
+def _compute_cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
+) -> float:
+    """The dollar cost of a call. `input_tokens` is the uncached remainder
+    (what usage.input_tokens reports); cache writes and reads are priced at
+    their multipliers of the input price, so a cached prefix is not billed
+    as if it were fresh input, nor ignored."""
     # model is validated by _ensure_model_priced before extract_document
     # ever reaches this point, so this lookup cannot fail in practice --
     # the KeyError->NonRetryableExtractionError translation is a safety
     # net in case that invariant is ever broken by a future refactor.
     try:
-        price_in, price_out = PRICING_PER_MTOK[model]
+        price = PRICING_PER_MTOK[model]
     except KeyError:
         raise NonRetryableExtractionError(
             f"no pricing entry for model {model!r}; add it to PRICING_PER_MTOK"
         ) from None
-    return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+    billed_input = (
+        input_tokens
+        + cache_creation_input_tokens * CACHE_WRITE_MULTIPLIER
+        + cache_read_input_tokens * price.cache_read_multiplier
+    )
+    return (billed_input * price.input + output_tokens * price.output) / 1_000_000
+
+
+def _usage_cost_usd(model: str, usage: Any) -> float:
+    """The cost of one response from its usage block, cache tokens included."""
+    creation, read = _cache_tokens(usage)
+    return _compute_cost_usd(model, usage.input_tokens, usage.output_tokens, creation, read)
+
+
+def _system_for_request(schema: ExtractionSchema) -> str | list[dict[str, Any]]:
+    """The `system` argument of an extraction request. A schema with
+    `prompt_cache` sends the prompt as one block carrying a cache breakpoint:
+    the prompt cache is a prefix match over tools, then system, then messages,
+    so a breakpoint on the last system block caches the tool and the prompt
+    together and leaves the document, which differs per call and renders in
+    the messages, outside it. The repair call sends the same tool and prompt,
+    so it reads the entry the extraction call wrote. Default 5-minute TTL: a
+    run sends its calls back to back, and every read refreshes the entry.
+
+    Any other schema sends the prompt as the plain string it always did, so
+    its request is unchanged. A prefix under the model's minimum cacheable
+    length (1,024 tokens for claude-sonnet-5, 4,096 for claude-haiku-4-5)
+    would silently not cache; the v2 prefix is far above both.
+    """
+    if not schema.prompt_cache:
+        return schema.prompt_text
+    return [
+        {"type": "text", "text": schema.prompt_text, "cache_control": {"type": "ephemeral"}}
+    ]
 
 
 # No document has more pages than this; a page beyond it is junk, not a citation
@@ -1010,6 +1093,8 @@ class _PageResult:
     schema_violations: int
     stop_reason: str
     repair_stop_reason: str | None
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 async def _extract_one_block(
@@ -1056,7 +1141,7 @@ async def _extract_one_block(
             response = await client.messages.create(
                 model=settings.extraction_model,
                 max_tokens=schema.max_tokens,
-                system=schema.prompt_text,
+                system=_system_for_request(schema),
                 tools=[tool],
                 tool_choice={"type": "tool", "name": "record_extraction"},
                 messages=[user_message],
@@ -1064,13 +1149,7 @@ async def _extract_one_block(
         except anthropic.AnthropicError as exc:
             raise _classify_api_error(exc) from exc
         record_model_response(
-            span,
-            response,
-            _compute_cost_usd(
-                settings.extraction_model,
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-            ),
+            span, response, _usage_cost_usd(settings.extraction_model, response.usage)
         )
 
     if response.stop_reason != "tool_use":
@@ -1085,12 +1164,10 @@ async def _extract_one_block(
             f"output_tokens={response.usage.output_tokens}",
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
-            cost_usd=_compute_cost_usd(
-                settings.extraction_model,
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-            ),
+            cost_usd=_usage_cost_usd(settings.extraction_model, response.usage),
             stop_reasons=[{"first": response.stop_reason, "repair": None}],
+            cache_creation_input_tokens=_cache_tokens(response.usage)[0],
+            cache_read_input_tokens=_cache_tokens(response.usage)[1],
         )
 
     tool_use_block = next(
@@ -1103,12 +1180,10 @@ async def _extract_one_block(
             f"output_tokens={response.usage.output_tokens}",
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
-            cost_usd=_compute_cost_usd(
-                settings.extraction_model,
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-            ),
+            cost_usd=_usage_cost_usd(settings.extraction_model, response.usage),
             stop_reasons=[{"first": response.stop_reason, "repair": None}],
+            cache_creation_input_tokens=_cache_tokens(response.usage)[0],
+            cache_read_input_tokens=_cache_tokens(response.usage)[1],
         )
 
     # Masked before anything else sees it: the repair prompt below, the
@@ -1121,6 +1196,7 @@ async def _extract_one_block(
     repair_stop_reason: str | None = None
     total_input_tokens = response.usage.input_tokens
     total_output_tokens = response.usage.output_tokens
+    total_cache_creation, total_cache_read = _cache_tokens(response.usage)
 
     # Schema-repair reprompt: tool_choice guarantees *a* tool_use block,
     # not one that matches the schema's extraction tool (see module
@@ -1145,7 +1221,7 @@ async def _extract_one_block(
                 repair_response = await client.messages.create(
                     model=settings.extraction_model,
                     max_tokens=schema.max_tokens,
-                    system=schema.prompt_text,
+                    system=_system_for_request(schema),
                     tools=[tool],
                     tool_choice={"type": "tool", "name": "record_extraction"},
                     messages=[
@@ -1177,11 +1253,7 @@ async def _extract_one_block(
                 record_model_response(
                     repair_span,
                     repair_response,
-                    _compute_cost_usd(
-                        settings.extraction_model,
-                        repair_response.usage.input_tokens,
-                        repair_response.usage.output_tokens,
-                    ),
+                    _usage_cost_usd(settings.extraction_model, repair_response.usage),
                 )
         except Exception:  # a failed repair must never fail an otherwise-usable extraction
             logger.warning(
@@ -1195,6 +1267,9 @@ async def _extract_one_block(
             # docstring) -- both calls spent real money.
             total_input_tokens += repair_response.usage.input_tokens
             total_output_tokens += repair_response.usage.output_tokens
+            repair_creation, repair_read = _cache_tokens(repair_response.usage)
+            total_cache_creation += repair_creation
+            total_cache_read += repair_read
             repair_stop_reason = repair_response.stop_reason
 
             repair_tool_use_block = None
@@ -1238,6 +1313,8 @@ async def _extract_one_block(
         schema_violations=len(violations),
         stop_reason=response.stop_reason,
         repair_stop_reason=repair_stop_reason,
+        cache_creation_input_tokens=total_cache_creation,
+        cache_read_input_tokens=total_cache_read,
     )
 
 
@@ -1277,6 +1354,8 @@ async def _extract_chunked_pdf(
     chunks: list[dict[str, Any]] = []
     total_input_tokens = 0
     total_output_tokens = 0
+    total_cache_creation = 0
+    total_cache_read = 0
     total_latency_ms = 0
     total_schema_violations = 0
     any_repaired = False
@@ -1291,12 +1370,27 @@ async def _extract_chunked_pdf(
         except ExtractionError as exc:
             exc.input_tokens = total_input_tokens + (exc.input_tokens or 0)
             exc.output_tokens = total_output_tokens + (exc.output_tokens or 0)
+            exc.cache_creation_input_tokens = total_cache_creation + (
+                exc.cache_creation_input_tokens or 0
+            )
+            exc.cache_read_input_tokens = total_cache_read + (exc.cache_read_input_tokens or 0)
             exc.cost_usd = _compute_cost_usd(
-                settings.extraction_model, exc.input_tokens, exc.output_tokens
+                settings.extraction_model,
+                exc.input_tokens,
+                exc.output_tokens,
+                exc.cache_creation_input_tokens,
+                exc.cache_read_input_tokens,
             )
             exc.stop_reasons = [*stop_reasons, *(exc.stop_reasons or [])]
             raise
 
+        page_cost_usd = _compute_cost_usd(
+            settings.extraction_model,
+            page_result.input_tokens,
+            page_result.output_tokens,
+            page_result.cache_creation_input_tokens,
+            page_result.cache_read_input_tokens,
+        )
         page_inputs.append(page_result.tool_input)
         chunks.append(
             {
@@ -1304,17 +1398,15 @@ async def _extract_chunked_pdf(
                 "tool_input": page_result.tool_input,
                 "input_tokens": page_result.input_tokens,
                 "output_tokens": page_result.output_tokens,
-                "cost_usd": _compute_cost_usd(
-                    settings.extraction_model,
-                    page_result.input_tokens,
-                    page_result.output_tokens,
-                ),
+                "cost_usd": page_cost_usd,
                 "latency_ms": page_result.latency_ms,
                 "repaired": page_result.repaired,
             }
         )
         total_input_tokens += page_result.input_tokens
         total_output_tokens += page_result.output_tokens
+        total_cache_creation += page_result.cache_creation_input_tokens
+        total_cache_read += page_result.cache_read_input_tokens
         total_latency_ms += page_result.latency_ms
         total_schema_violations += page_result.schema_violations
         any_repaired = any_repaired or page_result.repaired
@@ -1332,12 +1424,18 @@ async def _extract_chunked_pdf(
         input_tokens=total_input_tokens,
         output_tokens=total_output_tokens,
         cost_usd=_compute_cost_usd(
-            settings.extraction_model, total_input_tokens, total_output_tokens
+            settings.extraction_model,
+            total_input_tokens,
+            total_output_tokens,
+            total_cache_creation,
+            total_cache_read,
         ),
         latency_ms=total_latency_ms,
         repaired=any_repaired,
         schema_violations=total_schema_violations,
         stop_reasons=stop_reasons,
+        cache_creation_input_tokens=total_cache_creation,
+        cache_read_input_tokens=total_cache_read,
     )
 
 
@@ -1439,7 +1537,11 @@ async def extract_document(
         input_tokens=page_result.input_tokens,
         output_tokens=page_result.output_tokens,
         cost_usd=_compute_cost_usd(
-            settings.extraction_model, page_result.input_tokens, page_result.output_tokens
+            settings.extraction_model,
+            page_result.input_tokens,
+            page_result.output_tokens,
+            page_result.cache_creation_input_tokens,
+            page_result.cache_read_input_tokens,
         ),
         latency_ms=page_result.latency_ms,
         repaired=page_result.repaired,
@@ -1447,6 +1549,8 @@ async def extract_document(
         stop_reasons=[
             {"first": page_result.stop_reason, "repair": page_result.repair_stop_reason}
         ],
+        cache_creation_input_tokens=page_result.cache_creation_input_tokens,
+        cache_read_input_tokens=page_result.cache_read_input_tokens,
     )
 
 
@@ -1580,6 +1684,8 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
             raw_response=result.tool_input,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
+            cache_creation_input_tokens=result.cache_creation_input_tokens,
+            cache_read_input_tokens=result.cache_read_input_tokens,
             cost_usd=result.cost_usd,
             latency_ms=result.latency_ms,
         )
@@ -1644,4 +1750,6 @@ async def process_document_job(session: AsyncSession, job: Job) -> None:
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             cost_usd=result.cost_usd,
+            cache_creation_input_tokens=result.cache_creation_input_tokens,
+            cache_read_input_tokens=result.cache_read_input_tokens,
         ) from exc

@@ -105,6 +105,7 @@ What remains is the workflow a company would recognize, all demoable on one mach
 
 ## Engine gaps found in Batch B reviews (not scheduled)
 
+- The extract_v3 tax-line rule takes a base only from the tax line itself; a base printed on its own labeled line ("Taxable amount $454.48" above "State tax 6.5% $29.54") is read as null, though the engine would accept it (B11 prep review, 2026-10-16).
 - An amount paid larger than the total is checkable even when no amount due is printed; the mutation eval misses 029's `amount_paid` misreads for lack of that check (found in the B7 review, 2026-10-15).
 
 ## Decisions needed from Anthony

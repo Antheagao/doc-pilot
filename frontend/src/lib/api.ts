@@ -157,8 +157,12 @@ export interface Extraction {
   model: string;
   cost_usd: number;
   latency_ms: number;
+  // The uncached part of the prompt; with prompt caching the prompt's size is
+  // input_tokens plus the two cache counts.
   input_tokens: number;
   output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
   created_at: string;
   fields: ExtractedField[];
   // Null for an extraction nobody has reconciled yet.
@@ -317,6 +321,8 @@ export interface Stats {
   mean_cost_per_doc: number | null;
   total_input_tokens: number;
   total_output_tokens: number;
+  total_cache_creation_input_tokens: number;
+  total_cache_read_input_tokens: number;
   latency_p50_ms: number | null;
   latency_p95_ms: number | null;
   review: StatsReview;

@@ -1,5 +1,6 @@
 """The pre-registered bar for making extraction schema v2 the default, checked
-against two eval artifacts: the model's v1 run and its v2 run.
+against two eval artifacts: the model's v1 run and its run with evidence (v2, or
+a later prompt version with the same fields).
 
 The terms are fixed before any paid run (PRESENT.md, Batch B): per model, core
 accuracy (the seven v1 fields on documents 001-025) no worse than its v1 run by
@@ -21,7 +22,7 @@ from typing import Any
 
 from app.evals.dataset import CORE_DOC_IDS
 from app.evals.report import core_counts
-from app.extraction_fields import SCHEMA_V1
+from app.extraction_fields import SCHEMA_V1, SCHEMAS
 from app.pii import mask_card_numbers
 
 MAX_CORE_FIELDS_WORSE = 1
@@ -184,17 +185,24 @@ def _complete_term(v2: dict[str, Any]) -> BarTerm:
     )
 
 
+def _carries_evidence(prompt_version: str) -> bool:
+    """Whether a prompt version is registered with a schema that asks for evidence
+    (extract_v2, extract_v3, ...): the bar judges any of them against v1."""
+    schema = SCHEMAS.get(prompt_version)
+    return schema is not None and schema.evidence
+
+
 def _same_run_term(v1: dict[str, Any], v2: dict[str, Any]) -> BarTerm:
     ok = (
         v1["model"] == v2["model"]
         and v1["prompt_version"] == "extract_v1"
-        and v2["prompt_version"] == "extract_v2"
+        and _carries_evidence(v2["prompt_version"])
     )
     return BarTerm(
         "runs to compare",
         ok,
         f"v1 artifact {v1['model']} / {v1['prompt_version']}, v2 artifact {v2['model']} / {v2['prompt_version']}"
-        " (required: the same model, extract_v1 then extract_v2)",
+        " (required: the same model, extract_v1 then a prompt version with evidence, extract_v2 or later)",
     )
 
 

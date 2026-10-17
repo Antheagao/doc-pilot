@@ -120,6 +120,21 @@ function formatNumber(value: unknown): string {
   return typeof value === "number" ? String(value) : EMPTY_VALUE;
 }
 
+// The prompt's size, which prompt caching splits three ways (input_tokens is
+// only the uncached remainder): "9,329 in (8,000 cached) / 2,964 out". An
+// extraction with no cache tokens reads as it always did.
+function formatPromptTokens(extraction: Extraction): string {
+  const written = extraction.cache_creation_input_tokens;
+  const read = extraction.cache_read_input_tokens;
+  if (!written && !read) return `${formatNumber(extraction.input_tokens)} in`;
+  const total = extraction.input_tokens + written + read;
+  const parts = [
+    read ? `${read.toLocaleString("en-US")} cached` : null,
+    written ? `${written.toLocaleString("en-US")} cache write` : null,
+  ].filter((part) => part !== null);
+  return `${total.toLocaleString("en-US")} in (${parts.join(", ")})`;
+}
+
 function formatCost(value: unknown): string {
   return typeof value === "number" ? `$${value.toFixed(4)}` : EMPTY_VALUE;
 }
@@ -680,7 +695,7 @@ export default function ExtractionPanel({
         <span>
           tokens{" "}
           <strong>
-            {formatNumber(extraction.input_tokens)} in /{" "}
+            {formatPromptTokens(extraction)} /{" "}
             {formatNumber(extraction.output_tokens)} out
           </strong>
         </span>

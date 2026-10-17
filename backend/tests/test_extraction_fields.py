@@ -19,6 +19,7 @@ from app.extraction_fields import (
     ARRAY_CELLS,
     SCHEMA_V1,
     SCHEMA_V2,
+    SCHEMA_V3,
     SCHEMAS,
     FieldSpec,
     money_cell_keys,
@@ -74,7 +75,8 @@ def test_the_line_item_cells_are_listed_in_label_order() -> None:
 def test_schema_for_returns_the_registered_schema() -> None:
     assert schema_for("extract_v1") is SCHEMA_V1
     assert schema_for("extract_v2") is SCHEMA_V2
-    assert SCHEMAS == {"extract_v1": SCHEMA_V1, "extract_v2": SCHEMA_V2}
+    assert schema_for("extract_v3") is SCHEMA_V3
+    assert SCHEMAS == {"extract_v1": SCHEMA_V1, "extract_v2": SCHEMA_V2, "extract_v3": SCHEMA_V3}
 
 
 def test_schema_for_an_unknown_version_names_the_known_ones() -> None:
@@ -82,7 +84,7 @@ def test_schema_for_an_unknown_version_names_the_known_ones() -> None:
         schema_for("extract_v9")
 
     assert "extract_v9" in str(excinfo.value)
-    assert "known versions: extract_v1, extract_v2" in str(excinfo.value)
+    assert "known versions: extract_v1, extract_v2, extract_v3" in str(excinfo.value)
 
 
 def test_a_missing_prompt_file_fails_when_the_schema_is_built(tmp_path) -> None:
@@ -110,7 +112,7 @@ def test_settings_accept_a_registered_prompt_version() -> None:
 
 
 def test_settings_reject_an_unknown_prompt_version() -> None:
-    with pytest.raises(ValidationError, match="known versions: extract_v1, extract_v2"):
+    with pytest.raises(ValidationError, match="known versions: extract_v1, extract_v2, extract_v3"):
         Settings(extraction_prompt_version="extract_v9")
 
 
@@ -200,3 +202,45 @@ def test_the_v2_prompts_carry_the_guard_and_the_evidence_rules() -> None:
     assert "`null` when the\n  document prints only tax lines and no total tax" in text
     for cell in ARRAY_CELLS["tax_lines"]:
         assert f"`{cell}`" in SCHEMA_V2.repair_prompt_text
+
+
+def test_settings_accept_the_v3_prompt_version() -> None:
+    assert schema_for(Settings(extraction_prompt_version="extract_v3").extraction_prompt_version) is SCHEMA_V3
+
+
+def test_v3_is_v2_with_only_the_prompt_changed() -> None:
+    assert SCHEMA_V3.prompt_version == "extract_v3"
+    assert SCHEMA_V3.prompt_path.name == "extract_v3.md"
+    assert SCHEMA_V3.prompt_path != SCHEMA_V2.prompt_path
+    assert SCHEMA_V3.prompt_text != SCHEMA_V2.prompt_text
+    # The repair call fixes structure and must not change values, so it is shared.
+    assert SCHEMA_V3.repair_prompt_path == SCHEMA_V2.repair_prompt_path
+    assert SCHEMA_V3.repair_prompt_text == SCHEMA_V2.repair_prompt_text
+    assert SCHEMA_V3.fields == SCHEMA_V2.fields
+    assert SCHEMA_V3.evidence is SCHEMA_V2.evidence is True
+    assert SCHEMA_V3.max_tokens == SCHEMA_V2.max_tokens
+    assert SCHEMA_V3.prompt_cache is SCHEMA_V2.prompt_cache is True
+    assert replace(SCHEMA_V3, prompt_version=SCHEMA_V2.prompt_version, prompt_path=SCHEMA_V2.prompt_path) == SCHEMA_V2
+    # Same tool, byte for byte: only the system prompt differs between the two.
+    assert json.dumps(record_extraction_tool(SCHEMA_V3)) == json.dumps(record_extraction_tool(SCHEMA_V2))
+
+
+def test_the_v3_prompt_is_the_v2_prompt_plus_the_tax_line_base_rule() -> None:
+    v2_lines = SCHEMA_V2.prompt_text.splitlines()
+    v3_lines = SCHEMA_V3.prompt_text.splitlines()
+
+    # Every v2 line is still there, in order; v3 only adds lines.
+    remaining = iter(v3_lines)
+    assert all(line in remaining for line in v2_lines)
+    added = [line for line in v3_lines if line not in v2_lines]
+    assert added
+    rule = " ".join(" ".join(added).split())
+    assert (
+        "A tax line's `base` is only an amount that the tax line itself prints as its base, "
+        "such as `454.48` in `Tax 8% on $454.48`."
+    ) in rule
+    assert "When the line prints no base" in rule and "`base` is `null`" in rule
+    assert "never copy the subtotal" in rule and "never compute a base" in rule
+    assert "\u2014" not in SCHEMA_V3.prompt_text
+    # The v2 prompt itself is untouched by the rule.
+    assert "never compute a base" not in SCHEMA_V2.prompt_text

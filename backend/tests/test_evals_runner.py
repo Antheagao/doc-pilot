@@ -270,6 +270,100 @@ class TestRecordedForTheBar:
         assert all(d["stop_reasons"] == [{"first": "tool_use", "repair": None}] for d in result.per_doc)
 
 
+class TestPromptCacheTokens:
+    """The artifact records the cache tokens beside the uncached input tokens."""
+
+    async def test_each_document_and_the_run_record_cache_writes_and_reads(self):
+        cases = load_cases(limit=2)
+
+        async def extract(path, mime_type):
+            first = Path(path).stem == cases[0].doc_id
+            return ExtractionResult(
+                tool_input={},
+                model="m",
+                prompt_version="extract_v2",
+                input_tokens=500,
+                output_tokens=100,
+                cost_usd=0.0,
+                latency_ms=1,
+                cache_creation_input_tokens=8000 if first else 0,
+                cache_read_input_tokens=0 if first else 8000,
+            )
+
+        result = await run_eval(cases, extract_fn=extract, schema=SCHEMA_V2)
+
+        by_doc = {d["doc_id"]: d for d in result.per_doc}
+        assert by_doc[cases[0].doc_id]["cache_creation_input_tokens"] == 8000
+        assert by_doc[cases[0].doc_id]["cache_read_input_tokens"] == 0
+        assert by_doc[cases[1].doc_id]["cache_creation_input_tokens"] == 0
+        assert by_doc[cases[1].doc_id]["cache_read_input_tokens"] == 8000
+        assert result.to_dict()["total_input_tokens"] == 1000
+        assert result.to_dict()["total_cache_creation_input_tokens"] == 8000
+        assert result.to_dict()["total_cache_read_input_tokens"] == 8000
+
+    async def test_a_run_whose_schema_does_not_cache_keeps_the_v1_shape(self):
+        cases = load_cases(limit=1)
+
+        result = await run_eval(cases, extract_fn=build_mock_extract_fn(cases))
+
+        assert "cache_creation_input_tokens" not in result.per_doc[0]
+        assert "cache_read_input_tokens" not in result.per_doc[0]
+        assert "total_cache_creation_input_tokens" not in result.to_dict()
+        assert "total_cache_read_input_tokens" not in result.to_dict()
+
+    async def test_a_billed_but_errored_call_records_its_cache_tokens(self):
+        cases = load_cases(limit=1)
+
+        async def extract(path, mime_type):
+            raise ExtractionError(
+                "refused",
+                input_tokens=100,
+                output_tokens=5,
+                cost_usd=0.02,
+                cache_creation_input_tokens=8000,
+                cache_read_input_tokens=0,
+            )
+
+        result = await run_eval(cases, extract_fn=extract, schema=SCHEMA_V2)
+
+        assert result.errors[0]["cache_creation_input_tokens"] == 8000
+        assert result.errors[0]["cache_read_input_tokens"] == 0
+
+    async def test_the_first_document_runs_alone_so_the_cache_is_written_once(self):
+        import asyncio
+
+        cases = load_cases(limit=4)
+        events = []
+
+        async def extract(path, mime_type):
+            events.append(("start", Path(path).stem))
+            await asyncio.sleep(0.01)
+            events.append(("end", Path(path).stem))
+            return ExtractionResult({}, "m", "extract_v2", 0, 0, 0.0, 1)
+
+        await run_eval(cases, extract_fn=extract, concurrency=4, schema=SCHEMA_V2)
+
+        first = cases[0].doc_id
+        assert events[:2] == [("start", first), ("end", first)]
+        assert {name for kind, name in events[2:] if kind == "start"} == {c.doc_id for c in cases[1:]}
+
+    async def test_a_schema_that_does_not_cache_starts_its_documents_together(self):
+        import asyncio
+
+        cases = load_cases(limit=3)
+        events = []
+
+        async def extract(path, mime_type):
+            events.append("start")
+            await asyncio.sleep(0.01)
+            events.append("end")
+            return ExtractionResult({}, "m", "extract_v1", 0, 0, 0.0, 1)
+
+        await run_eval(cases, extract_fn=extract, concurrency=3)
+
+        assert events[:3] == ["start", "start", "start"]
+
+
 class TestCostCap:
     async def test_stops_early_and_records_skips(self):
         cases = load_cases()

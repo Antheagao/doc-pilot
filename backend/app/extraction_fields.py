@@ -16,7 +16,7 @@ takes the label's field set from SCHEMA_V2, so a label has every field the
 richest schema reads.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -82,6 +82,10 @@ class ExtractionSchema:
     The prompt files are read when the schema is built, at import for the
     registered ones: they are small, static files that never change at
     runtime, and a missing one must fail at startup, not after a billed call.
+
+    `prompt_cache` says whether requests mark the tool and the prompt as a cache
+    prefix (extraction._system_for_request). v1 does not, so its request stays
+    byte-identical to the one captured before caching existed.
     """
 
     prompt_version: str
@@ -90,6 +94,7 @@ class ExtractionSchema:
     fields: tuple[FieldSpec, ...]
     evidence: bool
     max_tokens: int
+    prompt_cache: bool = False
     prompt_text: str = field(init=False, compare=False, repr=False)
     repair_prompt_text: str = field(init=False, compare=False, repr=False)
 
@@ -177,10 +182,23 @@ SCHEMA_V2 = ExtractionSchema(
     # dense invoice from stopping at max_tokens. It stays under the SDK's
     # non-streaming limit (about 21,000 tokens), so requests need no streaming.
     max_tokens=16384,
+    # The tool and the prompt are about 8,000 tokens (a live call's input
+    # tokens minus its image), the same on every call; the document is the
+    # only part that differs, so the rest is worth caching.
+    prompt_cache=True,
 )
 
+# v3 is v2 with one prompt rule added: a tax line's base is only an amount the
+# line itself prints, otherwise null. Same fields, evidence, token budget, and
+# caching, and the repair prompt stays repair_v2 because a repair fixes structure
+# and must not change values. v2 stays registered: its stored extractions and the
+# committed run artifacts name it.
+_V3_PROMPT_PATH = PROMPTS_DIR / "extract_v3.md"
+
+SCHEMA_V3 = replace(SCHEMA_V2, prompt_version=_V3_PROMPT_PATH.stem, prompt_path=_V3_PROMPT_PATH)
+
 SCHEMAS: dict[str, ExtractionSchema] = {
-    schema.prompt_version: schema for schema in (SCHEMA_V1, SCHEMA_V2)
+    schema.prompt_version: schema for schema in (SCHEMA_V1, SCHEMA_V2, SCHEMA_V3)
 }
 
 

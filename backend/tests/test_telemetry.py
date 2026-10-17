@@ -190,8 +190,11 @@ async def test_extraction_call_is_a_genai_chat_span(tmp_path, monkeypatch, spans
     assert attrs["gen_ai.usage.output_tokens"] == 300
     assert attrs["gen_ai.usage.cache_read.input_tokens"] == 200
     assert attrs["docpilot.prompt_version"] == SCHEMA_V1.prompt_version
-    # claude-sonnet-5 at $2/$10 per MTok
-    assert attrs["docpilot.cost_usd"] == pytest.approx(0.006)
+    # claude-sonnet-5 at $2/$10 per MTok; the 200 cache-read tokens bill at 0.1x
+    # the input price on top of the 1500 uncached ones.
+    assert attrs["docpilot.cost_usd"] == pytest.approx(
+        (1500 * 2.00 + 200 * 2.00 * 0.10 + 300 * 10.00) / 1_000_000
+    )
 
 
 async def test_failed_model_call_marks_its_span_as_error(tmp_path, monkeypatch, spans) -> None:

@@ -127,7 +127,9 @@ _SCHEMA_V2_CAPTION = (
     "Values counts the non-null values the model extracted for the field (every cell of "
     "a line item or tax line counts). Evidence coverage is the share of them that cite a "
     "usable quote. Page agreement and Quote agreement are the shares of the values the gold "
-    "label cites that name the gold page and copy the gold quote (whitespace collapsed); a "
+    "label cites that name the gold page and copy the gold quote (whitespace collapsed); "
+    "the gold quote of a line-item or tax-line cell is the whole printed row, so a cell "
+    "agrees when its quote is the gold row or whole words of it; a "
     "value with no quote, or with a quote and no page, is a miss on both, and the first is "
     "a coverage miss too.*"
 )

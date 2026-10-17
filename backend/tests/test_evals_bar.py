@@ -51,6 +51,18 @@ def v2_run(mock_v2):
     return run
 
 
+def test_a_v3_run_meets_every_term_too(v1_run, v2_run):
+    v2_run["prompt_version"] = "extract_v3"
+
+    assert all(_verdicts(v1_run, v2_run).values())
+
+
+def test_a_run_of_an_unknown_prompt_version_is_not_a_run_to_compare(v1_run, v2_run):
+    v2_run["prompt_version"] = "extract_v9"
+
+    assert _verdicts(v1_run, v2_run)["runs to compare"] is False
+
+
 def _verdicts(v1, v2):
     return {term.name: term.passed for term in evaluate_bar(v1, v2)}
 

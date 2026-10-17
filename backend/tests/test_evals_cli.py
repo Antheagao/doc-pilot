@@ -83,13 +83,14 @@ class TestMockNeverWritesToTheResults:
     @pytest.mark.parametrize("sub", ["smoke", "judge", "retrieval"])
     def test_it_refuses_anything_under_the_results_directory(self, monkeypatch, sub):
         before = _results_listing()
+        existed = (RESULTS_DIR / sub).exists()
 
         with pytest.raises(SystemExit) as exit_info:
             _run(monkeypatch, "--mock", "--limit", "1", "--out", str(RESULTS_DIR / sub))
 
         assert exit_info.value.code == 2
         assert _results_listing() == before
-        assert not (RESULTS_DIR / "smoke").exists()
+        assert (RESULTS_DIR / sub).exists() == existed
 
     def test_it_says_where_the_temporary_artifact_went(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(run_cli.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
@@ -132,6 +133,16 @@ class TestPromptAndDocuments:
         assert "caught_by_quotes: 0.5" in out
         assert "evidence: 813/813 values quoted (100.0%)" in out
 
+    def test_prompt_v3_runs_and_scores_like_v2(self, monkeypatch, tmp_path, capsys):
+        _run(monkeypatch, "--mock", "--prompt", "extract_v3", "--out", str(tmp_path))
+
+        artifact = _written(tmp_path)
+
+        assert artifact["prompt_version"] == "extract_v3"
+        assert artifact["summary"]["overall_accuracy"] == 638 / 640
+        assert len(artifact["per_doc"][0]["fields"]) == 20
+        assert "evidence: 813/813 values quoted (100.0%)" in capsys.readouterr().out
+
     def test_doc_is_repeatable_and_keeps_dataset_order(self, monkeypatch, tmp_path):
         _run(
             monkeypatch,
@@ -166,6 +177,7 @@ class TestPromptAndDocuments:
         err = capsys.readouterr().err
         assert "extract_v1" in err
         assert "extract_v2" in err
+        assert "extract_v3" in err
 
 
 class TestReportOnly:
