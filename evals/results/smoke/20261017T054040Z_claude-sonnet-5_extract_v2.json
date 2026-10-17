@@ -1,0 +1,1722 @@
+{
+  "model": "claude-sonnet-5",
+  "prompt_version": "extract_v2",
+  "dataset_version": "v2",
+  "review_threshold": 0.8,
+  "started_at_utc": "2026-10-17T05:40:40.793538+00:00",
+  "concurrency": 1,
+  "max_cost_usd": 0.15,
+  "summary": {
+    "n_docs": 3,
+    "per_field_accuracy": {
+      "vendor": 1.0,
+      "invoice_number": 1.0,
+      "po_number": 1.0,
+      "vendor_tax_id": 1.0,
+      "document_date": 1.0,
+      "due_date": 1.0,
+      "payment_terms": 1.0,
+      "payment_method": 1.0,
+      "payment_card_last4": 1.0,
+      "line_items": 1.0,
+      "subtotal": 1.0,
+      "discount": 1.0,
+      "shipping": 1.0,
+      "tax": 1.0,
+      "tax_lines": 0.6666666666666666,
+      "tip": 1.0,
+      "total": 1.0,
+      "amount_paid": 1.0,
+      "amount_due": 1.0,
+      "currency": 1.0
+    },
+    "overall_accuracy": 0.9833333333333333,
+    "mean_confidence": 0.6688333333333333,
+    "mean_confidence_correct": 0.6657627118644067,
+    "mean_confidence_incorrect": 0.85,
+    "caught_by_review": 0.0,
+    "total_hallucinations": 0,
+    "total_schema_violations": 0,
+    "mean_item_accuracy": 1.0,
+    "mean_item_accuracy_docs_with_items": 1.0,
+    "evidence_coverage": {
+      "leaves": 121,
+      "with_quote": 121,
+      "coverage": 1.0,
+      "gold_judged": 120,
+      "page_agree": 120,
+      "page_agreement": 1.0,
+      "quote_agree": 71,
+      "quote_agreement": 0.5916666666666667,
+      "per_field": {
+        "vendor": {
+          "leaves": 3,
+          "with_quote": 3,
+          "coverage": 1.0,
+          "gold_judged": 3,
+          "page_agree": 3,
+          "page_agreement": 1.0,
+          "quote_agree": 3,
+          "quote_agreement": 1.0
+        },
+        "invoice_number": {
+          "leaves": 2,
+          "with_quote": 2,
+          "coverage": 1.0,
+          "gold_judged": 2,
+          "page_agree": 2,
+          "page_agreement": 1.0,
+          "quote_agree": 2,
+          "quote_agreement": 1.0
+        },
+        "po_number": {
+          "leaves": 2,
+          "with_quote": 2,
+          "coverage": 1.0,
+          "gold_judged": 2,
+          "page_agree": 2,
+          "page_agreement": 1.0,
+          "quote_agree": 2,
+          "quote_agreement": 1.0
+        },
+        "vendor_tax_id": {
+          "leaves": 2,
+          "with_quote": 2,
+          "coverage": 1.0,
+          "gold_judged": 2,
+          "page_agree": 2,
+          "page_agreement": 1.0,
+          "quote_agree": 2,
+          "quote_agreement": 1.0
+        },
+        "document_date": {
+          "leaves": 3,
+          "with_quote": 3,
+          "coverage": 1.0,
+          "gold_judged": 3,
+          "page_agree": 3,
+          "page_agreement": 1.0,
+          "quote_agree": 3,
+          "quote_agreement": 1.0
+        },
+        "due_date": {
+          "leaves": 2,
+          "with_quote": 2,
+          "coverage": 1.0,
+          "gold_judged": 2,
+          "page_agree": 2,
+          "page_agreement": 1.0,
+          "quote_agree": 2,
+          "quote_agreement": 1.0
+        },
+        "payment_terms": {
+          "leaves": 2,
+          "with_quote": 2,
+          "coverage": 1.0,
+          "gold_judged": 2,
+          "page_agree": 2,
+          "page_agreement": 1.0,
+          "quote_agree": 2,
+          "quote_agreement": 1.0
+        },
+        "payment_method": {
+          "leaves": 1,
+          "with_quote": 1,
+          "coverage": 1.0,
+          "gold_judged": 1,
+          "page_agree": 1,
+          "page_agreement": 1.0,
+          "quote_agree": 1,
+          "quote_agreement": 1.0
+        },
+        "payment_card_last4": {
+          "leaves": 1,
+          "with_quote": 1,
+          "coverage": 1.0,
+          "gold_judged": 1,
+          "page_agree": 1,
+          "page_agreement": 1.0,
+          "quote_agree": 1,
+          "quote_agreement": 1.0
+        },
+        "line_items": {
+          "leaves": 72,
+          "with_quote": 72,
+          "coverage": 1.0,
+          "gold_judged": 72,
+          "page_agree": 72,
+          "page_agreement": 1.0,
+          "quote_agree": 23,
+          "quote_agreement": 0.3194444444444444
+        },
+        "subtotal": {
+          "leaves": 3,
+          "with_quote": 3,
+          "coverage": 1.0,
+          "gold_judged": 3,
+          "page_agree": 3,
+          "page_agreement": 1.0,
+          "quote_agree": 3,
+          "quote_agreement": 1.0
+        },
+        "discount": {
+          "leaves": 1,
+          "with_quote": 1,
+          "coverage": 1.0,
+          "gold_judged": 1,
+          "page_agree": 1,
+          "page_agreement": 1.0,
+          "quote_agree": 1,
+          "quote_agreement": 1.0
+        },
+        "shipping": {
+          "leaves": 2,
+          "with_quote": 2,
+          "coverage": 1.0,
+          "gold_judged": 2,
+          "page_agree": 2,
+          "page_agreement": 1.0,
+          "quote_agree": 2,
+          "quote_agreement": 1.0
+        },
+        "tax": {
+          "leaves": 3,
+          "with_quote": 3,
+          "coverage": 1.0,
+          "gold_judged": 3,
+          "page_agree": 3,
+          "page_agreement": 1.0,
+          "quote_agree": 3,
+          "quote_agreement": 1.0
+        },
+        "tax_lines": {
+          "leaves": 14,
+          "with_quote": 14,
+          "coverage": 1.0,
+          "gold_judged": 13,
+          "page_agree": 13,
+          "page_agreement": 1.0,
+          "quote_agree": 13,
+          "quote_agreement": 1.0
+        },
+        "tip": {
+          "leaves": 0,
+          "with_quote": 0,
+          "coverage": null,
+          "gold_judged": 0,
+          "page_agree": 0,
+          "page_agreement": null,
+          "quote_agree": 0,
+          "quote_agreement": null
+        },
+        "total": {
+          "leaves": 3,
+          "with_quote": 3,
+          "coverage": 1.0,
+          "gold_judged": 3,
+          "page_agree": 3,
+          "page_agreement": 1.0,
+          "quote_agree": 3,
+          "quote_agreement": 1.0
+        },
+        "amount_paid": {
+          "leaves": 1,
+          "with_quote": 1,
+          "coverage": 1.0,
+          "gold_judged": 1,
+          "page_agree": 1,
+          "page_agreement": 1.0,
+          "quote_agree": 1,
+          "quote_agreement": 1.0
+        },
+        "amount_due": {
+          "leaves": 1,
+          "with_quote": 1,
+          "coverage": 1.0,
+          "gold_judged": 1,
+          "page_agree": 1,
+          "page_agreement": 1.0,
+          "quote_agree": 1,
+          "quote_agreement": 1.0
+        },
+        "currency": {
+          "leaves": 3,
+          "with_quote": 3,
+          "coverage": 1.0,
+          "gold_judged": 3,
+          "page_agree": 3,
+          "page_agreement": 1.0,
+          "quote_agree": 3,
+          "quote_agreement": 1.0
+        }
+      }
+    }
+  },
+  "total_cost_usd": 0.144456,
+  "total_error_cost_usd": 0,
+  "mean_cost_per_doc": 0.048152,
+  "total_input_tokens": 27988,
+  "total_output_tokens": 8848,
+  "latency_p50_ms": 19813,
+  "latency_p95_ms": 26268,
+  "n_scored": 3,
+  "n_errors": 0,
+  "n_skipped_cost_cap": 0,
+  "errors": [],
+  "skipped_cost_cap": [],
+  "per_doc": [
+    {
+      "doc_id": "026-invoice-discount-shipping-two-taxes",
+      "status": "scored",
+      "difficulty": "invoice",
+      "fields": {
+        "vendor": {
+          "correct": true,
+          "expected": "Harborline Industrial Supply",
+          "actual": "Harborline Industrial Supply",
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Harborline Industrial Supply"
+          }
+        },
+        "invoice_number": {
+          "correct": true,
+          "expected": "INV-2026-0417",
+          "actual": "INV-2026-0417",
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Invoice #: INV-2026-0417"
+          }
+        },
+        "po_number": {
+          "correct": true,
+          "expected": "PO-88213",
+          "actual": "PO-88213",
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "PO Number: PO-88213"
+          }
+        },
+        "vendor_tax_id": {
+          "correct": true,
+          "expected": "91-4827365",
+          "actual": "91-4827365",
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Tax ID: 91-4827365"
+          }
+        },
+        "document_date": {
+          "correct": true,
+          "expected": "2026-08-03",
+          "actual": "2026-08-03",
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Invoice date: 08/03/2026"
+          }
+        },
+        "due_date": {
+          "correct": true,
+          "expected": "2026-09-02",
+          "actual": "2026-09-02",
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Due date: 09/02/2026"
+          }
+        },
+        "payment_terms": {
+          "correct": true,
+          "expected": "Net 30",
+          "actual": "Net 30",
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Terms: Net 30"
+          }
+        },
+        "payment_method": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "payment_card_last4": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "line_items": {
+          "correct": true,
+          "expected": [
+            {
+              "description": "Hydraulic Hose Assembly 3/4in",
+              "quantity": 4,
+              "unit_price": 38.5,
+              "total": 154.0
+            },
+            {
+              "description": "Stainless Fitting Kit (24pc)",
+              "quantity": 6,
+              "unit_price": 21.75,
+              "total": 130.5
+            },
+            {
+              "description": "Industrial Gasket Sheet 12x12",
+              "quantity": 10,
+              "unit_price": 7.4,
+              "total": 74.0
+            },
+            {
+              "description": "Safety Valve, brass",
+              "quantity": 2,
+              "unit_price": 59.95,
+              "total": 119.9
+            }
+          ],
+          "actual": [
+            {
+              "description": {
+                "value": "Hydraulic Hose Assembly 3/4in",
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Hydraulic Hose Assembly 3/4in"
+                }
+              },
+              "quantity": {
+                "value": 4,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Hydraulic Hose Assembly 3/4in     4       $38.50    $154.00"
+                }
+              },
+              "unit_price": {
+                "value": 38.5,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Hydraulic Hose Assembly 3/4in     4       $38.50    $154.00"
+                }
+              },
+              "total": {
+                "value": 154.0,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Hydraulic Hose Assembly 3/4in     4       $38.50    $154.00"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Stainless Fitting Kit (24pc)",
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Stainless Fitting Kit (24pc)     6       $21.75    $130.50"
+                }
+              },
+              "quantity": {
+                "value": 6,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Stainless Fitting Kit (24pc)     6       $21.75    $130.50"
+                }
+              },
+              "unit_price": {
+                "value": 21.75,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Stainless Fitting Kit (24pc)     6       $21.75    $130.50"
+                }
+              },
+              "total": {
+                "value": 130.5,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Stainless Fitting Kit (24pc)     6       $21.75    $130.50"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Industrial Gasket Sheet 12x12",
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Industrial Gasket Sheet 12x12     10        $7.40     $74.00"
+                }
+              },
+              "quantity": {
+                "value": 10,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Industrial Gasket Sheet 12x12     10        $7.40     $74.00"
+                }
+              },
+              "unit_price": {
+                "value": 7.4,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Industrial Gasket Sheet 12x12     10        $7.40     $74.00"
+                }
+              },
+              "total": {
+                "value": 74.0,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Industrial Gasket Sheet 12x12     10        $7.40     $74.00"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Safety Valve, brass",
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Safety Valve, brass     2       $59.95    $119.90"
+                }
+              },
+              "quantity": {
+                "value": 2,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Safety Valve, brass     2       $59.95    $119.90"
+                }
+              },
+              "unit_price": {
+                "value": 59.95,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Safety Valve, brass     2       $59.95    $119.90"
+                }
+              },
+              "total": {
+                "value": 119.9,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Safety Valve, brass     2       $59.95    $119.90"
+                }
+              }
+            }
+          ],
+          "confidence": 1.0
+        },
+        "subtotal": {
+          "correct": true,
+          "expected": 478.4,
+          "actual": 478.4,
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Subtotal: $478.40"
+          }
+        },
+        "discount": {
+          "correct": true,
+          "expected": 23.92,
+          "actual": 23.92,
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Volume discount (5%): -$23.92"
+          }
+        },
+        "shipping": {
+          "correct": true,
+          "expected": 18.5,
+          "actual": 18.5,
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Shipping & handling: $18.50"
+          }
+        },
+        "tax": {
+          "correct": true,
+          "expected": 35.22,
+          "actual": 35.22,
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Total tax: $35.22"
+          }
+        },
+        "tax_lines": {
+          "correct": true,
+          "expected": [
+            {
+              "label": "State sales tax",
+              "rate": 6.5,
+              "base": 454.48,
+              "amount": 29.54
+            },
+            {
+              "label": "County transit tax",
+              "rate": 1.25,
+              "base": 454.48,
+              "amount": 5.68
+            }
+          ],
+          "actual": [
+            {
+              "label": {
+                "value": "State sales tax",
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "State sales tax 6.5% on $454.48                $29.54"
+                }
+              },
+              "rate": {
+                "value": 6.5,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "State sales tax 6.5% on $454.48                $29.54"
+                }
+              },
+              "base": {
+                "value": 454.48,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "State sales tax 6.5% on $454.48                $29.54"
+                }
+              },
+              "amount": {
+                "value": 29.54,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "State sales tax 6.5% on $454.48                $29.54"
+                }
+              }
+            },
+            {
+              "label": {
+                "value": "County transit tax",
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "County transit tax 1.25% on $454.48            $5.68"
+                }
+              },
+              "rate": {
+                "value": 1.25,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "County transit tax 1.25% on $454.48            $5.68"
+                }
+              },
+              "base": {
+                "value": 454.48,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "County transit tax 1.25% on $454.48            $5.68"
+                }
+              },
+              "amount": {
+                "value": 5.68,
+                "confidence": 1.0,
+                "evidence": {
+                  "page": 1,
+                  "quote": "County transit tax 1.25% on $454.48            $5.68"
+                }
+              }
+            }
+          ],
+          "confidence": 1.0
+        },
+        "tip": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "total": {
+          "correct": true,
+          "expected": 508.2,
+          "actual": 508.2,
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Total: $508.20"
+          }
+        },
+        "amount_paid": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "amount_due": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "currency": {
+          "correct": true,
+          "expected": "USD",
+          "actual": "USD",
+          "confidence": 1.0,
+          "evidence": {
+            "page": 1,
+            "quote": "Currency: USD"
+          }
+        }
+      },
+      "schema_violations": 0,
+      "hallucinations": 0,
+      "item_accuracy": 1.0,
+      "cost_usd": 0.04666,
+      "latency_ms": 19813,
+      "input_tokens": 8510,
+      "output_tokens": 2964,
+      "repaired": false,
+      "residual_schema_violations": 0,
+      "stop_reasons": [
+        {
+          "first": "tool_use",
+          "repair": null
+        }
+      ]
+    },
+    {
+      "doc_id": "029-receipt-card-number-pii",
+      "status": "scored",
+      "difficulty": "receipt",
+      "fields": {
+        "vendor": {
+          "correct": true,
+          "expected": "Brightwater Camping Supply",
+          "actual": "Brightwater Camping Supply",
+          "confidence": 0.98,
+          "evidence": {
+            "page": 1,
+            "quote": "Brightwater Camping Supply"
+          }
+        },
+        "invoice_number": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "po_number": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "vendor_tax_id": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "document_date": {
+          "correct": true,
+          "expected": "2026-08-21",
+          "actual": "2026-08-21",
+          "confidence": 0.95,
+          "evidence": {
+            "page": 1,
+            "quote": "Date: 2026-08-21"
+          }
+        },
+        "due_date": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "payment_terms": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "payment_method": {
+          "correct": true,
+          "expected": "VISA",
+          "actual": "VISA",
+          "confidence": 0.95,
+          "evidence": {
+            "page": 1,
+            "quote": "Paid by VISA ****1111 $88.57"
+          }
+        },
+        "payment_card_last4": {
+          "correct": true,
+          "expected": "1111",
+          "actual": "1111",
+          "confidence": 0.95,
+          "evidence": {
+            "page": 1,
+            "quote": "Paid by VISA ****1111 $88.57"
+          }
+        },
+        "line_items": {
+          "correct": true,
+          "expected": [
+            {
+              "description": "Trekking Pole Pair",
+              "quantity": 1,
+              "unit_price": 54.95,
+              "total": 54.95
+            },
+            {
+              "description": "Insulated Mug 16oz",
+              "quantity": 2,
+              "unit_price": 14.5,
+              "total": 29.0
+            }
+          ],
+          "actual": [
+            {
+              "description": {
+                "value": "Trekking Pole Pair",
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Trekking Pole Pair       1      $54.95    $54.95"
+                }
+              },
+              "quantity": {
+                "value": 1,
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Trekking Pole Pair       1      $54.95    $54.95"
+                }
+              },
+              "unit_price": {
+                "value": 54.95,
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Trekking Pole Pair       1      $54.95    $54.95"
+                }
+              },
+              "total": {
+                "value": 54.95,
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Trekking Pole Pair       1      $54.95    $54.95"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Insulated Mug 16oz",
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Insulated Mug 16oz       2      $14.50    $29.00"
+                }
+              },
+              "quantity": {
+                "value": 2,
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Insulated Mug 16oz       2      $14.50    $29.00"
+                }
+              },
+              "unit_price": {
+                "value": 14.5,
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Insulated Mug 16oz       2      $14.50    $29.00"
+                }
+              },
+              "total": {
+                "value": 29.0,
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Insulated Mug 16oz       2      $14.50    $29.00"
+                }
+              }
+            }
+          ],
+          "confidence": 0.97
+        },
+        "subtotal": {
+          "correct": true,
+          "expected": 83.95,
+          "actual": 83.95,
+          "confidence": 0.98,
+          "evidence": {
+            "page": 1,
+            "quote": "Subtotal: $83.95"
+          }
+        },
+        "discount": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "shipping": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "tax": {
+          "correct": true,
+          "expected": 4.62,
+          "actual": 4.62,
+          "confidence": 0.98,
+          "evidence": {
+            "page": 1,
+            "quote": "Tax: $4.62"
+          }
+        },
+        "tax_lines": {
+          "correct": false,
+          "expected": [
+            {
+              "label": "Tax",
+              "rate": null,
+              "base": null,
+              "amount": 4.62
+            }
+          ],
+          "actual": [
+            {
+              "label": {
+                "value": "Tax",
+                "confidence": 0.95,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Tax: $4.62"
+                }
+              },
+              "rate": {
+                "value": null,
+                "confidence": 0.0,
+                "evidence": null
+              },
+              "base": {
+                "value": 83.95,
+                "confidence": 0.5,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Subtotal: $83.95"
+                }
+              },
+              "amount": {
+                "value": 4.62,
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Tax: $4.62"
+                }
+              }
+            }
+          ],
+          "confidence": 0.85
+        },
+        "tip": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "total": {
+          "correct": true,
+          "expected": 88.57,
+          "actual": 88.57,
+          "confidence": 0.98,
+          "evidence": {
+            "page": 1,
+            "quote": "Total: $88.57"
+          }
+        },
+        "amount_paid": {
+          "correct": true,
+          "expected": 88.57,
+          "actual": 88.57,
+          "confidence": 0.95,
+          "evidence": {
+            "page": 1,
+            "quote": "Paid by VISA ****1111 $88.57"
+          }
+        },
+        "amount_due": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "currency": {
+          "correct": true,
+          "expected": "USD",
+          "actual": "USD",
+          "confidence": 0.98,
+          "evidence": {
+            "page": 1,
+            "quote": "Currency: USD"
+          }
+        }
+      },
+      "schema_violations": 0,
+      "hallucinations": 0,
+      "item_accuracy": 1.0,
+      "cost_usd": 0.035548,
+      "latency_ms": 13177,
+      "input_tokens": 8289,
+      "output_tokens": 1897,
+      "repaired": false,
+      "residual_schema_violations": 0,
+      "stop_reasons": [
+        {
+          "first": "tool_use",
+          "repair": null
+        }
+      ]
+    },
+    {
+      "doc_id": "032-multipage-invoice-totals-page-two",
+      "status": "scored",
+      "difficulty": "multipage",
+      "fields": {
+        "vendor": {
+          "correct": true,
+          "expected": "Quarry Lane Building Supply",
+          "actual": "Quarry Lane Building Supply",
+          "confidence": 0.98,
+          "evidence": {
+            "page": 1,
+            "quote": "Quarry Lane Building Supply"
+          }
+        },
+        "invoice_number": {
+          "correct": true,
+          "expected": "INV-7745",
+          "actual": "INV-7745",
+          "confidence": 0.99,
+          "evidence": {
+            "page": 1,
+            "quote": "Invoice #: INV-7745"
+          }
+        },
+        "po_number": {
+          "correct": true,
+          "expected": "PO-4410",
+          "actual": "PO-4410",
+          "confidence": 0.99,
+          "evidence": {
+            "page": 1,
+            "quote": "PO Number: PO-4410"
+          }
+        },
+        "vendor_tax_id": {
+          "correct": true,
+          "expected": "47-3920158",
+          "actual": "47-3920158",
+          "confidence": 0.98,
+          "evidence": {
+            "page": 1,
+            "quote": "Tax ID: 47-3920158"
+          }
+        },
+        "document_date": {
+          "correct": true,
+          "expected": "2026-04-08",
+          "actual": "2026-04-08",
+          "confidence": 0.95,
+          "evidence": {
+            "page": 1,
+            "quote": "Invoice date: 04/08/2026"
+          }
+        },
+        "due_date": {
+          "correct": true,
+          "expected": "2026-05-23",
+          "actual": "2026-05-23",
+          "confidence": 0.95,
+          "evidence": {
+            "page": 1,
+            "quote": "Due date: 05/23/2026"
+          }
+        },
+        "payment_terms": {
+          "correct": true,
+          "expected": "Net 45",
+          "actual": "Net 45",
+          "confidence": 0.97,
+          "evidence": {
+            "page": 1,
+            "quote": "Terms: Net 45"
+          }
+        },
+        "payment_method": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "payment_card_last4": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "line_items": {
+          "correct": true,
+          "expected": [
+            {
+              "description": "Pressure-treated Lumber 2x4x8",
+              "quantity": 40,
+              "unit_price": 6.85,
+              "total": 274.0
+            },
+            {
+              "description": "Exterior Plywood 4x8 1/2in",
+              "quantity": 12,
+              "unit_price": 38.2,
+              "total": 458.4
+            },
+            {
+              "description": "Galvanized Deck Screws 5lb",
+              "quantity": 6,
+              "unit_price": 29.9,
+              "total": 179.4
+            },
+            {
+              "description": "Concrete Mix 80lb Bag",
+              "quantity": 25,
+              "unit_price": 7.35,
+              "total": 183.75
+            },
+            {
+              "description": "Rebar #4 10ft",
+              "quantity": 30,
+              "unit_price": 9.1,
+              "total": 273.0
+            },
+            {
+              "description": "Roofing Felt Roll",
+              "quantity": 4,
+              "unit_price": 41.75,
+              "total": 167.0
+            },
+            {
+              "description": "Joist Hanger 2x8",
+              "quantity": 100,
+              "unit_price": 1.15,
+              "total": 115.0
+            },
+            {
+              "description": "Silicone Caulk Tube",
+              "quantity": 18,
+              "unit_price": 5.6,
+              "total": 100.8
+            },
+            {
+              "description": "Contractor Trash Bags (50ct)",
+              "quantity": 3,
+              "unit_price": 24.25,
+              "total": 72.75
+            },
+            {
+              "description": "Work Gloves, leather",
+              "quantity": 10,
+              "unit_price": 8.4,
+              "total": 84.0
+            },
+            {
+              "description": "Chalk Line Reel",
+              "quantity": 2,
+              "unit_price": 12.95,
+              "total": 25.9
+            },
+            {
+              "description": "Level, 48in",
+              "quantity": 2,
+              "unit_price": 31.5,
+              "total": 63.0
+            }
+          ],
+          "actual": [
+            {
+              "description": {
+                "value": "Pressure-treated Lumber 2x4x8",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Pressure-treated Lumber 2x4x8"
+                }
+              },
+              "quantity": {
+                "value": 40,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "40"
+                }
+              },
+              "unit_price": {
+                "value": 6.85,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$6.85"
+                }
+              },
+              "total": {
+                "value": 274.0,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$274.00"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Exterior Plywood 4x8 1/2in",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Exterior Plywood 4x8 1/2in"
+                }
+              },
+              "quantity": {
+                "value": 12,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "12"
+                }
+              },
+              "unit_price": {
+                "value": 38.2,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$38.20"
+                }
+              },
+              "total": {
+                "value": 458.4,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$458.40"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Galvanized Deck Screws 5lb",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Galvanized Deck Screws 5lb"
+                }
+              },
+              "quantity": {
+                "value": 6,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "6"
+                }
+              },
+              "unit_price": {
+                "value": 29.9,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$29.90"
+                }
+              },
+              "total": {
+                "value": 179.4,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$179.40"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Concrete Mix 80lb Bag",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Concrete Mix 80lb Bag"
+                }
+              },
+              "quantity": {
+                "value": 25,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "25"
+                }
+              },
+              "unit_price": {
+                "value": 7.35,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$7.35"
+                }
+              },
+              "total": {
+                "value": 183.75,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$183.75"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Rebar #4 10ft",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Rebar #4 10ft"
+                }
+              },
+              "quantity": {
+                "value": 30,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "30"
+                }
+              },
+              "unit_price": {
+                "value": 9.1,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$9.10"
+                }
+              },
+              "total": {
+                "value": 273.0,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$273.00"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Roofing Felt Roll",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Roofing Felt Roll"
+                }
+              },
+              "quantity": {
+                "value": 4,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "4"
+                }
+              },
+              "unit_price": {
+                "value": 41.75,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$41.75"
+                }
+              },
+              "total": {
+                "value": 167.0,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$167.00"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Joist Hanger 2x8",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Joist Hanger 2x8"
+                }
+              },
+              "quantity": {
+                "value": 100,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "100"
+                }
+              },
+              "unit_price": {
+                "value": 1.15,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$1.15"
+                }
+              },
+              "total": {
+                "value": 115.0,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$115.00"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Silicone Caulk Tube",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "Silicone Caulk Tube"
+                }
+              },
+              "quantity": {
+                "value": 18,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "18"
+                }
+              },
+              "unit_price": {
+                "value": 5.6,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$5.60"
+                }
+              },
+              "total": {
+                "value": 100.8,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 1,
+                  "quote": "$100.80"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Contractor Trash Bags (50ct)",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "Contractor Trash Bags (50ct)"
+                }
+              },
+              "quantity": {
+                "value": 3,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "3"
+                }
+              },
+              "unit_price": {
+                "value": 24.25,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "$24.25"
+                }
+              },
+              "total": {
+                "value": 72.75,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "$72.75"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Work Gloves, leather",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "Work Gloves, leather"
+                }
+              },
+              "quantity": {
+                "value": 10,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "10"
+                }
+              },
+              "unit_price": {
+                "value": 8.4,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "$8.40"
+                }
+              },
+              "total": {
+                "value": 84.0,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "$84.00"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Chalk Line Reel",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "Chalk Line Reel"
+                }
+              },
+              "quantity": {
+                "value": 2,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "2"
+                }
+              },
+              "unit_price": {
+                "value": 12.95,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "$12.95"
+                }
+              },
+              "total": {
+                "value": 25.9,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "$25.90"
+                }
+              }
+            },
+            {
+              "description": {
+                "value": "Level, 48in",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "Level, 48in"
+                }
+              },
+              "quantity": {
+                "value": 2,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "2"
+                }
+              },
+              "unit_price": {
+                "value": 31.5,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "$31.50"
+                }
+              },
+              "total": {
+                "value": 63.0,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "$63.00"
+                }
+              }
+            }
+          ],
+          "confidence": 0.96
+        },
+        "subtotal": {
+          "correct": true,
+          "expected": 1997.0,
+          "actual": 1997.0,
+          "confidence": 0.98,
+          "evidence": {
+            "page": 2,
+            "quote": "Subtotal: $1,997.00"
+          }
+        },
+        "discount": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "shipping": {
+          "correct": true,
+          "expected": 85.0,
+          "actual": 85.0,
+          "confidence": 0.98,
+          "evidence": {
+            "page": 2,
+            "quote": "Freight: $85.00"
+          }
+        },
+        "tax": {
+          "correct": true,
+          "expected": 144.78,
+          "actual": 144.78,
+          "confidence": 0.98,
+          "evidence": {
+            "page": 2,
+            "quote": "Sales tax 7.25%: $144.78"
+          }
+        },
+        "tax_lines": {
+          "correct": true,
+          "expected": [
+            {
+              "label": "Sales tax",
+              "rate": 7.25,
+              "base": null,
+              "amount": 144.78
+            }
+          ],
+          "actual": [
+            {
+              "label": {
+                "value": "Sales tax",
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "Sales tax 7.25%: $144.78"
+                }
+              },
+              "rate": {
+                "value": 7.25,
+                "confidence": 0.97,
+                "evidence": {
+                  "page": 2,
+                  "quote": "Sales tax 7.25%: $144.78"
+                }
+              },
+              "base": {
+                "value": null,
+                "confidence": 0.0,
+                "evidence": null
+              },
+              "amount": {
+                "value": 144.78,
+                "confidence": 0.98,
+                "evidence": {
+                  "page": 2,
+                  "quote": "Sales tax 7.25%: $144.78"
+                }
+              }
+            }
+          ],
+          "confidence": 0.95
+        },
+        "tip": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "total": {
+          "correct": true,
+          "expected": 2226.78,
+          "actual": 2226.78,
+          "confidence": 0.98,
+          "evidence": {
+            "page": 2,
+            "quote": "Total: $2,226.78"
+          }
+        },
+        "amount_paid": {
+          "correct": true,
+          "expected": null,
+          "actual": null,
+          "confidence": 0.0
+        },
+        "amount_due": {
+          "correct": true,
+          "expected": 2226.78,
+          "actual": 2226.78,
+          "confidence": 0.98,
+          "evidence": {
+            "page": 2,
+            "quote": "Amount due: $2,226.78"
+          }
+        },
+        "currency": {
+          "correct": true,
+          "expected": "USD",
+          "actual": "USD",
+          "confidence": 0.99,
+          "evidence": {
+            "page": 2,
+            "quote": "Currency: USD"
+          }
+        }
+      },
+      "schema_violations": 0,
+      "hallucinations": 0,
+      "item_accuracy": 1.0,
+      "cost_usd": 0.062248,
+      "latency_ms": 26268,
+      "input_tokens": 11189,
+      "output_tokens": 3987,
+      "repaired": false,
+      "residual_schema_violations": 0,
+      "stop_reasons": [
+        {
+          "first": "tool_use",
+          "repair": null
+        }
+      ]
+    }
+  ],
+  "total_residual_schema_violations": 0
+}
