@@ -7,11 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import get_settings
-from app.db import engine
-from app.retrieval.embeddings import warm_up_embedder
+from app.db import async_session_maker, engine
+from app.mcp_server.http import McpHttpEndpoint
+from app.mcp_server.server import build_server
+from app.retrieval.embeddings import get_embedder, warm_up_embedder
 from app.routers import ask, chat, documents, monitoring, review, search, stats
 from app.routers.documents import MAX_UPLOAD_SIZE
 from app.telemetry import configure_tracing, instrument_api, otlp_enabled
@@ -90,13 +93,25 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
+# The MCP server over Streamable HTTP at /mcp (app/mcp_server/). It shares this
+# process's embedder (get_embedder() is lazy and cached), rate limiter and
+# tracing; its session manager runs inside the lifespan below.
+mcp_endpoint = McpHttpEndpoint(
+    build_server(
+        session_factory=async_session_maker, embedder=get_embedder(), settings=get_settings()
+    ),
+    get_settings(),
+)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Warm the embedding model in the background: /search embeds every
     # query, and the first one shouldn't pay the model load. Not awaited,
     # so the API is serving (and /healthz passing) while it loads.
     warm_up = asyncio.create_task(run_in_threadpool(warm_up_embedder))
-    yield
+    async with mcp_endpoint.run():
+        yield
     warm_up.cancel()
 
 
@@ -133,6 +148,12 @@ app.include_router(stats.router, prefix="/stats", tags=["stats"])
 app.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(ask.router, prefix="/ask", tags=["ask"])
+# Plain Routes, not a Mount: a mount answers 307 to every request, which MCP
+# clients do not follow on a POST. "/mcp/" is routed too, because Starlette
+# would otherwise redirect it the same way, and a pasted URL often ends in a
+# slash. Not APIRoutes, so neither is in /openapi.json.
+app.router.routes.append(Route("/mcp", endpoint=mcp_endpoint))
+app.router.routes.append(Route("/mcp/", endpoint=mcp_endpoint))
 
 # Tracing is opt-in via OTEL_EXPORTER_OTLP_ENDPOINT (see app/telemetry.py);
 # when it's off this is a no-op and no instrumentation is installed.

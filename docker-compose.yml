@@ -94,6 +94,9 @@ services:
       # uvicorn with --proxy-headers for true per-client limits.
       ASK_RATE_LIMIT_PER_MINUTE: ${ASK_RATE_LIMIT_PER_MINUTE:-10}
       UPLOAD_RATE_LIMIT_PER_MINUTE: ${UPLOAD_RATE_LIMIT_PER_MINUTE:-0}
+      # POSTs per minute to /mcp, the MCP server (app/mcp_server/); same
+      # bridge-gateway caveat as above. 0 = off.
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-120}
       # Only POST /ask (the question-answering agent, app/agent/) calls the
       # model from the API process; every other route runs without it, and
       # /ask returns 503 when this is empty.

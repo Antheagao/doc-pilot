@@ -177,6 +177,14 @@ class Settings(BaseSettings):
     # under what a client will truncate or reject on its own. A longer result
     # drops its trailing lines and says so (app/mcp_server/server.py).
     mcp_max_result_chars: int = Field(default=24_000, ge=2_000, le=200_000)
+    # POSTs per minute per client on /mcp (app/mcp_server/http.py, the "mcp"
+    # bucket of app/ratelimit.py); 0 turns it off. Every JSON-RPC message is a
+    # POST and counts, so a client's handshake (initialize, the initialized
+    # notification, tools/list) costs three before its first tool call. 120 is
+    # two a second: an agent working through a question in a burst stays under
+    # it, a loop hammering the database does not. The tools never call a model,
+    # so this guards the database and embedder, not spend.
+    mcp_rate_limit_per_minute: int = Field(default=120, ge=0)
 
     @field_validator("extraction_prompt_version")
     @classmethod

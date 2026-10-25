@@ -1,6 +1,7 @@
 """The MCP server: the agent tools behind a real MCP client, in memory (no
 network, no model). Each test runs in both protocol eras the SDK serves: the
-handshake era (`mode="legacy"`) and the stateless 2026-07-28 era (`"auto"`)."""
+handshake era (`mode="legacy"`) and the stateless 2026-07-28 era (`"auto"`).
+The last section is the Streamable HTTP route, /mcp, served in process."""
 
 import json
 import os
@@ -11,19 +12,27 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import httpx
+import httpx2
 import pytest
 import pytest_asyncio
 from mcp import Client, MCPError, StdioServerParameters, types
+from mcp.client.streamable_http import streamable_http_client
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_agent import DOCS, EMBEDDER
+from test_ratelimit import FakeClock
 
 from app import extraction as extraction_module
+from app import main as main_module
+from app import ratelimit
 from app.agent.tools import TOOL_DEFINITIONS, TOOL_HANDLERS
 from app.config import BACKEND_DIR, Settings
 from app.evals.corpus import seed_labeled_corpus
 from app.evals.dataset import load_cases
 from app.evals.retrieval import load_gold_corpus
+from app.main import app
 from app.mcp_server import server as server_module
+from app.mcp_server.http import MAX_REQUEST_BODY_BYTES, McpHttpEndpoint
 from app.mcp_server.server import (
     INSTRUCTIONS,
     NOTICE,
@@ -31,6 +40,7 @@ from app.mcp_server.server import (
     build_server,
 )
 from app.models import Document
+from app.ratelimit import WINDOW_SECONDS, SlidingWindowLimiter
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
 
 pytestmark = pytest.mark.usefixtures("spans")
@@ -483,3 +493,234 @@ async def test_the_stdio_entry_point_serves_the_tools() -> None:
     assert [tool.name for tool in tools] == [definition["name"] for definition in TOOL_DEFINITIONS]
     assert result.is_error is True and "no indexed pages" in _text(result)
 
+
+
+# --- Streamable HTTP at /mcp ------------------------------------------------
+
+BASE_URL = "http://127.0.0.1:8000"
+JSON_HEADERS = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
+INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0"},
+    },
+}
+MODERN = {"mcp-protocol-version": "2026-07-28"}
+
+
+@asynccontextmanager
+async def _http(
+    db_session: AsyncSession, **settings
+) -> AsyncGenerator[tuple[McpHttpEndpoint, httpx.AsyncClient]]:
+    """The endpoint running in process, and a client posting to it as 127.0.0.1."""
+    endpoint = McpHttpEndpoint(_server(db_session), Settings(**settings))
+    async with endpoint.run():
+        transport = httpx.ASGITransport(app=endpoint)
+        async with httpx.AsyncClient(transport=transport, base_url=BASE_URL) as client:
+            yield endpoint, client
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
+    """A fresh limiter on a fake clock, in place of the process-wide one."""
+    fake = FakeClock()
+    monkeypatch.setattr(ratelimit, "_limiter", SlidingWindowLimiter(fake))
+    return fake
+
+
+async def _tool_names(app_under_test, mode: str) -> list[str]:
+    """tools/list through the SDK's own HTTP client, in process."""
+    http_client = httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app_under_test), base_url=BASE_URL
+    )
+    async with Client(streamable_http_client(f"{BASE_URL}/mcp", http_client=http_client), mode=mode) as client:
+        return [tool.name for tool in (await client.list_tools()).tools]
+
+
+async def test_initialize_over_http_is_served(db_session: AsyncSession, clock: FakeClock) -> None:
+    async with _http(db_session) as (_, client):
+        response = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["result"]["serverInfo"]["name"] == "doc-pilot"
+    assert "mcp-session-id" not in response.headers
+
+
+async def test_tools_list_over_http_in_both_eras(
+    db_session: AsyncSession, clock: FakeClock, mode: str
+) -> None:
+    async with _http(db_session) as (endpoint, _):
+        names = await _tool_names(endpoint, mode)
+
+    assert names == [definition["name"] for definition in TOOL_DEFINITIONS]
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8100", "localhost:8000", "[::1]:8000"])
+async def test_loopback_hosts_are_served(db_session: AsyncSession, clock: FakeClock, host: str) -> None:
+    async with _http(db_session) as (_, client):
+        response = await client.post("/mcp", json=INITIALIZE, headers={**JSON_HEADERS, "host": host})
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("extra", [{}, MODERN], ids=["handshake", "modern"])
+async def test_a_foreign_host_is_refused_in_both_eras(
+    db_session: AsyncSession, clock: FakeClock, extra: dict
+) -> None:
+    async with _http(db_session) as (_, client):
+        response = await client.post(
+            "/mcp", json=INITIALIZE, headers={**JSON_HEADERS, **extra, "host": "evil.example:8000"}
+        )
+
+    assert response.status_code == 421
+
+
+@pytest.mark.parametrize("origin", ["http://evil.example", "http://localhost:3000"])
+@pytest.mark.parametrize("extra", [{}, MODERN], ids=["handshake", "modern"])
+async def test_any_origin_is_refused_the_frontend_included(
+    db_session: AsyncSession, clock: FakeClock, origin: str, extra: dict
+) -> None:
+    async with _http(db_session) as (_, client):
+        response = await client.post(
+            "/mcp", json=INITIALIZE, headers={**JSON_HEADERS, **extra, "origin": origin}
+        )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE", "PUT"])
+async def test_only_post_is_served(db_session: AsyncSession, clock: FakeClock, method: str) -> None:
+    async with _http(db_session) as (_, client):
+        # Without the 405 a handshake-era GET holds its connection open.
+        response = await client.request(method, "/mcp", headers={"accept": "text/event-stream"})
+
+    assert response.status_code == 405
+    assert response.headers["allow"] == "POST"
+    assert "detail" in response.json()
+
+
+async def test_a_body_over_the_limit_is_refused(db_session: AsyncSession, clock: FakeClock) -> None:
+    async with _http(db_session) as (_, client):
+        response = await client.post(
+            "/mcp", content=b"x" * (MAX_REQUEST_BODY_BYTES + 1), headers=JSON_HEADERS
+        )
+        fits = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+
+    assert response.status_code == 413
+    assert fits.status_code == 200
+
+
+async def test_a_post_that_is_not_json_is_refused(db_session: AsyncSession, clock: FakeClock) -> None:
+    async with _http(db_session) as (_, client):
+        response = await client.post("/mcp", content=b"{}", headers={"content-type": "text/plain"})
+
+    assert response.status_code == 400
+
+
+async def test_the_route_is_down_outside_the_lifespan(db_session: AsyncSession, clock: FakeClock) -> None:
+    endpoint = McpHttpEndpoint(_server(db_session), Settings())
+    transport = httpx.ASGITransport(app=endpoint)
+    async with httpx.AsyncClient(transport=transport, base_url=BASE_URL) as client:
+        down = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+        async with endpoint.run():
+            up = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+        down_again = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+
+    assert (down.status_code, up.status_code, down_again.status_code) == (503, 200, 503)
+
+
+# --- the rate limit ---------------------------------------------------------
+
+
+async def test_the_third_post_in_a_minute_is_refused_at_a_limit_of_two(
+    db_session: AsyncSession, clock: FakeClock
+) -> None:
+    async with _http(db_session, mcp_rate_limit_per_minute=2) as (_, client):
+        first = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+        second = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+        third = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+        clock.now += WINDOW_SECONDS
+        later = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+
+    assert [first.status_code, second.status_code, third.status_code] == [200, 200, 429]
+    assert third.headers["retry-after"] == str(int(WINDOW_SECONDS))
+    assert "at most 2 per minute" in third.json()["detail"]
+    assert later.status_code == 200
+
+
+async def test_requests_that_are_not_served_spend_none_of_the_allowance(
+    db_session: AsyncSession, clock: FakeClock
+) -> None:
+    async with _http(db_session, mcp_rate_limit_per_minute=2) as (_, client):
+        for headers in (
+            {**JSON_HEADERS, "host": "evil.example:8000"},
+            {**JSON_HEADERS, "origin": "http://evil.example"},
+            {**JSON_HEADERS, **MODERN, "host": "evil.example:8000"},
+        ):
+            assert (await client.post("/mcp", json=INITIALIZE, headers=headers)).status_code in (403, 421)
+        assert (await client.get("/mcp")).status_code == 405
+        served = [
+            (await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)).status_code
+            for _ in range(3)
+        ]
+
+    assert served == [200, 200, 429]
+
+
+async def test_a_limit_of_zero_turns_the_rate_limit_off(
+    db_session: AsyncSession, clock: FakeClock
+) -> None:
+    async with _http(db_session, mcp_rate_limit_per_minute=0) as (_, client):
+        codes = {
+            (await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)).status_code
+            for _ in range(15)
+        }
+
+    assert codes == {200}
+
+
+def test_the_mcp_rate_limit_setting_is_bounded() -> None:
+    assert Settings().mcp_rate_limit_per_minute == 120
+    assert Settings(mcp_rate_limit_per_minute=0).mcp_rate_limit_per_minute == 0
+    with pytest.raises(ValueError):
+        Settings(mcp_rate_limit_per_minute=-1)
+
+
+# --- on the real app --------------------------------------------------------
+
+
+async def test_the_apps_lifespan_serves_mcp_each_time_it_starts(
+    monkeypatch: pytest.MonkeyPatch, clock: FakeClock, mode: str
+) -> None:
+    monkeypatch.setattr(main_module, "warm_up_embedder", lambda: None)
+    expected = [definition["name"] for definition in TOOL_DEFINITIONS]
+
+    for _ in range(2):
+        async with app.router.lifespan_context(app):
+            assert await _tool_names(app, mode) == expected
+    # After the last shutdown the route is down again.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE_URL) as client:
+        assert (await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)).status_code == 503
+
+
+async def test_mcp_is_a_route_not_a_redirect_and_stays_out_of_openapi(
+    monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    monkeypatch.setattr(main_module, "warm_up_embedder", lambda: None)
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=transport, base_url=BASE_URL
+    ) as client:
+        posted = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS, follow_redirects=False)
+        slashed = await client.post("/mcp/", json=INITIALIZE, headers=JSON_HEADERS, follow_redirects=False)
+        schema = (await client.get("/openapi.json")).json()
+        healthy = await client.get("/healthz")
+
+    assert posted.status_code == 200 and slashed.status_code == 200
+    assert "/mcp" not in schema["paths"] and "/mcp/" not in schema["paths"]
+    assert "/search" in schema["paths"]
+    assert healthy.status_code == 200
