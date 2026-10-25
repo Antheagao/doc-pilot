@@ -39,12 +39,12 @@ jobs:
         run: pip install -e .[dev]
       - name: Lint
         run: ruff check .
-      - name: Lint the demo scripts
-        run: ruff check ../scripts/demos
+      - name: Lint the scripts
+        run: ruff check ../scripts
       - name: Lint the eval CLIs
         run: ruff check ../evals
-      - name: Test the demo scripts
-        run: python -m pytest ../scripts/demos -q
+      - name: Test the scripts
+        run: python -m pytest ../scripts -q
       # No separate migrate step: the suite runs on its own database
       # (docpilot_test, beside the service's docpilot), which tests/conftest.py
       # creates and migrates to head on an empty server before the first test,
@@ -139,6 +139,8 @@ jobs:
         run: docker compose config -q
       - name: Validate demo overlay config
         run: docker compose -f docker-compose.yml -f docker-compose.demo.yml config -q
+      - name: Validate load overlay config
+        run: docker compose -p doc-pilot-load -f docker-compose.yml -f docker-compose.load.yml config -q
 
   terraform:
     runs-on: ubuntu-latest

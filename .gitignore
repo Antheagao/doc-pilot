@@ -35,3 +35,8 @@ crash.log
 # Demo recordings (scripts/demos): WebM/MP4/poster pairs; the GIFs under
 # screenshots/features/ are the committed artifacts.
 scripts/demos/out/
+
+# Load-test run data (scripts/load): the seeded tenants' API keys and
+# passwords (tenants.json) and raw samples. Never committed; the artifacts
+# under scripts/load/results/ are.
+scripts/load/out/

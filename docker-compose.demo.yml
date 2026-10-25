@@ -4,6 +4,10 @@
 # A separate project gets its own containers, network, images and named
 # volumes (doc-pilot-demo_db_data, ...), so seeding or resetting demo data
 # can never touch the dev/test database on host port 5434.
+# The `-p doc-pilot-demo` is load-bearing: a COMPOSE_PROJECT_NAME exported in
+# the shell beats the `name:` below, and the volumes would then be named
+# doc-pilot_* (the dev stack's). demo.py always passes -p; so must anyone
+# running compose by hand.
 name: doc-pilot-demo
 
 services:

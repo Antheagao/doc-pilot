@@ -1,0 +1,180 @@
+# Isolated stack for the load test (scripts/load/load.py).
+# An overlay on docker-compose.yml, always run as its own compose project:
+#   docker compose -p doc-pilot-load -f docker-compose.yml -f docker-compose.load.yml ...
+# A separate project gets its own containers, network, images and named
+# volumes (doc-pilot-load_db_data, ...), so loading, resetting or wiping this
+# stack can never touch the dev database on host port 5434 or the demo's.
+# The `-p doc-pilot-load` is load-bearing: a COMPOSE_PROJECT_NAME exported in
+# the shell beats the `name:` below, and the volumes would then be named
+# doc-pilot_* (the dev stack's). load.py always passes -p; so must anyone
+# running compose by hand.
+#
+# No model is ever called from here. Four layers keep it that way, each
+# checked by `load.py preflight`:
+#   1. api and worker run MODEL_PROVIDER=scripted with all four model names
+#      `scripted` (app/scripted_model.py), and ANTHROPIC_API_KEY is blanked
+#      explicitly: the base file passes ${ANTHROPIC_API_KEY:-} from the root
+#      .env, which holds the real key, so an overlay that only left it out
+#      would bill.
+#   2. Settings refuses `scripted` beside a non-empty key (app/config.py).
+#   3. The preflight asks every api and worker container for its provider and
+#      whether it holds a key (a yes or no, never the key).
+#   4. DAILY_BUDGET_USD is one cent: any recorded spend turns uploads and
+#      questions into 429s.
+name: doc-pilot-load
+
+services:
+  db:
+    # No host port at all: the dev db owns 5434, and nothing outside the load
+    # network needs to reach this one (load.py runs psql inside the container).
+    ports: !reset []
+    # pg_stat_statements must be preloaded; the extension itself is created by
+    # `load.py preflight`, as the owner, in docpilot_load only.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    environment:
+      # Its own database name: load.py refuses to create the extension or
+      # reset anything unless it is the one it talks to.
+      POSTGRES_DB: docpilot_load
+    healthcheck:
+      test: !override ["CMD-SHELL", "pg_isready -U docpilot -d docpilot_load"]
+    # A run is short-lived (up for a measurement, then down), so nothing
+    # restarts with the Docker daemon.
+    restart: "no"
+
+  migrate:
+    # Its own backend image name, so a load rebuild never retags the dev
+    # stack's doc-pilot-backend or the demo's.
+    image: doc-pilot-load-backend
+    environment:
+      # The owner migrates, then provisions the runtime role (see the base
+      # file), so the startup guard of api and worker passes.
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_load
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot_load
+      # The migrate container never calls a model; blank all the same.
+      ANTHROPIC_API_KEY: ""
+    restart: "no"
+
+  api:
+    image: doc-pilot-load-backend
+    # 8200 sits beside the dev stack's 8000 and the demo's 8100, for
+    # inspection from the host; the load generator reaches http://api:8000
+    # inside the network.
+    ports: !override
+      - "127.0.0.1:8200:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot_load
+      MODEL_PROVIDER: scripted
+      EXTRACTION_MODEL: scripted
+      TRANSCRIPTION_MODEL: scripted
+      AGENT_MODEL: scripted
+      JUDGE_MODEL: scripted
+      # What the scripted model costs in time (app/config.py); the load
+      # harness sets these per run and records them in the artifact.
+      SCRIPTED_MODEL_PROFILE: ${SCRIPTED_MODEL_PROFILE:-zero}
+      SCRIPTED_MODEL_LATENCY_SCALE: ${SCRIPTED_MODEL_LATENCY_SCALE:-1.0}
+      SCRIPTED_AGENT_STEP_MS: ${SCRIPTED_AGENT_STEP_MS:-3000}
+      SCRIPTED_JUDGE_MS: ${SCRIPTED_JUDGE_MS:-4000}
+      # Blank, not absent: see the layers above.
+      ANTHROPIC_API_KEY: ""
+      # The tripwire. The scripted model costs nothing, so any spend recorded
+      # over a cent means a real model was reached; the API then answers 429
+      # (app/budget.py). A literal, so no shell variable can raise it.
+      DAILY_BUDGET_USD: "0.01"
+      # Load-only overrides, recorded in the artifact: the generator would hit
+      # the per-client limits at once (one address behind the gateway), and a
+      # quarter of the answers are graded so judge jobs ride the queue.
+      ASK_RATE_LIMIT_PER_MINUTE: "0"
+      UPLOAD_RATE_LIMIT_PER_MINUTE: "0"
+      ASK_JUDGE_SAMPLE_RATE: "0.25"
+      # Langfuse off, and tracing off unless the diagnosis pass names an
+      # endpoint: a shell that exports OTEL_EXPORTER_OTLP_ENDPOINT for the dev
+      # stack must not send load spans to its jaeger.
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${LOAD_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # The browser calls the API from the load frontend's origin (profile
+      # `frontend`), and the sign-in cookie has a name of its own: cookies
+      # ignore ports, so the dev, demo and load APIs would otherwise overwrite
+      # one another's.
+      CORS_ORIGINS: '["http://localhost:3200"]'
+      SESSION_COOKIE_NAME: docpilot_load_session
+    volumes: !override
+      - uploads:/data/uploads
+      - models:/data/models
+      # The scripted model answers from the committed eval corpus (labels,
+      # gold text, the Sonnet runs) and the API reads the run artifacts from
+      # it; the image holds only backend/, and app/evals resolves EVALS_DIR to
+      # /evals beside it. Replaces the base file's results-only mount.
+      - ./evals:/evals:ro
+    restart: "no"
+
+  worker:
+    image: doc-pilot-load-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot_load
+      MODEL_PROVIDER: scripted
+      EXTRACTION_MODEL: scripted
+      TRANSCRIPTION_MODEL: scripted
+      AGENT_MODEL: scripted
+      JUDGE_MODEL: scripted
+      SCRIPTED_MODEL_PROFILE: ${SCRIPTED_MODEL_PROFILE:-zero}
+      SCRIPTED_MODEL_LATENCY_SCALE: ${SCRIPTED_MODEL_LATENCY_SCALE:-1.0}
+      SCRIPTED_AGENT_STEP_MS: ${SCRIPTED_AGENT_STEP_MS:-3000}
+      SCRIPTED_JUDGE_MS: ${SCRIPTED_JUDGE_MS:-4000}
+      ANTHROPIC_API_KEY: ""
+      # A lease, so `up --scale worker=N` is safe (see the base file): longer
+      # than the slowest job, because nothing renews it while a job runs.
+      WORKER_RECLAIM_AFTER_SECONDS: "600"
+      # The worker does not enforce the cap, but the run's artifact records
+      # one budget value for the whole stack.
+      DAILY_BUDGET_USD: "0.01"
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${LOAD_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    volumes:
+      # Appended to the base file's uploads and models: see the api service.
+      - ./evals:/evals:ro
+    restart: "no"
+
+  # Off by default: the load test drives the API directly, and the dev
+  # stack's frontend owns 3000. `--profile frontend` starts it on 3200.
+  frontend:
+    profiles: ["frontend"]
+    build:
+      args:
+        # Inlined into the client bundle at build time (frontend/Dockerfile):
+        # the URL the BROWSER reaches the load API at. Compose names the built
+        # image doc-pilot-load-frontend, so the dev stack's is not overwritten.
+        NEXT_PUBLIC_API_URL: "http://localhost:8200"
+    ports: !override
+      - "127.0.0.1:3200:3000"
+    restart: "no"
+
+  # The trace viewer of the diagnosis pass (`--profile tracing`), on ports
+  # that cannot clash with the dev stack's jaeger (16686 and 4318).
+  jaeger:
+    ports: !override
+      - "127.0.0.1:16786:16686"  # UI
+      - "127.0.0.1:4418:4318"    # OTLP/HTTP, for exporting from the host
+    restart: "no"
+
+  # The load generator (Locust), inside the load network so the numbers
+  # exclude Docker Desktop's host port forwarder. Started by
+  # `--profile loadgen`; scripts/load/Dockerfile arrives with the harness.
+  # load.py runs Locust in it with each phase's parameters (`docker compose
+  # exec`), so the container itself only waits.
+  loadgen:
+    build: ./scripts/load
+    image: doc-pilot-load-loadgen
+    profiles: ["loadgen"]
+    command: ["sleep", "infinity"]
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      ANTHROPIC_API_KEY: ""
+    volumes:
+      # The corpus images to upload and the questions to ask.
+      - ./evals:/evals:ro
+      - ./scripts/load:/load:ro
+    restart: "no"
