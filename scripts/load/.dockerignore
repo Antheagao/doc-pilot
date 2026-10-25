@@ -1,0 +1,5 @@
+# The build context is this directory, and out/ holds the seeded tenants' API
+# keys and passwords (tenants.json): they must never be sent to the daemon.
+# The image needs only requirements.txt.
+*
+!requirements.txt

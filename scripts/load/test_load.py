@@ -10,13 +10,16 @@ import json
 import os
 import stat
 import subprocess
+import tempfile
 import threading
 from collections.abc import Callable, Iterator
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import load
 import pytest
+from test_artifact import good_artifact
 
 CliError = load.CliError
 
@@ -845,3 +848,528 @@ def test_the_file_mode_survives_a_permissive_umask(tmp_path: Path) -> None:
     finally:
         os.umask(old)
     assert stat.S_IMODE((tmp_path / "k.json").stat().st_mode) == 0o600
+
+
+# --- run, smoke and their pieces ------------------------------------------------------
+
+
+@pytest.fixture
+def run_environment(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """A private os.environ, so a test that sets the run's settings leaves the
+    real one alone."""
+    private: dict = {}
+    monkeypatch.setattr(load.os, "environ", private)
+    return private
+
+
+def test_the_smoke_refuses_the_results_directory_before_touching_docker(
+    docker: FakeDocker, capsys: pytest.CaptureFixture
+) -> None:
+    assert load.main(["smoke", "--out", str(load.RESULTS_DIR)]) == 1
+    assert "may not write to scripts/load/results" in capsys.readouterr().err
+    assert docker.calls == []  # not a single docker command ran
+
+
+def test_the_smoke_refuses_a_directory_inside_results_and_a_link_to_it(
+    docker: FakeDocker, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    link = tmp_path / "link"
+    link.symlink_to(load.RESULTS_DIR)
+    for target in (load.RESULTS_DIR / "nested" / "dir", link):
+        assert load.main(["smoke", "--out", str(target)]) == 1, target
+    assert docker.calls == []
+    assert capsys.readouterr().err.count("may not write to") == 2
+
+
+def test_the_smoke_writes_to_a_temporary_directory_by_default(
+    monkeypatch: pytest.MonkeyPatch, run_environment: dict, tmp_path: Path
+) -> None:
+    seen: dict = {}
+
+    def stop(plan: object, **kwargs: object) -> None:
+        seen.update(kwargs, plan=plan)
+        raise CliError("stopped before docker")
+
+    monkeypatch.setattr(load, "execute", stop)
+    assert load.main(["smoke"]) == 1
+    out_dir = seen["out_dir"]
+    assert out_dir.parent == Path(tempfile.gettempdir()).resolve()
+    assert out_dir.name.startswith("doc-pilot-load-smoke-")
+    assert load.RESULTS_DIR not in out_dir.parents
+    assert seen["plan"].preset == "smoke" and seen["label"] == "smoke"
+    # The smoke runs on the hashing embedder and the zero profile, whatever the shell says.
+    assert run_environment["LOAD_EMBEDDING_BACKEND"] == "hashing"
+    assert run_environment["SCRIPTED_MODEL_PROFILE"] == "zero"
+    assert float(run_environment["SCRIPTED_MODEL_LATENCY_SCALE"]) == 1.0
+    out_dir.rmdir()
+
+
+def test_a_quick_or_custom_run_may_not_write_to_results_but_a_full_one_may(
+    monkeypatch: pytest.MonkeyPatch, run_environment: dict, capsys: pytest.CaptureFixture
+) -> None:
+    where: list[Path] = []
+
+    def stop(plan: object, **kwargs: object) -> None:
+        where.append(kwargs["out_dir"])
+        raise CliError("stopped before docker")
+
+    monkeypatch.setattr(load, "execute", stop)
+    results = str(load.RESULTS_DIR)
+    assert load.main(["run", "--label", "x", "--quick", "--out", results]) == 1
+    assert load.main(["run", "--label", "x", "--reps", "1", "--out", results]) == 1
+    assert where == []
+    assert capsys.readouterr().err.count("may not write to") == 2
+    assert load.main(["run", "--label", "x", "--out", results]) == 1  # a full plan gets as far as `execute`
+    assert where == [load.RESULTS_DIR.resolve()]
+
+
+def test_a_run_writes_to_the_ignored_out_directory_by_default(
+    monkeypatch: pytest.MonkeyPatch, run_environment: dict
+) -> None:
+    where: list[Path] = []
+
+    def stop(plan: object, **kwargs: object) -> None:
+        where.append(kwargs["out_dir"])
+        raise CliError("stopped before docker")
+
+    monkeypatch.setattr(load, "execute", stop)
+    load.main(["run", "--label", "dry", "--quick"])
+    assert where == [load.OUT_DIR]
+
+
+def test_the_run_passes_its_profile_and_scale_to_compose_through_the_environment(
+    monkeypatch: pytest.MonkeyPatch, run_environment: dict
+) -> None:
+    def stop(plan: object, **kwargs: object) -> None:
+        raise CliError("stopped before docker")
+
+    monkeypatch.setattr(load, "execute", stop)
+    load.main(["run", "--profile", "replay", "--scale", "0.1", "--label", "x", "--quick"])
+    assert run_environment["SCRIPTED_MODEL_PROFILE"] == "replay"
+    assert run_environment["SCRIPTED_MODEL_LATENCY_SCALE"] == "0.1"
+    assert "LOAD_EMBEDDING_BACKEND" not in run_environment  # a run keeps the overlay's embedder
+
+
+def test_a_run_needs_a_label_and_a_known_profile() -> None:
+    parser = load.build_parser()
+    for argv in (["run"], ["run", "--label", "x", "--profile", "fast"]):
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+
+
+def parse_run(*extra: str):
+    return load.build_parser().parse_args(["run", "--label", "x", *extra])
+
+
+def test_the_plan_is_the_full_plan_unless_told_otherwise() -> None:
+    assert load.plan_from_args(parse_run()) == load.phases.full_plan()
+    assert load.plan_from_args(parse_run("--quick")) == load.phases.quick_plan()
+
+
+def test_changing_a_number_makes_the_full_plan_custom() -> None:
+    plan = load.plan_from_args(
+        parse_run("--phases", "scaling", "--reps", "2", "--workers", "1,3", "--backlog", "50",
+                  "--ramp-users", "2,4", "--step-seconds", "10", "--ingest-users", "1,2",
+                  "--ingest-documents", "20", "--tenant-documents", "load-large=30,load-small=5")
+    )
+    assert plan.preset == "custom" and plan.phases == ("scaling",) and plan.repetitions == 2
+    assert plan.workers == (1, 3) and plan.backlog_documents == 50 and plan.ramp_users == (2, 4)
+    assert plan.step_seconds == 10 and plan.ingest_users == (1, 2) and plan.ingest_documents == 20
+    assert plan.tenant_documents == (("load-large", 30), ("load-small", 5))
+    assert load.plan_from_args(parse_run("--quick", "--reps", "2")).preset == "quick"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--phases", "nonsense"],
+        ["--workers", "1,x"],
+        ["--workers", "0"],
+        ["--ramp-users", ""],
+        ["--reps", "0"],
+        ["--backlog", "0"],
+        ["--tenant-documents", "someone-else=5"],
+        ["--tenant-documents", "load-large=many"],
+    ],
+)
+def test_a_plan_with_nonsense_numbers_is_refused(argv: list[str]) -> None:
+    with pytest.raises(CliError):
+        load.plan_from_args(parse_run(*argv))
+
+
+def test_the_command_is_recorded_as_given() -> None:
+    assert load.command_record(["run", "--label", "x"]) == ["python", "scripts/load/load.py", "run", "--label", "x"]
+
+
+def test_a_key_is_scrubbed_from_output_that_may_be_shown() -> None:
+    assert load.scrub(f"KeyError: {SECRET_KEY} in line 3") == "KeyError: dpk_*** in line 3"
+    assert SECRET_KEY not in load.scrub(f"{SECRET_KEY}\n{OTHER_KEYS[0]}")
+
+
+# --- spend --------------------------------------------------------------------------------
+
+
+def test_any_cost_or_any_other_model_is_a_spend_problem() -> None:
+    assert load.spend_problems(Decimal(0), {"scripted"}) == []
+    assert load.spend_problems(Decimal(0), set()) == []
+    assert "not 0" in load.spend_problems(Decimal("0.000001"), {"scripted"})[0]
+    assert "claude-haiku-4-5" in load.spend_problems(Decimal(0), {"scripted", "claude-haiku-4-5"})[0]
+
+
+def test_the_ledger_adds_up_what_each_phase_found() -> None:
+    ledger = load.Ledger()
+    ledger.add(Decimal(0), {"scripted"})
+    ledger.add(Decimal(0), set())
+    assert ledger.problems() == [] and ledger.models == {"scripted"}
+    ledger.add(Decimal("0.5"), {"scripted"})
+    assert ledger.problems()
+
+
+def test_spend_is_read_from_the_database_as_the_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[str] = []
+
+    def owner_psql(*args: str) -> str:
+        asked.append(args[-1])
+        return "0.000000\n" if "sum(cost_usd)" in args[-1] else "scripted\n"
+
+    monkeypatch.setattr(load, "owner_psql", owner_psql)
+    assert load.read_spend() == (Decimal(0), {"scripted"})
+    spend_sql, models_sql = asked
+    for table in ("extractions", "document_pages", "ask_runs"):
+        assert table in spend_sql and table in models_sql
+    assert "judge_cost_usd" in spend_sql and "judge_model" in models_sql
+
+
+def test_the_driver_refuses_to_go_on_when_a_real_model_may_have_been_reached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    driver = load.StackDriver(tmp_path)
+    monkeypatch.setattr(load, "read_spend", lambda: (Decimal(0), {"scripted"}))
+    driver.check_spend()
+    monkeypatch.setattr(load, "read_spend", lambda: (Decimal("0.02"), {"scripted"}))
+    with pytest.raises(CliError, match="a real model may have been reached"):
+        driver.check_spend()
+    monkeypatch.setattr(load, "read_spend", lambda: (Decimal(0), {"claude-sonnet-4-5"}))
+    with pytest.raises(CliError, match="claude-sonnet-4-5"):
+        driver.check_spend()
+
+
+# --- the smoke's assertions ---------------------------------------------------------------------
+
+
+def smoke_samples(**changes: object) -> list[dict]:
+    def one(name: str, **extra: object) -> dict:
+        return {"name": name, "ok": True, "error": None, **extra}
+
+    uploads = [one("upload", document_id=f"id-{n}") for n in range(10)]
+    reads = [one(name) for name in ("search", "ask", "ask_stream", "documents")]
+    return uploads + reads + [one("login")]
+
+
+def smoke_facts(**changes: int) -> list[load.DocumentFacts]:
+    values = {"extractions": 1, "chunks": 3, "jobs_done": 2, "jobs_open": 0, **changes}
+    return [load.DocumentFacts(f"id-{n}", "extracted", **values) for n in range(10)]
+
+
+def clean_ledger() -> load.Ledger:
+    ledger = load.Ledger()
+    ledger.models = {"scripted"}
+    return ledger
+
+
+PHASES_WITH_QUEUE = [{"queue_series": [[1.0, {}]]}]
+
+
+def test_a_clean_smoke_has_no_failures() -> None:
+    assert load.smoke_failures(smoke_samples(), smoke_facts(), clean_ledger(), PHASES_WITH_QUEUE, 10) == []
+
+
+def test_every_failed_request_is_named_with_its_error() -> None:
+    samples = smoke_samples() + [
+        {"name": "ask", "ok": False, "error": "no_citation"},
+        {"name": "ask", "ok": False, "error": "no_citation"},
+        {"name": "search", "ok": False, "error": "http_500"},
+    ]
+    failures = load.smoke_failures(samples, smoke_facts(), clean_ledger(), PHASES_WITH_QUEUE, 10)
+    assert "2 ask request(s) failed: no_citation" in failures
+    assert "1 search request(s) failed: http_500" in failures
+
+
+def test_a_missing_upload_is_a_failure() -> None:
+    failures = load.smoke_failures(smoke_samples()[1:], smoke_facts(), clean_ledger(), PHASES_WITH_QUEUE, 10)
+    assert failures[0] == "9 uploads succeeded, 10 were planned"
+
+
+@pytest.mark.parametrize(
+    ("facts", "fragment"),
+    [
+        (smoke_facts(extractions=0), "was not extracted"),
+        (smoke_facts(chunks=0), "was not indexed"),
+        (smoke_facts(jobs_done=1), "1 jobs done and 0 not done"),
+        (smoke_facts(jobs_open=1), "2 jobs done and 1 not done"),
+        ([], "is not in the database"),
+    ],
+)
+def test_each_document_must_be_extracted_and_indexed_with_its_jobs_done(
+    facts: list[load.DocumentFacts], fragment: str
+) -> None:
+    failures = load.smoke_failures(smoke_samples(), facts, clean_ledger(), PHASES_WITH_QUEUE, 10)
+    assert any(fragment in failure for failure in failures)
+
+
+def test_every_kind_of_read_must_have_completed() -> None:
+    samples = [s for s in smoke_samples() if s["name"] != "ask_stream"]
+    failures = load.smoke_failures(samples, smoke_facts(), clean_ledger(), PHASES_WITH_QUEUE, 10)
+    assert failures == ["no ask_stream request completed"]
+
+
+def test_spend_and_the_recorded_models_are_asserted_from_the_database() -> None:
+    ledger = clean_ledger()
+    ledger.spend_usd = Decimal("0.01")
+    assert any("not 0" in f for f in load.smoke_failures(smoke_samples(), smoke_facts(), ledger, PHASES_WITH_QUEUE, 10))
+    no_rows = load.Ledger()
+    failures = load.smoke_failures(smoke_samples(), smoke_facts(), no_rows, PHASES_WITH_QUEUE, 10)
+    assert any("expected only 'scripted'" in f for f in failures)
+    other = clean_ledger()
+    other.models = {"scripted", "claude-haiku-4-5"}
+    assert any("claude-haiku-4-5" in f for f in load.smoke_failures(smoke_samples(), smoke_facts(), other, PHASES_WITH_QUEUE, 10))
+
+
+def test_a_sampler_that_saw_nothing_is_a_failure() -> None:
+    failures = load.smoke_failures(smoke_samples(), smoke_facts(), clean_ledger(), [{"queue_series": []}], 10)
+    assert failures == ["the database sampler recorded no queue depth"]
+
+
+def test_the_document_query_only_takes_uuids() -> None:
+    sql = load.document_facts_sql(["3f2b8c1e-5a0d-4c53-9d3e-0f8e2a6b7c11"])
+    assert "'3f2b8c1e-5a0d-4c53-9d3e-0f8e2a6b7c11'" in sql and sql.startswith("/* load-harness */")
+    with pytest.raises(ValueError):
+        load.document_facts_sql(["x'); drop table documents; --"])
+
+
+def test_document_facts_parse() -> None:
+    assert load.parse_document_facts("abc|extracted|1|12|2|0\n\n") == [
+        load.DocumentFacts("abc", "extracted", 1, 12, 2, 0)
+    ]
+    assert load.parse_document_facts("") == []
+
+
+# --- the driver against a fake docker -------------------------------------------------------------
+
+
+def test_scaling_runs_up_with_the_scale_flag_then_checks_the_stack_again(stack: FakeDocker, tmp_path: Path) -> None:
+    stack.on(has("up"), "")
+    load.StackDriver(tmp_path).scale_workers(1)
+    [up] = stack.ran("up")
+    assert up[-8:] == ["up", "-d", "--no-build", "--no-recreate", "--no-deps", "--scale", "worker=1", "worker"]
+    assert up[up.index("-p") + 1] == "doc-pilot-load"
+    [probe] = stack.ran("exec", "doc-pilot-load-worker-1")
+    assert stack.calls.index(up) < stack.calls.index(probe)  # the scale step first, then the probes
+
+
+def test_scaling_to_a_number_that_is_not_running_is_an_error(stack: FakeDocker, tmp_path: Path) -> None:
+    stack.on(has("up"), "")
+    with pytest.raises(CliError, match="asked for 4 worker.s., 1 running"):
+        load.StackDriver(tmp_path).scale_workers(4)
+
+
+def test_scaling_stops_when_a_new_worker_fails_the_no_spend_check(stack: FakeDocker, tmp_path: Path) -> None:
+    stack.on(has("up"), "")
+    stack.handlers.insert(0, (has("exec", "doc-pilot-load-worker-1"), probe_output(has_key=True)))
+    with pytest.raises(CliError, match="failed its no-spend check after scaling.*holds an Anthropic API key"):
+        load.StackDriver(tmp_path).scale_workers(1)
+
+
+def test_a_failed_scale_command_is_an_error(stack: FakeDocker, tmp_path: Path) -> None:
+    stack.on(has("up"), (1, "", "boom"))
+    with pytest.raises(CliError, match="could not scale the workers to 8"):
+        load.StackDriver(tmp_path).scale_workers(8)
+
+
+def test_starting_with_no_workers_adds_the_generator_and_needs_only_the_migration(
+    stack: FakeDocker,
+) -> None:
+    stack.on(has("up"), "")
+    stack.handlers.insert(0, (has("ps", "--all"), ps_output({"Service": "migrate", "State": "exited", "ExitCode": 0})))
+    assert load.bring_up(0, loadgen=True) == 0
+    [up] = stack.ran("up")
+    assert up[-8:] == ["--profile", "loadgen", "up", "-d", "--build", "--wait", "--scale", "worker=0"]
+
+
+def test_starting_with_a_failed_migration_is_an_error(stack: FakeDocker) -> None:
+    stack.on(has("up"), "")
+    stack.handlers.insert(0, (has("ps", "--all"), ps_output({"Service": "migrate", "State": "exited", "ExitCode": 1})))
+    with pytest.raises(CliError, match="migrate did not complete"):
+        load.bring_up(0)
+
+
+def test_starting_never_goes_ahead_on_a_config_that_could_reach_a_model(stack: FakeDocker) -> None:
+    config = good_config()
+    config["services"]["api"]["environment"]["ANTHROPIC_API_KEY"] = REAL_LOOKING_KEY
+    stack.handlers.insert(0, (has("config"), json.dumps(config)))
+    with pytest.raises(CliError, match="refusing to start"):
+        load.bring_up(2, loadgen=True)
+    assert not stack.ran("up")
+
+
+class NoSamplers:
+    """A stand-in for samplers.Telemetry that starts no process."""
+
+    def ensure_stats(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def test_a_fresh_stack_is_reset_started_seeded_and_preflighted_in_that_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple] = []
+    monkeypatch.setattr(load, "stack_reset", lambda args: calls.append(("reset",)) or 0)
+    monkeypatch.setattr(load, "bring_up", lambda workers, loadgen=False: calls.append(("up", workers, loadgen)) or 0)
+    monkeypatch.setattr(load, "seed", lambda args: calls.append(("seed",)) or 0)
+    monkeypatch.setattr(load, "preflight", lambda args: calls.append(("preflight",)) or 0)
+    monkeypatch.setattr(load, "measure_clock_offset", lambda: calls.append(("clock",)) or 0.2)
+    driver = load.StackDriver(tmp_path, telemetry=NoSamplers())
+    monkeypatch.setattr(driver, "scale_workers", lambda count: calls.append(("scale", count)))
+    driver.prepare(0, fresh=False)  # nothing is up yet, so even this starts fresh
+    driver.prepare(2, fresh=False)  # now it reuses the stack
+    driver.prepare(0, fresh=True)
+    assert calls == [
+        ("reset",), ("up", 0, True), ("seed",), ("preflight",), ("clock",),
+        ("scale", 2),
+        ("reset",), ("up", 0, True), ("seed",), ("preflight",), ("clock",),
+    ]
+    assert driver.clock_offset_s == 0.2
+
+
+def test_a_stack_that_does_not_pass_its_preflight_is_an_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(load, "stack_reset", lambda args: 0)
+    monkeypatch.setattr(load, "bring_up", lambda workers, loadgen=False: 0)
+    monkeypatch.setattr(load, "seed", lambda args: 0)
+    monkeypatch.setattr(load, "preflight", lambda args: 1)
+    with pytest.raises(CliError, match="did not pass its seed and preflight"):
+        load.StackDriver(tmp_path, telemetry=NoSamplers()).prepare(0, fresh=True)
+
+
+def locust_spec(**changes: object):
+    values = {"tag": "ramp-r1-u2", "workload": "read", "users": 2, "run_seconds": 20}
+    return load.phases.LocustSpec(**{**values, **changes})
+
+
+def locust_stack(stack: FakeDocker, exit_code: int = 0, output: str = "") -> FakeDocker:
+    stack.on(has("exec", "locust"), (exit_code, output, ""))
+    stack.on(has("cp"), "")
+    stack.on(has("exec", "rm"), "")
+    return stack
+
+
+def test_locust_runs_in_the_generator_container_with_the_specs_settings(stack: FakeDocker, tmp_path: Path) -> None:
+    locust_stack(stack)
+    spec = locust_spec(
+        user_weights={"load-large:key": 1}, read_mix={"search": 1}, exclude_question_types=("reverse_lookup",)
+    )
+    destination = tmp_path / "samples" / "ramp.jsonl"
+    load.StackDriver(tmp_path).run_locust(spec, destination)
+    [run] = stack.ran("locust")
+    assert run[: run.index("exec")][-2:] == ["--profile", "loadgen"]
+    assert run[run.index("locust") - 1] == "loadgen" and run[run.index("locust") + 1] == "-f"
+    settings = [run[i + 1] for i, word in enumerate(run) if word == "-e"]
+    assert "LOAD_WORKLOAD=read" in settings and "LOAD_UPLOAD_QUOTA=0" in settings
+    assert 'LOAD_USER_WEIGHTS={"load-large:key": 1}' in settings
+    assert 'LOAD_READ_MIX={"search": 1}' in settings
+    assert "LOAD_EXCLUDE_QUESTION_TYPES=reverse_lookup" in settings
+    remote = next(s for s in settings if s.startswith("LOAD_SAMPLES_FILE=")).split("=", 1)[1]
+    assert remote.startswith("/tmp/samples-") and remote.endswith(".jsonl")
+    assert run[run.index("--host") + 1] == "http://api:8000"
+    assert run[run.index("-u") + 1] == "2" and run[run.index("-t") + 1] == "20s"
+    [copy] = stack.ran("cp")
+    assert copy[-2:] == [f"loadgen:{remote}", str(destination)]
+    assert stack.ran("exec", "rm")  # the copy in the container is removed
+    assert destination.parent.is_dir()
+
+
+def test_an_ingest_has_a_quota_and_no_run_time(stack: FakeDocker, tmp_path: Path) -> None:
+    locust_stack(stack)
+    load.StackDriver(tmp_path).run_locust(locust_spec(workload="ingest", run_seconds=None, upload_quota=300, users=8), tmp_path / "i.jsonl")
+    [run] = stack.ran("locust")
+    assert "-t" not in run and "LOAD_UPLOAD_QUOTA=300" in run
+    assert run[run.index("--stop-timeout") + 1] == "60"
+
+
+def test_no_key_is_ever_on_the_locust_command_line(stack: FakeDocker, tmp_path: Path, tenants_file: Path) -> None:
+    locust_stack(stack)
+    tenants_file.parent.mkdir(parents=True, exist_ok=True)
+    tenants_file.write_text(json.dumps({"tenants": {"load-large": {"api_key": SECRET_KEY}}}))
+    load.StackDriver(tmp_path).run_locust(locust_spec(), tmp_path / "s.jsonl")
+    assert all(SECRET_KEY not in " ".join(call) for call in stack.calls)
+
+
+def test_a_locust_failure_is_a_phase_error_without_any_key(stack: FakeDocker, tmp_path: Path) -> None:
+    locust_stack(stack, exit_code=2, output=f"Traceback ...\nKeyError: {SECRET_KEY}\n")
+    with pytest.raises(load.PhaseError) as raised:
+        load.StackDriver(tmp_path).run_locust(locust_spec(), tmp_path / "s.jsonl")
+    assert "exited with 2" in str(raised.value) and SECRET_KEY not in str(raised.value)
+    assert not stack.ran("cp")
+
+
+# --- validate ------------------------------------------------------------------------------------------
+
+
+def test_the_validate_command_reports_problems_and_exits_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps(good_artifact()))
+    assert load.main(["validate", str(good), "--publishable"]) == 0
+    assert "valid and publishable" in capsys.readouterr().out
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(good_artifact(spend_usd=0.5, git={"commit": "abc", "dirty": True})))
+    assert load.main(["validate", str(bad)]) == 1
+    assert "spend_usd is 0.5" in capsys.readouterr().err
+    assert load.main(["validate", str(bad), "--publishable"]) == 1
+    assert "dirty" in capsys.readouterr().err
+    assert load.main(["validate", str(tmp_path / "missing.json")]) == 1
+
+
+# --- clocks, scrubbing and the generator record -----------------------------------------------------
+
+
+def test_the_clock_offset_is_the_containers_time_less_the_hosts_midpoint() -> None:
+    assert load.parse_clock_offset("1000.500000000\n", 999.0, 1001.0) == pytest.approx(0.5)
+    assert load.parse_clock_offset("998.0\n", 1000.0, 1000.2) == pytest.approx(-2.1)
+    with pytest.raises(CliError, match="did not print its time"):
+        load.parse_clock_offset("date: illegal option", 1.0, 2.0)
+
+
+def test_the_offset_is_measured_by_asking_the_db_container(stack: FakeDocker, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(load.time, "time", iter([100.0, 100.4]).__next__)
+    stack.on(has("exec", "db", "date"), "100.7\n")
+    assert load.measure_clock_offset() == pytest.approx(0.5)
+    [asked] = stack.ran("date")
+    assert asked[-3:] == ["db", "date", "+%s.%N"]
+
+
+def test_a_stack_clock_more_than_a_second_off_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    driver = load.StackDriver(tmp_path, telemetry=NoSamplers())
+    monkeypatch.setattr(load, "measure_clock_offset", lambda: 1.5)
+    with pytest.raises(CliError, match=r"clock is \+1.50 s from the host's"):
+        driver._check_clock()
+    monkeypatch.setattr(load, "measure_clock_offset", lambda: -0.4)
+    driver._check_clock()
+    assert driver.clock_offset_s == -0.4
+    monkeypatch.setattr(load, "measure_clock_offset", lambda: 0.1)
+    driver._check_clock()
+    assert driver.clock_offset_s == -0.4  # the largest offset seen is the one recorded
+
+
+def test_scrub_drops_every_line_that_mentions_a_password() -> None:
+    text = "Traceback\n  record['password']\nKeyError: 'Password'\nconnect failed\n"
+    assert load.scrub(text) == "Traceback\nconnect failed"
+
+
+def test_the_generator_is_recorded_as_a_closed_loop() -> None:
+    import inspect
+
+    assert '"loop": "closed"' in inspect.getsource(load.assemble_artifact)

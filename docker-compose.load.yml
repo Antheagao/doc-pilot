@@ -74,6 +74,10 @@ services:
       SCRIPTED_MODEL_LATENCY_SCALE: ${SCRIPTED_MODEL_LATENCY_SCALE:-1.0}
       SCRIPTED_AGENT_STEP_MS: ${SCRIPTED_AGENT_STEP_MS:-3000}
       SCRIPTED_JUDGE_MS: ${SCRIPTED_JUDGE_MS:-4000}
+      # The embedder: the pinned ONNX model for a measurement, `hashing` for
+      # the CI smoke (`load.py smoke`), which must not download 135 MB. The
+      # artifact records which one ran.
+      EMBEDDING_BACKEND: ${LOAD_EMBEDDING_BACKEND:-fastembed}
       # Blank, not absent: see the layers above.
       ANTHROPIC_API_KEY: ""
       # The tripwire. The scripted model costs nothing, so any spend recorded
@@ -121,6 +125,7 @@ services:
       SCRIPTED_MODEL_LATENCY_SCALE: ${SCRIPTED_MODEL_LATENCY_SCALE:-1.0}
       SCRIPTED_AGENT_STEP_MS: ${SCRIPTED_AGENT_STEP_MS:-3000}
       SCRIPTED_JUDGE_MS: ${SCRIPTED_JUDGE_MS:-4000}
+      EMBEDDING_BACKEND: ${LOAD_EMBEDDING_BACKEND:-fastembed}
       ANTHROPIC_API_KEY: ""
       # A lease, so `up --scale worker=N` is safe (see the base file): longer
       # than the slowest job, because nothing renews it while a job runs.
@@ -160,7 +165,7 @@ services:
 
   # The load generator (Locust), inside the load network so the numbers
   # exclude Docker Desktop's host port forwarder. Started by
-  # `--profile loadgen`; scripts/load/Dockerfile arrives with the harness.
+  # `--profile loadgen`, built from scripts/load/Dockerfile (Locust, pinned).
   # load.py runs Locust in it with each phase's parameters (`docker compose
   # exec`), so the container itself only waits.
   loadgen:

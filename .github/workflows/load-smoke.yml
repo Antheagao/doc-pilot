@@ -1,0 +1,53 @@
+name: Load smoke
+
+# The load harness end to end at its smallest (scripts/load/load.py smoke):
+# builds the backend and load-generator images, starts the isolated
+# doc-pilot-load stack on the scripted model and the hashing embedder (no model
+# download, no key, no spend), uploads 10 documents with no worker, lets 2
+# workers drain them, runs 20 s of reads at 2 users, and asserts zero errors,
+# every document extracted and indexed, a citation on every answer, and zero
+# spend read back from the database. It stops the stack itself; the trailing
+# step is for a run that died before it could.
+#
+# A workflow of its own, not a job of ci.yml, because a paths filter applies to
+# a whole workflow and the other jobs must run on every change. It runs only
+# when something it exercises changes: the harness, the backend image, the
+# corpus the scripted model answers from, the compose files, or this file.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "scripts/load/**"
+      - "scripts/compose_project.py"
+      - "backend/**"
+      - "evals/**"
+      - "docker-compose*.yml"
+      - ".github/workflows/load-smoke.yml"
+  pull_request:
+    paths:
+      - "scripts/load/**"
+      - "scripts/compose_project.py"
+      - "backend/**"
+      - "evals/**"
+      - "docker-compose*.yml"
+      - ".github/workflows/load-smoke.yml"
+
+# A newer push to the same branch or pull request makes a running smoke stale.
+concurrency:
+  group: load-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  load-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Smoke
+        run: python scripts/load/load.py smoke
+      - name: Stop the load stack
+        if: always()
+        run: python scripts/load/load.py stack down

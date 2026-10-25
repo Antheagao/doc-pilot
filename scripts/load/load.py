@@ -8,6 +8,9 @@ Run from anywhere with the backend venv (stdlib only, so no install step):
     backend/.venv/bin/python scripts/load/load.py stack reset
     backend/.venv/bin/python scripts/load/load.py seed
     backend/.venv/bin/python scripts/load/load.py preflight
+    backend/.venv/bin/python scripts/load/load.py run --profile zero --scale 1 --label L [--quick]
+    backend/.venv/bin/python scripts/load/load.py smoke
+    backend/.venv/bin/python scripts/load/load.py validate FILE [--publishable]
 
 The stack runs the production image against a scripted model (no model API is
 ever called) in its own compose project, with its own database `docpilot_load`
@@ -19,6 +22,17 @@ uploaded by the harness, not here. `preflight` refuses to let traffic start
 unless every api and worker container reports the scripted provider and holds
 no Anthropic key; it also creates the pg_stat_statements extension.
 
+`run` and `smoke` own a whole measurement: they reset the load database (never
+the models volume), start the stack with the load generator (profile `loadgen`,
+Locust in its own small image, inside the load network), seed, preflight, run
+the phases in phases.py with the samplers in samplers.py running, re-run the
+no-spend check after every change in the number of workers, check spend and the
+recorded model names from the database after every phase, write a `load_v1`
+artifact (artifact.py), and stop the stack (volumes kept). `run` writes under
+scripts/load/out/ unless told otherwise; only a full-plan run may write to
+scripts/load/results/, where committed artifacts live. `smoke` is the small
+version CI runs: it writes to a temporary directory and refuses results/.
+
 Every docker call goes through STACK below, which pins the compose project to
 PROJECT. The project name is a constant, never an argument, so this CLI cannot
 address the dev stack (project `doc-pilot`) or the demo's, or their volumes.
@@ -27,19 +41,32 @@ address the dev stack (project `doc-pilot`) or the demo's, or their volumes.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
 import secrets
 import sys
+import tempfile
+import time
 import urllib.error
 import urllib.request
+import uuid
+from collections import Counter
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
+from typing import NamedTuple
 
 # compose_project.py sits in scripts/, beside this directory and scripts/demos/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import artifact
+import phases
+import samplers
+import workload
 from compose_project import (
     REPO_ROOT,
     CliError,
@@ -47,6 +74,7 @@ from compose_project import (
     check_one_shots_and_worker,
     declared_volume_names,
 )
+from phases import PhaseError
 
 PROJECT = "doc-pilot-load"
 COMPOSE_FILES = ("docker-compose.yml", "docker-compose.load.yml")
@@ -76,6 +104,13 @@ MODEL_SETTINGS = (
 )
 OUT_DIR = Path(__file__).resolve().parent / "out"
 TENANTS_FILE = OUT_DIR / "tenants.json"
+# Committed artifacts live here; `smoke` and the quick and custom plans may not
+# write to it.
+RESULTS_DIR = Path(__file__).resolve().parent / "results"
+EVALS_DIR = REPO_ROOT / "evals"
+LOADGEN = "loadgen"
+API_INTERNAL_URL = "http://api:8000"
+BACKEND_IMAGE = "doc-pilot-load-backend"
 # `dpk_<12 lowercase base32>_<43 url-safe>`: backend/app/auth/tokens.py.
 API_KEY_PATTERN = re.compile(r"dpk_[a-z2-7]{12}_[A-Za-z0-9_-]{43}")
 
@@ -288,17 +323,33 @@ def preflight(_args: argparse.Namespace) -> int:
 # --- the stack ---------------------------------------------------------------
 
 
-def stack_up(_args: argparse.Namespace) -> int:
-    # Nothing starts from a config that could reach a real model.
+def bring_up(workers: int | None = None, *, loadgen: bool = False) -> int:
+    """Start the stack. `workers` sets the number of worker containers (0 is
+    allowed: a backlog is built with none); `loadgen` adds the load generator.
+    Nothing starts from a config that could reach a real model."""
     problems = config_problems(STACK.resolved_config(all_profiles=True))
     if problems:
         raise CliError("refusing to start: " + "; ".join(problems))
-    code = STACK.compose("up", "-d", "--build", "--wait")
+    profile = ["--profile", LOADGEN] if loadgen else []
+    scale = [] if workers is None else ["--scale", f"worker={workers}"]
+    code = STACK.compose(*profile, "up", "-d", "--build", "--wait", *scale)
     if code != 0:
         return code
-    check_one_shots_and_worker(STACK.service_states())
-    print(f"Load stack is up: API {API_URL}")
+    states = STACK.service_states()
+    if workers == 0:
+        migrate = states.get("migrate", {})
+        if migrate.get("State") != "exited" or migrate.get("ExitCode") != 0:
+            raise CliError(f"migrate did not complete: state {migrate.get('State')!r}")
+    else:
+        check_one_shots_and_worker(states)
     return 0
+
+
+def stack_up(_args: argparse.Namespace) -> int:
+    code = bring_up()
+    if code == 0:
+        print(f"Load stack is up: API {API_URL}")
+    return code
 
 
 def stack_status(_args: argparse.Namespace) -> int:
@@ -516,6 +567,565 @@ def seed(_args: argparse.Namespace) -> int:
     return 0
 
 
+# --- spend and the recorded model names, from the database ------------------
+
+SPEND_SQL = (
+    f"{samplers.HARNESS_TAG} select "
+    "coalesce((select sum(cost_usd) from extractions), 0) "
+    "+ coalesce((select sum(cost_usd) from document_pages), 0) "
+    "+ coalesce((select sum(cost_usd) from ask_runs), 0) "
+    "+ coalesce((select sum(judge_cost_usd) from ask_runs), 0)"
+)
+MODELS_SQL = (
+    f"{samplers.HARNESS_TAG} select model from extractions "
+    "union select model from document_pages where model is not null "
+    "union select model from ask_runs "
+    "union select judge_model from ask_runs where judge_model is not null order by 1"
+)
+
+
+def spend_problems(spend: Decimal, models: set[str]) -> list[str]:
+    """Why recorded rows mean a real model may have been reached: any cost at
+    all, or a model name other than the scripted one."""
+    found = []
+    if spend != 0:
+        found.append(f"recorded model spend is {spend} USD, not 0")
+    others = sorted(models - {SCRIPTED})
+    if others:
+        found.append(f"rows name a model other than {SCRIPTED!r}: {', '.join(others)}")
+    return found
+
+
+class Ledger:
+    """What the database says was spent, added up over the stack's lives (a
+    reset between repetitions forgets the rows, so each phase reports before
+    the next reset)."""
+
+    def __init__(self) -> None:
+        self.spend_usd = Decimal(0)
+        self.models: set[str] = set()
+
+    def add(self, spend: Decimal, models: set[str]) -> None:
+        self.spend_usd += spend
+        self.models |= models
+
+    def problems(self) -> list[str]:
+        return spend_problems(self.spend_usd, self.models)
+
+
+def read_spend() -> tuple[Decimal, set[str]]:
+    """Total recorded model cost (extractions, page transcriptions, answers and
+    their judgments) and the model names those rows carry, as the owner sees
+    every organization's rows."""
+    spend = Decimal(owner_psql("-c", SPEND_SQL).strip() or "0")
+    models = {line for line in owner_psql("-c", MODELS_SQL).splitlines() if line}
+    return spend, models
+
+
+# --- the driver ---------------------------------------------------------------
+
+
+def scrub(text: str) -> str:
+    """`text` for output that may be shown (a Locust failure's last lines):
+    every line that mentions a password is dropped and anything shaped like an
+    API key is replaced."""
+    kept = [line for line in text.splitlines() if "password" not in line.lower()]
+    return API_KEY_PATTERN.sub("dpk_***", "\n".join(kept))
+
+
+def parse_clock_offset(container_output: str, before: float, after: float) -> float:
+    """Seconds the db container's clock is ahead of the host's, from the
+    container's `date +%s.%N` and the host's time just before and after asking
+    (the midpoint, so the error is at most half the round trip)."""
+    try:
+        container = float(container_output.strip())
+    except ValueError as exc:
+        raise CliError("the db container did not print its time as seconds since the epoch") from exc
+    return container - (before + after) / 2
+
+
+def measure_clock_offset() -> float:
+    """The clock offset between the db container (the Docker VM's clock, which
+    stamps every sample and job) and the host (which stamps docker stats)."""
+    before = time.time()
+    output = STACK.docker_output(STACK.compose_args("exec", "-T", "db", "date", "+%s.%N"))
+    return parse_clock_offset(output, before, time.time())
+
+
+class StackDriver:
+    """The load stack as phases.py drives it: every docker call goes through
+    STACK, which is pinned to the load project."""
+
+    def __init__(self, samples_dir: Path, telemetry: samplers.Telemetry | None = None) -> None:
+        self.samples_dir = samples_dir
+        samples_dir.mkdir(parents=True, exist_ok=True)
+        self.ledger = Ledger()
+        self.clock_offset_s = 0.0
+        self._up = False
+        self._telemetry = telemetry or samplers.Telemetry(
+            lambda argv: STACK.compose_args("exec", "-T", "db", *argv),
+            lambda sql: owner_psql("-c", sql),
+            owner=OWNER_ROLE,
+            database=DATABASE,
+        )
+
+    def prepare(self, workers: int, *, fresh: bool) -> None:
+        # Started early so the generator's first CPU figures exist by the time
+        # a short upload step needs them.
+        self._telemetry.ensure_stats()
+        if not fresh and self._up:
+            self.scale_workers(workers)
+            return
+        if stack_reset(argparse.Namespace()) != 0:
+            raise CliError("could not reset the load stack")
+        if bring_up(workers, loadgen=True) != 0:
+            raise CliError("could not start the load stack")
+        if seed(argparse.Namespace()) != 0 or preflight(argparse.Namespace()) != 0:
+            raise CliError("the load stack did not pass its seed and preflight")
+        self._check_clock()
+        self._up = True
+
+    def _check_clock(self) -> None:
+        """Refuse to measure if the stack's clock is more than a second from the
+        host's: windows on the sample clock are compared with docker stats on the
+        host's. The largest offset seen is the one recorded."""
+        offset = measure_clock_offset()
+        if abs(offset) > artifact.CLOCK_OFFSET_LIMIT_S:
+            raise CliError(
+                f"the stack's clock is {offset:+.2f} s from the host's (limit {artifact.CLOCK_OFFSET_LIMIT_S:g} s)"
+            )
+        if abs(offset) >= abs(self.clock_offset_s):
+            self.clock_offset_s = offset
+
+    def scale_workers(self, count: int) -> None:
+        """`up -d --scale worker=N` for the worker service alone, then the
+        no-spend check again: the new containers must be scripted and keyless
+        like the first, and there must be as many as were asked for."""
+        code = STACK.compose(
+            "up", "-d", "--no-build", "--no-recreate", "--no-deps", "--scale", f"worker={count}", "worker"
+        )
+        if code != 0:
+            raise CliError(f"could not scale the workers to {count}")
+        problems, _asked = check_stack()
+        if problems:
+            raise CliError("the stack failed its no-spend check after scaling: " + "; ".join(problems))
+        running = [
+            record
+            for record in running_model_containers(STACK.container_records(include_stopped=False))
+            if record["Service"] == "worker"
+        ]
+        if len(running) != count:
+            raise CliError(f"asked for {count} worker(s), {len(running)} running")
+
+    def run_locust(self, spec: phases.LocustSpec, destination: Path) -> None:
+        """Run Locust headless in the loadgen container with the spec's
+        settings, then copy its raw samples to `destination` (and delete the
+        copy in the container)."""
+        remote = f"/tmp/samples-{uuid.uuid4().hex}.jsonl"
+        settings = {
+            "LOAD_SAMPLES_FILE": remote,
+            "LOAD_WORKLOAD": spec.workload,
+            "LOAD_UPLOAD_QUOTA": str(spec.upload_quota),
+        }
+        if spec.user_weights is not None:
+            settings["LOAD_USER_WEIGHTS"] = json.dumps(spec.user_weights)
+        if spec.read_mix is not None:
+            settings["LOAD_READ_MIX"] = json.dumps(spec.read_mix)
+        if spec.exclude_question_types:
+            settings["LOAD_EXCLUDE_QUESTION_TYPES"] = ",".join(spec.exclude_question_types)
+        flags = [flag for key, value in settings.items() for flag in ("-e", f"{key}={value}")]
+        locust = [
+            *("locust", "-f", "/load/locustfile.py", "--headless", "--only-summary"),
+            *("--host", API_INTERNAL_URL, "-u", str(spec.users), "-r", str(spec.users)),
+            # Users mid-request get a minute to finish: no sample is cut short.
+            *("--stop-timeout", "60", "--exit-code-on-error", "0", "--loglevel", "WARNING"),
+            *(("-t", f"{spec.run_seconds}s") if spec.run_seconds else ()),
+        ]
+        result = STACK.run(
+            STACK.compose_args("--profile", LOADGEN, "exec", "-T", *flags, LOADGEN, *locust), capture=True
+        )
+        if result.returncode != 0:
+            tail = scrub("\n".join((result.stdout + result.stderr).strip().splitlines()[-15:]))
+            raise PhaseError(f"{spec.tag}: Locust exited with {result.returncode}:\n{tail}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        STACK.docker_output(
+            STACK.compose_args("--profile", LOADGEN, "cp", f"{LOADGEN}:{remote}", str(destination))
+        )
+        STACK.docker_output(
+            STACK.compose_args("--profile", LOADGEN, "exec", "-T", LOADGEN, "rm", "-f", remote)
+        )
+
+    def query(self, sql: str) -> str:
+        return owner_psql("-c", sql)
+
+    def telemetry(self) -> AbstractContextManager[samplers.PhaseTelemetry]:
+        return self._telemetry.phase()
+
+    def close(self) -> None:
+        """Stop the `docker stats` stream."""
+        self._telemetry.close()
+
+    def check_spend(self) -> None:
+        """Add what the database holds to the ledger and refuse to go on if a
+        cent was spent or a model other than the scripted one was recorded."""
+        spend, models = read_spend()
+        self.ledger.add(spend, models)
+        problems = spend_problems(spend, models)
+        if problems:
+            raise CliError("a real model may have been reached: " + "; ".join(problems))
+
+
+# --- a run ---------------------------------------------------------------------
+
+
+class DocumentFacts(NamedTuple):
+    """What the database holds about one uploaded document."""
+
+    id: str
+    status: str
+    extractions: int
+    chunks: int
+    jobs_done: int
+    jobs_open: int
+
+
+def document_facts_sql(document_ids: list[str]) -> str:
+    """The query for DocumentFacts of these ids. Each id is parsed as a UUID
+    first, so nothing but a UUID can reach the statement."""
+    ids = ", ".join(f"'{uuid.UUID(document_id)}'" for document_id in document_ids)
+    return (
+        f"{samplers.HARNESS_TAG} select d.id, d.status, "
+        "(select count(*) from extractions e where e.document_id = d.id), "
+        "(select count(*) from document_chunks c where c.document_id = d.id), "
+        "(select count(*) from jobs j where j.document_id = d.id and j.state = 'done'), "
+        "(select count(*) from jobs j where j.document_id = d.id and j.state <> 'done') "
+        f"from documents d where d.id in ({ids})"
+    )
+
+
+def parse_document_facts(output: str) -> list[DocumentFacts]:
+    facts = []
+    for line in output.splitlines():
+        if not line:
+            continue
+        document_id, status, *counts = line.split("|")
+        facts.append(DocumentFacts(document_id, status, *(int(count) for count in counts)))
+    return facts
+
+
+def smoke_failures(
+    samples: list[dict],
+    facts: list[DocumentFacts],
+    ledger: Ledger,
+    phase_records: list[dict],
+    uploads: int,
+) -> list[str]:
+    """Everything the smoke asserts, as a list of failures (empty is a pass):
+    no failed request; the planned uploads all made; each uploaded document
+    extracted, indexed, and its extract and index jobs done; every kind of read
+    seen at least once, with an answer among them (a failed answer is a failed
+    request: no citation is an error); spend zero from the database with only
+    the scripted model recorded; and the samplers saw the queue."""
+    failures = []
+    for (name, error), count in sorted(Counter((s["name"], s["error"]) for s in samples if not s["ok"]).items()):
+        failures.append(f"{count} {name} request(s) failed: {error}")
+    made = [s for s in samples if s["name"] == "upload" and s["ok"]]
+    if len(made) != uploads:
+        failures.append(f"{len(made)} uploads succeeded, {uploads} were planned")
+    by_id = {fact.id: fact for fact in facts}
+    for document_id in sorted({s.get("document_id") for s in made}):
+        fact = by_id.get(document_id)
+        if fact is None:
+            failures.append(f"document {document_id} is not in the database")
+        elif fact.extractions < 1:
+            failures.append(f"document {document_id} was not extracted (status {fact.status})")
+        elif fact.chunks < 1:
+            failures.append(f"document {document_id} was not indexed (no chunks)")
+        elif fact.jobs_done != phases.JOBS_PER_DOCUMENT or fact.jobs_open:
+            failures.append(
+                f"document {document_id}: {fact.jobs_done} jobs done and {fact.jobs_open} not done, "
+                f"expected {phases.JOBS_PER_DOCUMENT} and 0"
+            )
+    for name in workload.READ_ENDPOINTS:
+        if not any(s["name"] == name and s["ok"] for s in samples):
+            failures.append(f"no {name} request completed")
+    failures += ledger.problems()
+    if ledger.models != {SCRIPTED}:
+        failures.append(f"recorded models are {sorted(ledger.models)}, expected only {SCRIPTED!r}")
+    if not any(record.get("queue_series") for record in phase_records):
+        failures.append("the database sampler recorded no queue depth")
+    return failures
+
+
+def command_record(argv: list[str]) -> list[str]:
+    """The exact command as recorded: python, this script's path from the
+    repository root, and the arguments as given."""
+    return ["python", str(repo_path(Path(__file__).resolve())), *argv]
+
+
+def refuse_results_dir(directory: Path, *, what: str) -> Path:
+    """`directory`, unless it is scripts/load/results or inside it: only the
+    committed baselines go there, and `what` may not."""
+    resolved = directory.resolve()
+    if resolved == RESULTS_DIR or RESULTS_DIR in resolved.parents:
+        raise CliError(f"{what} may not write to {repo_path(RESULTS_DIR)}: that holds committed artifacts")
+    return resolved
+
+
+def apply_run_environment(profile: str, scale: float, embedder: str | None) -> None:
+    """Pass the run's settings to compose through the environment, where the
+    overlay reads them (docker-compose.load.yml). The artifact records what the
+    containers resolved, not what was asked for here."""
+    os.environ["SCRIPTED_MODEL_PROFILE"] = profile
+    os.environ["SCRIPTED_MODEL_LATENCY_SCALE"] = repr(float(scale))
+    if embedder:
+        os.environ["LOAD_EMBEDDING_BACKEND"] = embedder
+
+
+def generator_version() -> str:
+    try:
+        output = STACK.docker_output(
+            STACK.compose_args("--profile", LOADGEN, "exec", "-T", LOADGEN, "locust", "--version")
+        )
+    except CliError:
+        return "unknown"
+    match = re.search(r"locust (\d+\.\d+\.\d+)", output)
+    return match[1] if match else "unknown"
+
+
+def assemble_artifact(
+    driver: StackDriver,
+    plan: phases.Plan,
+    result: phases.RunResult,
+    *,
+    run_id: str,
+    label: str,
+    argv: list[str],
+    started_at: str,
+) -> dict:
+    """Capture the machine, Docker, Postgres and the stack while the stack is
+    still up, and build the artifact from the phases."""
+    config = STACK.resolved_config(all_profiles=True)
+    image_command = json.loads(
+        STACK.docker_output(["docker", "image", "inspect", "--format", "{{json .Config.Cmd}}", BACKEND_IMAGE])
+    )
+    scenario = {
+        "workload": workload.scenario_description(
+            EVALS_DIR,
+            read_mix=dict(plan.read_mix) if plan.read_mix else None,
+            user_weights=dict(plan.user_weights) if plan.user_weights else None,
+            exclude_question_types=plan.exclude_question_types,
+        ),
+        "plan": phases.plan_description(plan),
+    }
+    return artifact.build_artifact(
+        run_id=run_id,
+        label=label,
+        preset=plan.preset,
+        command=command_record(argv),
+        git=artifact.capture_git(cwd=REPO_ROOT),
+        machine=artifact.capture_machine(),
+        docker=artifact.capture_docker(),
+        postgres=artifact.capture_postgres(lambda sql: owner_psql("-c", sql)),
+        stack=artifact.capture_stack(config, image_command),
+        model=artifact.capture_model(config),
+        scenario=scenario,
+        tenants=phases.tenant_sizes(driver),
+        generator={
+            "tool": "locust",
+            "version": generator_version(),
+            "http_user": "HttpUser",
+            "loop": "closed",
+            "placement": f"inside the {PROJECT} compose network, against {API_INTERNAL_URL}",
+            "cpu_limit_pct": artifact.GENERATOR_CPU_LIMIT_PCT,
+        },
+        phases=result.phases,
+        summary=phases.summarize(result.phases),
+        clock_offset_s=driver.clock_offset_s,
+        spend_usd=float(driver.ledger.spend_usd),
+        models_seen=sorted(driver.ledger.models),
+        started_at=started_at,
+        ended_at=artifact.utc_iso(time.time()),
+    )
+
+
+def execute(
+    plan: phases.Plan,
+    *,
+    label: str,
+    out_dir: Path,
+    argv: list[str],
+    keep_up: bool = False,
+    after: Callable[[StackDriver, phases.RunResult], None] | None = None,
+) -> tuple[dict, Path, phases.RunResult]:
+    """Run a plan on a freshly reset stack and write its artifact to `out_dir`.
+    `after(driver, result)` runs while the stack is still up (the smoke reads
+    the database there). The stack is stopped on the way out whatever happens,
+    unless `keep_up`; its volumes are kept either way."""
+    run_id = artifact.run_id_now()
+    driver = StackDriver(out_dir / "samples" / run_id)
+    started_at = artifact.utc_iso(time.time())
+    try:
+        result = phases.run_plan(driver, plan)
+        document = assemble_artifact(
+            driver, plan, result, run_id=run_id, label=label, argv=argv, started_at=started_at
+        )
+        path = artifact.write_artifact(document, out_dir)
+        if after is not None:
+            after(driver, result)
+        return document, path, result
+    finally:
+        driver.close()
+        if not keep_up:
+            try:
+                compose_down()
+            except CliError as exc:
+                print(f"warning: could not stop the stack: {exc}", file=sys.stderr)
+
+
+def print_summary(document: dict, path: Path) -> None:
+    summary = document["summary"]
+    print(f"Artifact: {path}")
+    for users, entry in summary["ingest_uploads_per_s_by_users"].items():
+        print(f"  ingest at {users} user(s): {entry['median']:.1f} uploads/s (n={entry['n']})")
+    for workers, entry in summary["scaling_jobs_per_s_by_workers"].items():
+        print(f"  {workers} worker(s): {entry['median']:.2f} jobs (extract+index)/s ({entry['min']:.2f} to {entry['max']:.2f}, n={entry['n']})")
+    knee = summary["ramp_knee_users"]
+    if knee:
+        print(f"  read ramp knee: {knee['median']:g} users (range {knee['min']:g} to {knee['max']:g})")
+    invalid = [phase for phase in document["phases"] if not phase["valid"]]
+    for phase in invalid:
+        print(f"  INVALID {phase['name']} r{phase['repetition']}: {'; '.join(phase['invalid_reasons'])}")
+    problems = document["validation"]["problems"]
+    if problems:
+        print("The artifact does not validate:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+    else:
+        print("The artifact validates.")
+    notes = [p for p in document["validation"]["publishable_problems"] if p not in problems]
+    if notes:
+        print("Not publishable: " + "; ".join(notes))
+
+
+def parse_int_list(text: str) -> tuple[int, ...]:
+    try:
+        values = tuple(int(part) for part in text.split(",") if part.strip())
+    except ValueError as exc:
+        raise CliError(f"{text!r} is not a comma-separated list of integers") from exc
+    if not values or any(value < 0 for value in values):
+        raise CliError(f"{text!r} must list non-negative integers")
+    return values
+
+
+def parse_tenant_documents(text: str) -> tuple[tuple[str, int], ...]:
+    pairs = []
+    for part in text.split(","):
+        slug, _, count = part.partition("=")
+        if slug not in workload.TENANT_SLUGS or not count.isdigit():
+            raise CliError(f"{part!r} is not <tenant>=<documents> for one of {', '.join(workload.TENANT_SLUGS)}")
+        pairs.append((slug, int(count)))
+    return tuple(pairs)
+
+
+def plan_from_args(args: argparse.Namespace) -> phases.Plan:
+    """The plan a `run` was asked for: the full plan or `--quick`'s, with any
+    number changed on the command line. A changed full plan is `custom`, which
+    is not publishable."""
+    plan = phases.quick_plan() if args.quick else phases.full_plan()
+    changes: dict = {}
+    if args.phases is not None:
+        chosen = tuple(part for part in args.phases.split(",") if part)
+        unknown = sorted(set(chosen) - set(phases.PHASES))
+        if unknown or not chosen:
+            raise CliError(f"--phases takes some of {', '.join(phases.PHASES)}")
+        changes["phases"] = chosen
+    if args.reps is not None:
+        changes["repetitions"] = args.reps
+    if args.workers is not None:
+        changes["workers"] = parse_int_list(args.workers)
+    if args.backlog is not None:
+        changes["backlog_documents"] = args.backlog
+    if args.ingest_users is not None:
+        changes["ingest_users"] = parse_int_list(args.ingest_users)
+    if args.ingest_documents is not None:
+        changes["ingest_documents"] = args.ingest_documents
+    if args.ramp_users is not None:
+        changes["ramp_users"] = parse_int_list(args.ramp_users)
+    if args.step_seconds is not None:
+        changes["step_seconds"] = args.step_seconds
+    if args.tenant_documents is not None:
+        changes["tenant_documents"] = parse_tenant_documents(args.tenant_documents)
+    if changes and plan.preset == "full":
+        changes["preset"] = "custom"
+    plan = dataclasses.replace(plan, **changes)
+    if plan.repetitions < 1 or plan.backlog_documents < 1 or 0 in plan.workers + plan.ramp_users + plan.ingest_users:
+        raise CliError("repetitions, backlog, workers and users must all be at least 1")
+    return plan
+
+
+def run(args: argparse.Namespace) -> int:
+    plan = plan_from_args(args)
+    out_dir = Path(args.out).resolve() if args.out else OUT_DIR
+    if plan.preset != "full":
+        out_dir = refuse_results_dir(out_dir, what=f"a {plan.preset} run")
+    if args.scale < 0:
+        raise CliError("--scale may not be negative")
+    apply_run_environment(args.profile, args.scale, None)
+    document, path, _result = execute(
+        plan, label=args.label, out_dir=out_dir, argv=args.argv, keep_up=args.keep_up
+    )
+    print_summary(document, path)
+    return 1 if document["validation"]["problems"] else 0
+
+
+def smoke(args: argparse.Namespace) -> int:
+    """10 uploads with no worker, 2 workers draining them, 20 s of reads at 2
+    users, on the hashing embedder; then the assertions of smoke_failures. The
+    samples and the artifact go to a temporary directory (or `--out`), never to
+    scripts/load/results. The stack is stopped afterwards."""
+    out_dir = refuse_results_dir(
+        Path(args.out) if args.out else Path(tempfile.mkdtemp(prefix="doc-pilot-load-smoke-")),
+        what="the smoke",
+    )
+    plan = phases.smoke_plan()
+    apply_run_environment("zero", 1.0, "hashing")
+    failures: list[str] = []
+
+    def check(driver: StackDriver, result: phases.RunResult) -> None:
+        samples = [s for path in result.sample_files for s in artifact.read_samples(path)]
+        ids = sorted({s["document_id"] for s in samples if s["name"] == "upload" and s["ok"]})
+        facts = parse_document_facts(driver.query(document_facts_sql(ids))) if ids else []
+        failures.extend(smoke_failures(samples, facts, driver.ledger, result.phases, plan.backlog_documents))
+
+    document, path, _result = execute(
+        plan, label="smoke", out_dir=out_dir, argv=args.argv, after=check
+    )
+    print_summary(document, path)
+    failures.extend(document["validation"]["problems"])
+    if failures:
+        print("Smoke failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"  {failure}", file=sys.stderr)
+        return 1
+    print("Smoke passed.")
+    return 0
+
+
+def validate_command(args: argparse.Namespace) -> int:
+    try:
+        document = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise CliError(f"{args.file} is not a readable JSON file") from exc
+    problems = artifact.validate(document, publishable=args.publishable)
+    for problem in problems:
+        print(f"  {problem}", file=sys.stderr)
+    if problems:
+        return 1
+    print("valid" + (" and publishable" if args.publishable else ""))
+    return 0
+
+
 # --- the command line --------------------------------------------------------
 
 
@@ -562,6 +1172,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     preflight_parser.set_defaults(run=preflight)
 
+    run_parser = commands.add_parser(
+        "run",
+        help="reset the load stack, run the phases, write a load_v1 artifact, stop the stack",
+    )
+    run_parser.add_argument("--profile", choices=("zero", "replay"), default="zero", help="the scripted model's latency profile")
+    run_parser.add_argument("--scale", type=float, default=1.0, help="multiplier on the scripted latencies")
+    run_parser.add_argument("--label", required=True, help="names the artifact: <run id>_<label>.json")
+    run_parser.add_argument("--quick", action="store_true", help="a dry run of every phase in a few minutes; not publishable")
+    run_parser.add_argument("--phases", help=f"comma-separated subset of {','.join(phases.PHASES)}")
+    run_parser.add_argument("--reps", type=int, help="repetitions of each configuration (the plan says 3)")
+    run_parser.add_argument("--workers", help="worker counts for the scaling phase, e.g. 1,2,4,8")
+    run_parser.add_argument("--backlog", type=int, help="documents in the scaling backlog")
+    run_parser.add_argument("--ingest-users", help="concurrency steps of the ingest phase, e.g. 1,2,4,8")
+    run_parser.add_argument("--ingest-documents", type=int, help="uploads per ingest step")
+    run_parser.add_argument("--ramp-users", help="user steps of the read ramp, e.g. 2,4,8")
+    run_parser.add_argument("--step-seconds", type=int, help="seconds per read step")
+    run_parser.add_argument("--tenant-documents", help="documents uploaded to each tenant before the ramp, e.g. load-large=2000,load-medium=300 (25 or more each, so every agent question has its document)")
+    run_parser.add_argument("--out", help=f"where the artifact and samples go (default {repo_path(OUT_DIR)}; {repo_path(RESULTS_DIR)} takes full plans only)")
+    run_parser.add_argument("--keep-up", action="store_true", help="leave the stack running afterwards")
+    run_parser.set_defaults(run=run)
+
+    smoke_parser = commands.add_parser(
+        "smoke",
+        help="10 uploads, 2 workers, 20 s of reads at 2 users, then assert zero errors, zero spend",
+    )
+    smoke_parser.add_argument("--out", help="a directory for the artifact and samples (default a temporary one)")
+    smoke_parser.set_defaults(run=smoke)
+
+    validate_parser = commands.add_parser("validate", help="check a load_v1 artifact")
+    validate_parser.add_argument("file")
+    validate_parser.add_argument("--publishable", action="store_true", help="also refuse a dirty tree, an invalid phase, a quick run")
+    validate_parser.set_defaults(run=validate_command)
+
     return parser
 
 
@@ -570,9 +1213,10 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "dry_run", False) and not args.volumes:
         print("--dry-run only applies with --volumes", file=sys.stderr)
         return 2
+    args.argv = list(sys.argv[1:] if argv is None else argv)
     try:
         return args.run(args)
-    except CliError as exc:
+    except (CliError, PhaseError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

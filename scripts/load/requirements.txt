@@ -1,0 +1,4 @@
+# The load generator's own dependency (scripts/load/Dockerfile). Pinned to the
+# version the planning spike measured: HttpUser's iter_content timestamps each
+# SSE frame, where FastHttpUser buffers the whole stream.
+locust==2.47.0
