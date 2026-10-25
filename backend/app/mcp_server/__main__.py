@@ -20,7 +20,7 @@ from mcp.server.stdio import stdio_server
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
-from app.db import async_session_maker, engine
+from app.db import async_session_maker, engine, verify_tenant_isolation
 from app.mcp_server.server import build_server, default_principal
 from app.retrieval.embeddings import get_embedder, warm_up_embedder
 from app.telemetry import (
@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 
 
 async def serve() -> None:
+    # A host backend/.env that still names the database owner would otherwise
+    # read every organization's documents; fail before the client connects.
+    await verify_tenant_isolation(engine)
     if configure_tracing("doc-pilot-mcp") and otlp_enabled():
         instrument_engine(engine)
         logger.info("tracing enabled (OTLP export)")

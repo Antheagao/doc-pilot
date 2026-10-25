@@ -19,7 +19,11 @@ from sqlalchemy import Integer, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from app.budget import seconds_until_reset, spent_today_usd
+from app.budget import (
+    installation_spent_today_usd,
+    seconds_until_reset,
+    spent_today_usd,
+)
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.evals.report import load_results
@@ -196,6 +200,11 @@ async def get_stats(
         spend=spend,
         budget=StatsBudget(
             daily_budget_usd=settings.daily_budget_usd or None,
+            organization_daily_budget_usd=settings.organization_daily_budget_usd or None,
+            installation_budget_reached=(
+                settings.daily_budget_usd > 0
+                and await installation_spent_today_usd(session, now) >= settings.daily_budget_usd
+            ),
             spent_today_usd=await spent_today_usd(session, now),
             resets_in_seconds=seconds_until_reset(now),
         ),

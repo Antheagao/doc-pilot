@@ -217,9 +217,15 @@ class StatsSpend(BaseModel):
 
 
 class StatsBudget(BaseModel):
-    """The daily spend cap (app/budget.py): null when it's off."""
+    """The daily spend caps (app/budget.py): null when one is off.
+    `daily_budget_usd` is the installation's cap (configuration, not tenant
+    data) and `installation_budget_reached` says whether it has been hit,
+    without any figure. `spent_today_usd` is this organization's own spend,
+    the one `organization_daily_budget_usd` caps."""
 
     daily_budget_usd: float | None
+    organization_daily_budget_usd: float | None
+    installation_budget_reached: bool
     spent_today_usd: float
     resets_in_seconds: int
 

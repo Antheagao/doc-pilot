@@ -88,7 +88,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
-from app.db import async_session_maker, engine
+from app.db import async_session_maker, engine, verify_tenant_isolation
 from app.evals.online import process_judge_job
 from app.extraction import (
     ModelRefusalError,
@@ -536,6 +536,9 @@ async def _heartbeat_loop(path: Path, interval: float) -> None:
 
 
 async def main() -> None:
+    # Before the heartbeat starts, so a worker whose role skips row-level
+    # security never reports healthy.
+    await verify_tenant_isolation(engine)
     heartbeat = asyncio.ensure_future(
         _heartbeat_loop(Path(get_settings().worker_heartbeat_file), HEARTBEAT_INTERVAL_SECONDS)
     )

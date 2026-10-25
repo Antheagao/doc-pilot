@@ -334,9 +334,14 @@ export interface Stats {
   ask: StatsAsk;
 }
 
-// The daily spend cap; daily_budget_usd is null when it's off.
+// The daily spend caps; each is null when it's off. daily_budget_usd is the
+// installation's, installation_budget_reached says whether it has been hit
+// (no figure: it would be every organization's spend), and spent_today_usd is
+// this organization's own spend, which organization_daily_budget_usd caps.
 export interface StatsBudget {
   daily_budget_usd: number | null;
+  organization_daily_budget_usd: number | null;
+  installation_budget_reached: boolean;
   spent_today_usd: number;
   resets_in_seconds: number;
 }

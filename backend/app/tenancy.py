@@ -20,7 +20,10 @@ touches a content table, or a flush of a content row, raises TenantScopeError
 before any SQL is sent. The one exception is `queue_session`, for the worker's
 claim of the oldest pending job in any organization: it may touch only the
 models marked `__queue_scoped__` (the job queue), and the claim then binds the
-job's organization before it reads anything else.
+job's organization before it reads anything else. At the start of each of its
+transactions it also sets `docpilot.queue_scope` to `on`, which the policies
+`jobs_queue_claim` and `jobs_queue_update` on `jobs` (and no other table) read:
+the database admits the same one table to the same one session.
 
 Every kind of statement the ORM hook can see is either filtered or refused:
 selects (including UNIONs), updates and deletes get the filter; a from_statement
@@ -35,9 +38,11 @@ nested inside an otherwise ORM statement, a `session.get` of an object already
 in the session's identity map (no SQL), and a refresh of one (the filter does
 not apply to refreshes; `bind_tenant` empties the identity map when it
 switches organizations for that reason). The application issues none of these
-against content tables. A database layer (row-level security under a non-owner
-role) is meant to catch them; this module is the layer that runs on every
-connection, including an owner's.
+against content tables. Row-level security under a non-owner role catches them
+(migration 73a7d8691932; app.db.verify_tenant_isolation refuses to start a
+process whose role would skip it); this module is the layer that runs on every
+connection, including an owner's. Both settings are transaction-local, so
+neither outlives a commit or rollback, and a pooled connection comes back clean.
 
 `after_begin` also fires when `begin_nested` opens a savepoint, so each tool
 call's savepoint (app/agent/tools.py execute_tool) sends the setting again.
@@ -146,6 +151,8 @@ def _apply_tenant(session: Session, transaction: Any, connection: Any) -> None:
             text("SELECT set_config('docpilot.organization_id', :organization_id, true)"),
             {"organization_id": str(organization_id)},
         )
+    if session.info.get(QUEUE_KEY):
+        connection.execute(text("SELECT set_config('docpilot.queue_scope', 'on', true)"))
 
 
 _SCOPED_STATEMENTS = (Select, CompoundSelect, FromStatement, Update, Delete, Insert)
@@ -263,15 +270,25 @@ async def bind_tenant(session: AsyncSession, organization_id: uuid.UUID) -> None
     Binding a different organization to a session that already has one flushes
     what it holds for the old one, then empties the session's identity map: the
     ORM's criteria do not apply to a refresh, so an object loaded for one
-    organization must not stay reachable from another."""
+    organization must not stay reachable from another.
+
+    Binding a queue session ends its queue scope, in the application (the key
+    is dropped) and in the open transaction (`docpilot.queue_scope` is cleared):
+    from then on it is that organization's session and sees no other
+    organization's jobs. The claim's own changes to its job are flushed under
+    the organization's policy."""
     previous = session.info.get(TENANT_KEY)
     if previous is not None and previous != organization_id:
         await session.flush()
         session.expunge_all()
     session.info[TENANT_KEY] = organization_id
+    was_queue = session.info.pop(QUEUE_KEY, None)
     if session.in_transaction():
         await session.execute(
-            text("SELECT set_config('docpilot.organization_id', :organization_id, true)"),
+            text(
+                "SELECT set_config('docpilot.organization_id', :organization_id, true)"
+                + (", set_config('docpilot.queue_scope', '', true)" if was_queue else "")
+            ),
             {"organization_id": str(organization_id)},
         )
 
@@ -291,8 +308,10 @@ async def queue_session(
     factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
 ) -> AsyncIterator[AsyncSession]:
     """A session for the worker's claim: it may read and update the job queue
-    across organizations and nothing else. The claim binds the job's
-    organization (`bind_tenant`) before it touches a document."""
+    across organizations and nothing else, in the application (QUEUE_KEY) and
+    in the database (`docpilot.queue_scope`, set by `_apply_tenant` on each
+    transaction). The claim binds the job's organization (`bind_tenant`)
+    before it touches a document, which ends the queue scope."""
     async with factory() as session:
         session.info[QUEUE_KEY] = True
         yield session

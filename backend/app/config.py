@@ -19,9 +19,17 @@ class Settings(BaseSettings):
     # where the process was launched from.
     model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", extra="ignore")
 
+    # What the application connects as: a non-owner role that row-level
+    # security binds (app/db.py verify_tenant_isolation refuses any other).
     database_url: str = "postgresql+asyncpg://docpilot:docpilot@localhost:5434/docpilot"
+    # The database owner, for Alembic (alembic/env.py) and the role
+    # provisioner (scripts/provision_db_role.py); the application never uses
+    # it. Unset means database_url, which is only right while that is the
+    # owner (a bare `alembic upgrade head` on a fresh checkout).
+    migration_database_url: str | None = None
     # Browser origins allowed to call the API (CORS) -- the frontend's.
-    # A JSON list in the environment: CORS_ORIGINS='["https://..."]'.
+    # A JSON list in the environment: CORS_ORIGINS='["https://..."]'. An
+    # origin is never a wildcard (_explicit_cors_origins).
     cors_origins: list[str] = ["http://localhost:3000"]
     anthropic_api_key: str | None = None
     upload_dir: str = "uploads"
@@ -156,6 +164,10 @@ class Settings(BaseSettings):
     # its grader -- reaches this many dollars. A soft cap: work already
     # admitted finishes. 0 turns it off.
     daily_budget_usd: float = Field(default=5.0, ge=0.0)
+    # The same cap for one organization's own spend (app/budget.py), so one
+    # tenant cannot use up the installation's budget alone; checked before
+    # DAILY_BUDGET_USD. 0, the default, turns it off.
+    organization_daily_budget_usd: float = Field(default=0.0, ge=0.0)
     # Per-client requests per minute (app/ratelimit.py), so no one client
     # can spend the day's budget in a minute. 0 turns a limit off. /ask is
     # limited by default (no person asks ten questions a minute); uploads
@@ -205,6 +217,16 @@ class Settings(BaseSettings):
     # against many accounts, and many clients try one account.
     login_rate_limit_per_minute: int = Field(default=10, ge=0)
     login_account_rate_limit_per_minute: int = Field(default=5, ge=0)
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _explicit_cors_origins(cls, value: list[str]) -> list[str]:
+        # Credentialed CORS with a wildcard would let any site read the API as
+        # the signed-in user; Starlette also treats only a bare "*" as one, so
+        # a "*" anywhere in an entry is refused rather than guessed at.
+        if any("*" in origin for origin in value):
+            raise ValueError("CORS_ORIGINS must list explicit origins, not a wildcard")
+        return value
 
     @field_validator("extraction_prompt_version")
     @classmethod

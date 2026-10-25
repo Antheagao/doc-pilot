@@ -12,7 +12,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import get_settings
-from app.db import async_session_maker, engine
+from app.db import async_session_maker, engine, verify_tenant_isolation
 from app.mcp_server.http import McpHttpEndpoint
 from app.mcp_server.server import build_server, default_principal
 from app.retrieval.embeddings import get_embedder, warm_up_embedder
@@ -111,6 +111,9 @@ mcp_endpoint = McpHttpEndpoint(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Before anything serves: a role that skips row-level security must stop
+    # the API here, not turn the database layer off silently.
+    await verify_tenant_isolation(engine)
     # Warm the embedding model in the background: /search embeds every
     # query, and the first one shouldn't pay the model load. Not awaited,
     # so the API is serving (and /healthz passing) while it loads.

@@ -29,21 +29,29 @@ services:
     # `db` hostname until someone noticed.
     restart: unless-stopped
 
-  # One-shot: runs migrations to head and exits. api/worker wait on its
-  # success so the schema is always current before either starts serving
-  # or claiming jobs.
+  # One-shot: runs migrations to head as the database owner, then creates
+  # the application's login role (scripts/provision_db_role.py), and exits.
+  # api/worker wait on its success so the schema is always current, and the
+  # role they connect as exists, before either starts serving or claiming
+  # jobs.
   migrate:
     # migrate, api and worker run the same backend image under one name.
     # Built per service, `docker compose build api worker` left migrate on
     # a stale image, and `up` then skipped the new migrations silently.
     build: ./backend
     image: doc-pilot-backend
-    command: alembic upgrade head
+    command: sh -c "alembic upgrade head && python scripts/provision_db_role.py"
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+      # The owner (a superuser, which row-level security cannot bind) runs
+      # Alembic and the provisioner; the application never connects as it.
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+      # The login role to create: the application's own, a member of
+      # docpilot_app, which row-level security binds. Dev-grade credentials
+      # like the owner's: the database is bound to loopback.
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot
     restart: "no"
     # The backend image's baked-in healthcheck probes the API's /healthz;
     # this one-shot container runs alembic, not uvicorn, so that probe is
@@ -61,8 +69,10 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       # In-network: db's service name and container port, not the
-      # 5434 host mapping used from outside the compose network.
-      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+      # 5434 host mapping used from outside the compose network. The
+      # runtime role, not the owner: the API refuses to start as a role
+      # that skips row-level security (app/db.py verify_tenant_isolation).
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot
       # Must match worker's UPLOAD_DIR -- routers/documents.py persists
       # absolute storage_path strings that the worker and the file
       # endpoint later re-open, so both containers have to resolve the
@@ -87,6 +97,9 @@ services:
       # since midnight UTC reaches this (USD); 0 turns the cap off. See
       # app/budget.py.
       DAILY_BUDGET_USD: ${DAILY_BUDGET_USD:-5}
+      # The same cap for one organization's own spend, checked first, so one
+      # tenant cannot use up the installation's budget alone; 0 = off.
+      ORGANIZATION_DAILY_BUDGET_USD: ${ORGANIZATION_DAILY_BUDGET_USD:-0}
       # Per-client requests per minute on the billed routes (0 = off); see
       # app/ratelimit.py. Behind Docker's port mapping every host
       # connection can arrive from the bridge gateway's address, so this is
@@ -125,7 +138,8 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot
+      # The runtime role: see the api service.
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot
       # Must match api's UPLOAD_DIR -- see the comment there.
       UPLOAD_DIR: /data/uploads
       # Read by the healthcheck below as well as by the worker.

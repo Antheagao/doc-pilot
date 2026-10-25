@@ -1,11 +1,13 @@
 """Application-layer tenancy (app/tenancy.py): every query runs for one
 organization, and a session with none refuses.
 
-The suite's database role owns the tables and is a superuser, so nothing the
-database does (row-level security) applies here: these tests show the ORM layer
-holds on its own. Most run in db_session's rolled-back transaction, with the
-default organization and `second_organization`; the worker test commits real
-rows and removes them again.
+The suite as a whole runs as a non-owner role that row-level security binds
+(tests/test_rls.py tests that layer alone). These tests show the ORM layer
+holds on its own, so the ones that use `db_session` run on the owner's
+connection, a superuser that row-level security never binds (the override
+below). Most run in that rolled-back transaction, with the default
+organization and `second_organization`; the worker tests commit real rows, as
+the runtime role, and remove them again.
 """
 
 import uuid
@@ -24,8 +26,14 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import aliased
+from tenant_rows import UNIT_VECTOR, populate
 
 from app import worker as worker_module
 from app.agent.tools import TOOL_HANDLERS, ToolContext, execute_tool
@@ -64,92 +72,14 @@ from app.tenancy import (
 )
 from app.worker import claim_job, run_once
 
-CONTENT_MODELS = [Document, Job, Extraction, ExtractedField, Reconciliation, DocumentPage, DocumentChunk, AskRun]
-UNIT_VECTOR = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
-
-
-async def _populate(session: AsyncSession, tag: str) -> dict[type, uuid.UUID]:
-    """One row of each content model in the organization the session is bound
-    to, parents first (the composite foreign keys need them). Returns each
-    row's id by model."""
-    document = Document(
-        filename=f"{tag}.png", mime_type="image/png", storage_path=f"/tmp/{tag}", status="extracted"
-    )
-    session.add(document)
-    await session.flush()
-    ask_run = AskRun(
-        question=f"{tag}?",
-        status="answered",
-        answer="yes",
-        citations=[],
-        tool_calls=[],
-        evidence="",
-        steps=1,
-        model="m",
-        prompt_version="v",
-    )
-    extraction = Extraction(
-        document_id=document.id,
-        prompt_version="extract_v1",
-        model="m",
-        raw_response={},
-        input_tokens=1,
-        output_tokens=1,
-        cost_usd=1,
-        latency_ms=1,
-    )
-    page = DocumentPage(document_id=document.id, page_number=1, text=tag, source="gold")
-    session.add_all([ask_run, extraction, page])
-    await session.flush()
-    session.add_all(
-        [
-            ExtractedField(extraction_id=extraction.id, field_name="total", value={}, confidence=0.9),
-            Reconciliation(extraction_id=extraction.id, rules_version="v", status="pass", report={}),
-            DocumentChunk(
-                document_id=document.id,
-                page_id=page.id,
-                page_number=1,
-                chunk_index=0,
-                text=tag,
-                char_start=0,
-                char_end=len(tag),
-                embedding=UNIT_VECTOR,
-                embedding_model="m",
-            ),
-            Job(document_id=document.id, state="done"),
-        ]
-    )
-    await session.flush()
-    ids = {Document: document.id, AskRun: ask_run.id, Extraction: extraction.id, DocumentPage: page.id}
-    for model, column in (
-        (ExtractedField, "extraction_id"),
-        (Reconciliation, "extraction_id"),
-        (DocumentChunk, "document_id"),
-        (Job, "document_id"),
-    ):
-        parent = {"extraction_id": extraction.id, "document_id": document.id}[column]
-        ids[model] = (
-            await session.execute(select(model.id).where(getattr(model, column) == parent))
-        ).scalar_one()
-    return ids
-
 
 @pytest.fixture
-async def two_tenants(
-    db_session: AsyncSession, second_organization: Organization
-) -> tuple[dict[type, uuid.UUID], dict[type, uuid.UUID]]:
-    """A row of every content model in the default organization and in the
-    second one. The session ends up bound to the default organization with an
-    empty identity map, so what a test reads comes from the database."""
-    await bind_tenant(db_session, second_organization.id)
-    theirs = await _populate(db_session, "theirs")
-    await bind_tenant(db_session, DEFAULT_ORGANIZATION_ID)
-    ours = await _populate(db_session, "ours")
-    await bind_tenant(db_session, second_organization.id)
-    await bind_tenant(db_session, DEFAULT_ORGANIZATION_ID)
-    return ours, theirs
+def db_session(owner_session: AsyncSession) -> AsyncSession:
+    """These tests run on the owner's connection: the ORM layer alone."""
+    return owner_session
 
 
+CONTENT_MODELS = [Document, Job, Extraction, ExtractedField, Reconciliation, DocumentPage, DocumentChunk, AskRun]
 @asynccontextmanager
 async def recorded_statements() -> AsyncGenerator[list[str]]:
     """Every statement the engine sends to the database while the block runs."""
@@ -191,12 +121,13 @@ async def test_the_models_and_the_migration_describe_the_same_database() -> None
 
 
 async def test_without_a_tenant_the_database_default_is_null_and_refuses_the_row(
-    db_session: AsyncSession,
+    db_session: AsyncSession, owner_engine: AsyncEngine
 ) -> None:
     assert (
         await db_session.execute(text("SELECT docpilot_current_organization_id() IS NULL"))
     ).scalar_one() is False  # db_session is bound
-    async with engine.connect() as connection:
+    # As the owner, so it is NOT NULL that refuses the row and not a policy.
+    async with owner_engine.connect() as connection:
         transaction = await connection.begin()
         assert (await connection.execute(text("SELECT docpilot_current_organization_id()"))).scalar_one() is None
         with pytest.raises(IntegrityError, match="organization_id"):
@@ -313,7 +244,7 @@ async def test_inserts_take_the_bound_organization_and_the_session_sees_it_at_on
     organization_id = DEFAULT_ORGANIZATION_ID if which == "default" else second_organization.id
     await bind_tenant(db_session, organization_id)
 
-    ids = await _populate(db_session, "fresh")
+    ids = await populate(db_session, "fresh")
 
     for model, row_id in ids.items():
         row = await db_session.get(model, row_id)

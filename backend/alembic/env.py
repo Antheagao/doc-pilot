@@ -19,9 +19,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Pull the database URL from app settings (DATABASE_URL env var overrides
-# the default) instead of hardcoding it in alembic.ini.
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Pull the database URL from app settings instead of hardcoding it in
+# alembic.ini. Migrations run as the database owner (MIGRATION_DATABASE_URL):
+# DATABASE_URL is the application's row-level-security-bound role, which owns
+# nothing and cannot alter a table. Without a migration URL, DATABASE_URL is
+# used, which is only right while that is the owner.
+_settings = get_settings()
+config.set_main_option("sqlalchemy.url", _settings.migration_database_url or _settings.database_url)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

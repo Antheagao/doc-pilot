@@ -27,7 +27,11 @@ services:
     # stack's doc-pilot-backend (shared by migrate, api, worker and seed).
     image: doc-pilot-demo-backend
     environment:
-      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
+      # The owner migrates, then provisions the runtime role (see the base
+      # file). This database server is the demo project's own, so the role
+      # name is free to match the dev stack's.
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot_demo
     restart: "no"
 
   api:
@@ -36,7 +40,7 @@ services:
     ports: !override
       - "127.0.0.1:8100:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot_demo
       # The browser calls the API from the demo frontend's origin.
       CORS_ORIGINS: '["http://localhost:3100"]'
       # Hard cap on live demo spend (/ask, chat), independent of the dev
@@ -55,7 +59,7 @@ services:
   worker:
     image: doc-pilot-demo-backend
     environment:
-      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot_demo
       # Langfuse and tracing off: see the api service.
       LANGFUSE_PUBLIC_KEY: ""
       LANGFUSE_SECRET_KEY: ""
@@ -86,7 +90,7 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql+asyncpg://docpilot:docpilot@db:5432/docpilot_demo
+      DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot_demo
       # Must match api's UPLOAD_DIR and EMBEDDING_CACHE_DIR: the seed
       # copies the sample images into the shared uploads volume and
       # indexes pages with the same embedding model the api queries with.

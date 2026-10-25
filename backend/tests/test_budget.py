@@ -8,15 +8,23 @@ from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.budget import day_start, seconds_until_reset, spent_today_usd
+from app.budget import (
+    day_start,
+    enforce_daily_budget,
+    installation_spent_today_usd,
+    seconds_until_reset,
+    spent_today_usd,
+)
 from app.config import Settings, get_settings
 from app.main import app
-from app.models import AskRun, Document, DocumentPage, Extraction
+from app.models import AskRun, Document, DocumentPage, Extraction, Organization
 from app.routers.ask import get_anthropic_client
+from app.tenancy import bind_tenant
 
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
@@ -32,10 +40,10 @@ def _run(**overrides) -> AskRun:
     return AskRun(**{**fields, **overrides})
 
 
-def _cap(tmp_path, budget: float) -> None:
+def _cap(tmp_path, budget: float, organization_budget: float = 0) -> None:
     app.dependency_overrides[get_settings] = lambda: Settings(
-        upload_dir=str(tmp_path), daily_budget_usd=budget, anthropic_api_key="test",
-        ask_rate_limit_per_minute=0,
+        upload_dir=str(tmp_path), daily_budget_usd=budget, organization_daily_budget_usd=organization_budget,
+        anthropic_api_key="test", ask_rate_limit_per_minute=0,
     )
 
 
@@ -77,7 +85,7 @@ async def test_todays_spend_counts_every_billed_stage_and_nothing_older(
 async def test_uploads_are_refused_once_the_budget_is_spent(
     client: AsyncClient, db_session: AsyncSession, tmp_path
 ) -> None:
-    spent = await spent_today_usd(db_session)
+    spent = await installation_spent_today_usd(db_session)
     documents_before = (await db_session.execute(select(func.count()).select_from(Document))).scalar_one()
     db_session.add(_run(cost_usd=0.25))
     await db_session.commit()
@@ -87,6 +95,7 @@ async def test_uploads_are_refused_once_the_budget_is_spent(
 
     assert response.status_code == 429
     assert "daily model budget reached" in response.json()["detail"]
+    assert "$" not in response.json()["detail"]  # the installation's total is every tenant's spend
     assert 1 <= int(response.headers["retry-after"]) <= 86400
     # Refused before anything was stored: no row, no file.
     assert (await db_session.execute(select(func.count()).select_from(Document))).scalar_one() == documents_before
@@ -96,7 +105,7 @@ async def test_uploads_are_refused_once_the_budget_is_spent(
 async def test_uploads_under_the_budget_or_with_the_cap_off_go_through(
     client: AsyncClient, db_session: AsyncSession, tmp_path
 ) -> None:
-    spent = await spent_today_usd(db_session)
+    spent = await installation_spent_today_usd(db_session)
     _cap(tmp_path, spent + 1.0)
     assert (await client.post("/documents", files={"file": ("a.png", TINY_PNG, "image/png")})).status_code == 201
 
@@ -109,7 +118,7 @@ async def test_uploads_under_the_budget_or_with_the_cap_off_go_through(
 async def test_ask_is_refused_before_any_model_call(
     client: AsyncClient, db_session: AsyncSession, tmp_path
 ) -> None:
-    spent = await spent_today_usd(db_session)
+    spent = await installation_spent_today_usd(db_session)
     db_session.add(_run(cost_usd=0.25))
     await db_session.commit()
     _cap(tmp_path, spent + 0.20)
@@ -133,11 +142,112 @@ async def test_stats_report_the_budget(client: AsyncClient, db_session: AsyncSes
     budget = (await client.get("/stats")).json()["budget"]
 
     assert budget["daily_budget_usd"] == 7.5
+    assert budget["organization_daily_budget_usd"] is None
+    assert budget["installation_budget_reached"] is False
     assert budget["spent_today_usd"] >= 0.125
     assert 1 <= budget["resets_in_seconds"] <= 86400
 
     _cap(tmp_path, 0)
-    assert (await client.get("/stats")).json()["budget"]["daily_budget_usd"] is None
+    off = (await client.get("/stats")).json()["budget"]
+    assert off["daily_budget_usd"] is None and off["installation_budget_reached"] is False
+
+
+async def test_stats_report_the_organization_cap_and_whether_the_installation_cap_is_reached(
+    client: AsyncClient, db_session: AsyncSession, tmp_path
+) -> None:
+    db_session.add(_run(cost_usd=0.5))
+    await db_session.commit()
+    spent = await installation_spent_today_usd(db_session)
+
+    _cap(tmp_path, spent - 0.25, organization_budget=3.5)
+    reached = (await client.get("/stats")).json()["budget"]
+    _cap(tmp_path, spent + 100)
+    clear = (await client.get("/stats")).json()["budget"]
+
+    assert reached["organization_daily_budget_usd"] == 3.5
+    assert reached["installation_budget_reached"] is True
+    assert reached["daily_budget_usd"] == pytest.approx(spent - 0.25)
+    assert clear["installation_budget_reached"] is False
+
+
+async def test_one_organizations_spend_counts_toward_the_installation_cap_and_not_toward_anothers(
+    db_session: AsyncSession, second_organization: Organization
+) -> None:
+    spent_here = await spent_today_usd(db_session)
+    db_session.add(_run(cost_usd=0.25))
+    await db_session.flush()
+    installation = await installation_spent_today_usd(db_session)
+    await bind_tenant(db_session, second_organization.id)
+
+    # The second organization has spent nothing, so its own cap is clear...
+    assert await spent_today_usd(db_session) == 0
+    await enforce_daily_budget(
+        db_session, Settings(daily_budget_usd=0, organization_daily_budget_usd=0.20)
+    )
+    # ...while the installation's cap, the sum over both, is reached.
+    assert await installation_spent_today_usd(db_session) == pytest.approx(installation)
+    with pytest.raises(HTTPException) as refused:
+        await enforce_daily_budget(
+            db_session, Settings(daily_budget_usd=installation - 0.01, organization_daily_budget_usd=0.20)
+        )
+
+    assert refused.value.status_code == 429
+    assert "installation's budget" in refused.value.detail
+    assert "$" not in refused.value.detail  # no figure: the sum is other tenants' spend too
+    assert "retry-after" in {name.lower() for name in refused.value.headers}
+    assert installation >= spent_here + 0.25
+
+
+async def test_the_organization_cap_is_checked_first_and_names_the_organizations_own_spend(
+    db_session: AsyncSession
+) -> None:
+    db_session.add(_run(cost_usd=0.25))
+    await db_session.flush()
+    mine = await spent_today_usd(db_session)
+
+    # Both caps are reached: the organization's is the one named.
+    with pytest.raises(HTTPException) as refused:
+        await enforce_daily_budget(
+            db_session, Settings(daily_budget_usd=0.01, organization_daily_budget_usd=mine - 0.01)
+        )
+
+    assert refused.value.status_code == 429
+    assert "your organization" in refused.value.detail
+    assert f"${mine:.2f}" in refused.value.detail
+
+
+async def test_each_cap_is_enforced_on_its_own_and_both_off_enforces_nothing(
+    db_session: AsyncSession
+) -> None:
+    db_session.add(_run(cost_usd=50.0))
+    await db_session.flush()
+
+    await enforce_daily_budget(db_session, Settings(daily_budget_usd=0, organization_daily_budget_usd=0))
+    with pytest.raises(HTTPException):
+        await enforce_daily_budget(db_session, Settings(daily_budget_usd=0, organization_daily_budget_usd=49))
+    with pytest.raises(HTTPException):
+        await enforce_daily_budget(db_session, Settings(daily_budget_usd=49, organization_daily_budget_usd=0))
+
+
+async def test_an_organization_over_its_cap_is_refused_before_any_work(
+    client: AsyncClient, db_session: AsyncSession, tmp_path
+) -> None:
+    spent = await spent_today_usd(db_session)
+    db_session.add(_run(cost_usd=0.25))
+    await db_session.commit()
+    _cap(tmp_path, 0, organization_budget=spent + 0.20)
+
+    response = await client.post("/documents", files={"file": ("r.png", TINY_PNG, "image/png")})
+
+    assert response.status_code == 429
+    assert "your organization" in response.json()["detail"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_organization_cap_must_not_be_negative_and_defaults_to_off() -> None:
+    assert Settings().organization_daily_budget_usd == 0
+    with pytest.raises(ValueError):
+        Settings(organization_daily_budget_usd=-1)
 
 
 def test_a_negative_budget_is_rejected() -> None:
