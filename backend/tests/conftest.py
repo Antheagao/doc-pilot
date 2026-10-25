@@ -10,6 +10,10 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from hypothesis import settings as hypothesis_settings
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -165,3 +169,24 @@ async def client(db_session: AsyncSession, tmp_path) -> AsyncGenerator[AsyncClie
             yield ac
     finally:
         app.dependency_overrides.clear()
+
+
+_EXPORTER = InMemorySpanExporter()
+
+
+@pytest.fixture
+def spans() -> InMemorySpanExporter:
+    """The spans the test emits, captured in memory. A process can install its
+    global TracerProvider only once, so the first test to ask installs an SDK
+    provider with the in-memory exporter (the app itself never installs one
+    unless OTEL_EXPORTER_OTLP_ENDPOINT is set); the captured spans are cleared
+    before each test."""
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
+    if not getattr(provider, "_docpilot_test_exporter", False):
+        provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
+        provider._docpilot_test_exporter = True  # type: ignore[attr-defined]
+    _EXPORTER.clear()
+    return _EXPORTER

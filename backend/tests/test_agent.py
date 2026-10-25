@@ -43,9 +43,11 @@ from app.evals.corpus import seed_labeled_corpus
 from app.evals.dataset import load_cases
 from app.evals.retrieval import load_gold_corpus
 from app.main import app
+from app.models import Document, DocumentPage
+from app.pii import mask_card_numbers
 from app.records import DocumentRecord, load_records
 from app.retrieval.embeddings import HashingEmbedder, get_embedder
-from app.retrieval.indexing import ChunkingConfig
+from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
 from app.routers.ask import get_anthropic_client
 
 EMBEDDER = HashingEmbedder()
@@ -346,6 +348,50 @@ async def test_get_page_validates_ids_and_page_numbers(db_session: AsyncSession)
         await get_page(ctx, {"document_id": "not-a-uuid", "page_number": 1})
     with pytest.raises(ToolError, match="no document"):
         await get_page(ctx, {"document_id": str(uuid.uuid4()), "page_number": 1})
+
+
+async def test_card_numbers_in_page_text_are_masked_where_the_tools_read_it(
+    db_session: AsyncSession,
+) -> None:
+    reference = "Order ref 1234567890123456"  # 16 digits that fail the Luhn check
+    period = "Period 2026-10-01 - 2026-10-31"
+    page_text = (
+        "Cobblestone Bakery\n  Paid VISA 4111 1111 1111 1111\n"
+        f"VISA 4111 1111 1111 1111 12-27\n{reference}\n{period}\nTotal $8.05"
+    )
+    document = Document(filename="card.png", mime_type="image/png", storage_path="/tmp/c", status="extracted")
+    db_session.add(document)
+    await db_session.flush()
+    await index_document_pages(
+        db_session,
+        document.id,
+        [PageText(1, page_text, "gold")],
+        EMBEDDER,
+        ChunkingConfig(0, 0, True),
+    )
+    stored = (
+        await db_session.execute(select(DocumentPage.text).where(DocumentPage.document_id == document.id))
+    ).scalar_one()
+    ctx = ToolContext(session=db_session, embedder=EMBEDDER, document_ids=[document.id])
+
+    searched = await search_documents(ctx, {"query": "Cobblestone Bakery VISA"})
+    paged = await get_page(ctx, {"document_id": str(document.id), "page_number": 1})
+
+    for content in (searched, paged):
+        (result,) = _results(content)
+        lines = [block["text"] for block in result["content"]]
+        assert "Paid VISA ****1111" in lines
+        assert "VISA ****1111 12-27" in lines
+        assert reference in lines
+        assert period in lines
+        assert not any("4111" in line for line in lines)
+        source = ctx.sources[result["source"]]
+        assert source.lines == lines
+        for (start, end), line in zip(source.blocks, lines, strict=True):
+            # The span still indexes the stored line, which is longer once masked.
+            assert mask_card_numbers(stored[start:end]) == line
+        card_start, card_end = source.blocks[lines.index("Paid VISA ****1111")]
+        assert stored[card_start:card_end] == "Paid VISA 4111 1111 1111 1111"
 
 
 # --- scripted model ---------------------------------------------------------

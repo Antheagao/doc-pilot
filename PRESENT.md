@@ -2,6 +2,34 @@
 
 > Live task board for the current batch. The `/batch-loop` command reads this file, works the topmost unchecked task, checks it off, and loops. Completed batches move to [PREVIOUS.md](PREVIOUS.md); upcoming batches live in [FUTURE.md](FUTURE.md).
 
+## Batch M - MCP server over the agent tools (added 2026-10-25)
+
+Planned by the planner against master `63981b7`, from item 3 of the portfolio queue (`project-dossier/PROJECT-QUEUE.md`); worked while Batch B's last two tasks wait (B11b needs approval, B12 needs the v3 routing fix first).
+Goal: the three `/ask` tools (`query_extractions`, `search_documents`, `get_page`) served to any MCP client over stdio and streamable HTTP, with the same execution path, caps, and untrusted-data handling as `/ask`.
+The MCP server never calls the model: the MCP client is the model, so doc-pilot spends nothing.
+
+Key design decisions (planner defaults; Anthony can override):
+- `mcp` 2.3.0, low-level `Server` (not `MCPServer`, which derives schemas from signatures and would fork `TOOL_DEFINITIONS`); the API was read from the installed package, not from memory: FastMCP is gone in 2.x, and a 2026-07-28 stateless protocol era sits beside the 2025-11-25 handshake era.
+- One execution path: `loop._run_tool`'s body moves into `tools.execute_tool`, which `/ask` and MCP both call, so the two cannot drift.
+- Arguments are validated against the advertised schema in code (the low-level server does not, and MCP clients give no `strict` guarantee); string arguments are capped at 500 characters.
+- Results are one framed text block (a fixed untrusted-data notice, then document text between `BEGIN DOCUMENT DATA <nonce>` / `END DOCUMENT DATA <nonce>` with a fresh nonce per call) plus `structuredContent` under an `outputSchema` carrying the `doc-pilot://` source URIs; capped by `MCP_MAX_RESULT_CHARS` (24,000).
+- Card numbers in page text are masked when the tools read it (`_line_blocks`), so `/ask` gains it too.
+- HTTP is a plain `Route("/mcp")` on the API (a `mount` answers 307 to everything), stateless JSON mode, Host limited to loopback, any `Origin` refused, then the API's own rate limiter in an `mcp` bucket (`MCP_RATE_LIMIT_PER_MINUTE`, 120).
+- Deferred to the auth item (portfolio queue item 4): API keys, per-key document scope and rate buckets, non-loopback access, browser origins, a tool-call audit log, MCP resources.
+
+### Tasks
+
+- [x] **M1 One tool-execution path, page-text card masking, shared test fixtures (refactor, zero spend)** - the commit that checks this box - `tools.execute_tool` and `ToolOutcome`; `_run_tool` a thin wrapper; `_line_blocks` masks Luhn-valid card numbers with spans unchanged; `ratelimit.enforce_rate_limit` public; the `spans` fixture in `conftest.py`; the security overlay updated.
+  *Verify:* `ruff check .`; `pytest tests/test_agent.py tests/test_telemetry.py tests/test_ratelimit.py -q`; `pytest -q`; `git diff --stat backend/prompts` empty; `TOOL_DEFINITIONS` unchanged.
+  *Result (2026-10-25):* 1769 tests pass (1730 before); `TOOL_DEFINITIONS` and the prompts unchanged; the move out of `_run_tool` is verbatim except that a tool failure now logs under `app.agent.tools`. Two review rounds rewrote `pii.mask_card_numbers`, which the evidence-quote sweep shares: the old rule tested the whole joined digit run, so a card printed beside its expiry, auth code, or an amount (`4111 1111 1111 1111 1227 123456`, the usual terminal-slip layout) was sent in full, and two dates joined by " - " were masked about one time in ten because the 16 digits passed Luhn by chance. The rule now drops date and `NN.NN` groups from card candidacy, ranks Luhn-valid 13-19 digit windows card-shaped first (4-4-4-4, 4-6-5, unbroken, and the other issuer groupings), then longest, and masks each to `****` plus its last four; thin and narrow no-break spaces count as separators, and grouping is linear. Over 36,865 strings in every committed label, artifact, fixture, and gold text, the old and new rules differ in 0, so no stored value, label digest, bar verdict, or README table moves. Known limit, documented in the security overlay: a 17-23 digit reference number printed in groups can be partly masked (about 1 in 6 for 20 digits in groups of four).
+- [ ] **M2 The MCP server: tool adapter, stdio entry point, tests (zero spend)** - `app/mcp_server/server.py` (`build_server`), `__main__.py` (stdio, stdout kept clean), `prompts/mcp_instructions_v1.md`, `McpSource` / `McpToolOutput`, `MCP_MAX_RESULT_CHARS`, `tests/test_mcp.py` over both protocol eras and a stdio subprocess.
+  *Verify:* `pip install -e ".[dev]"`; `ruff check .`; `pytest tests/test_mcp.py -q`; `pytest -q` with no network and no API key; `claude mcp list` shows the stdio server Connected (a handshake, no model call).
+- [ ] **M3 Streamable HTTP at `/mcp` on the API (zero spend)** - `app/mcp_server/http.py` (`McpHttpEndpoint`, a fresh session manager per lifespan entry), the route and lifespan in `main.py`, `MCP_RATE_LIMIT_PER_MINUTE` in config and compose, HTTP tests for 421, 403, 429 and a twice-entered lifespan.
+  *Verify:* `pytest -q`; both `docker compose ... config -q`; `docker compose up -d --build api`; curl `initialize` 200, a foreign Host 421, a foreign Origin 403; `claude mcp list` shows the HTTP server Connected.
+- [ ] **M4 README section, security model, overlays (zero spend)** - `## MCP server` section with Claude Code and Claude Desktop config snippets, the Security model and Tracing lines, and the architecture, repository-structure, security, api-design, and testing overlays.
+  *Verify:* `pytest -q` (README sync tests); every snippet checked with `claude mcp list`.
+- [ ] **M5 Demo GIF: Claude Code answering through the MCP tools** - a `vhs` tape against the demo stack at `127.0.0.1:8100/mcp`, `screenshots/features/mcp-claude-code.gif`, doc-pilot spend $0.00 before and after. ⚠ Needs Anthony's approval: the takes use his Claude subscription, and recording needs `brew install vhs`.
+
 ## Batch B - Extraction schema v2: richer fields plus evidence (promoted 2026-10-14, expanded 2026-10-15)
 
 Expanded by the planner against master `3d25754`.

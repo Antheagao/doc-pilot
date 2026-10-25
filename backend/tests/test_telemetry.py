@@ -1,10 +1,9 @@
 """Tracing: GenAI span attributes on model calls, and one trace per
 document across the job queue.
 
-A process can install its global TracerProvider only once, so this module
-installs an SDK provider with an in-memory exporter the first time it
-runs (the app itself never installs one unless OTEL_EXPORTER_OTLP_ENDPOINT
-is set) and clears the captured spans before each test.
+Every test here uses the `spans` fixture (tests/conftest.py), which installs
+an in-memory exporter once per process and clears the captured spans before
+each test.
 """
 
 import base64
@@ -16,8 +15,7 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from opentelemetry import trace
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanKind, StatusCode
 from sqlalchemy import delete, select
@@ -37,26 +35,12 @@ from app.retrieval.search import search
 from app.transcription import transcribe_document
 from app.worker import run_once
 
+pytestmark = pytest.mark.usefixtures("spans")
+
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
     "+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
-
-_EXPORTER = InMemorySpanExporter()
-
-
-@pytest.fixture(autouse=True)
-def spans() -> InMemorySpanExporter:
-    provider = trace.get_tracer_provider()
-    if not isinstance(provider, TracerProvider):
-        provider = TracerProvider()
-        trace.set_tracer_provider(provider)
-    if not getattr(provider, "_docpilot_test_exporter", False):
-        provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
-        provider._docpilot_test_exporter = True  # type: ignore[attr-defined]
-    _EXPORTER.clear()
-    return _EXPORTER
-
 
 def _named(exporter: InMemorySpanExporter, name: str) -> list[ReadableSpan]:
     return [span for span in exporter.get_finished_spans() if span.name == name]

@@ -25,7 +25,7 @@ Load the global `api-design` guide for the rules; this file holds what exists he
 - `201` for the upload; `400` for `action: "correct"` without `corrected_value`; `404` for missing rows; `409` for `Field already reviewed` and for chat on a document that is not `extracted`.
 - `413` `File too large` (middleware and `_read_limited`); `415` for an unlisted type or mismatched magic bytes; `422` from FastAPI validation, with `detail` as a list.
 - `422` with `detail` as one sentence from `POST /review/fields/{id}/resolve` when a correction is not valid for the field (`MoneyError` text from `records.normalize_correction`: too many decimal places for the currency, not a plain number, a line item or tax line without exactly its keys, a tax rate outside 0 to 100 or with more than 6 decimal places, a `payment_card_last4` that is not exactly four digits, a `payment_method` that is not text or holds a card-number-like digit run, a bad currency code); the field stays pending.
-- `429` from `budget.enforce_daily_budget` and `ratelimit._enforce`, both with `Retry-After`.
+- `429` from `budget.enforce_daily_budget` and `ratelimit.enforce_rate_limit`, both with `Retry-After`.
 - `502` (`model request rejected`) and `503` (`model unavailable`, with `Retry-After` when known) from `ask.model_error`; `503` when `ANTHROPIC_API_KEY` is unset.
 - Streams are `text/event-stream` frames `event: <type>` (`model_call`, `tool_start`, `tool_call`, `answer`, or `error` with `status` and `detail`); `parseSseFrames` in `frontend/src/lib/api.ts` reads them.
 

@@ -18,7 +18,6 @@ are scoped to the one document (ToolContext.document_ids), and a second
 system block (DOCUMENT_CHAT_PROMPT) tells the model so.
 """
 
-import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -26,16 +25,14 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 import anthropic
-from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.trace import SpanKind
 
 from app.agent.tools import (
     SUMMARY_SOURCE,
     TOOL_DEFINITIONS,
-    TOOL_HANDLERS,
     Source,
     ToolContext,
-    ToolError,
-    assert_tool_result_content,
+    execute_tool,
 )
 from app.config import Settings
 from app.extraction import (
@@ -53,15 +50,11 @@ from app.telemetry import (
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
     GEN_AI_REQUEST_MODEL,
-    GEN_AI_TOOL_CALL_ID,
-    GEN_AI_TOOL_NAME,
     current_traceparent,
     model_call_span,
     record_model_response,
     tracer,
 )
-
-logger = logging.getLogger(__name__)
 
 AGENT_NAME = "doc-pilot-ask"
 AGENT_PROMPT_PATH = PROMPTS_DIR / "agent_v1.md"
@@ -290,48 +283,18 @@ def _summarize_result(content: list[dict[str, Any]]) -> str:
 
 
 async def _run_tool(ctx: ToolContext, block: Any) -> tuple[dict[str, Any], ToolCall]:
-    with tracer().start_as_current_span(
-        f"execute_tool {block.name}",
-        kind=SpanKind.INTERNAL,
-        attributes={
-            GEN_AI_OPERATION_NAME: "execute_tool",
-            GEN_AI_TOOL_NAME: block.name,
-            GEN_AI_TOOL_CALL_ID: block.id,
-            **observation_attributes("tool"),
-        },
-    ) as span:
-        handler = TOOL_HANDLERS.get(block.name)
-        try:
-            if handler is None:
-                raise ToolError(f"unknown tool {block.name!r}")
-            # A savepoint per call: a tool whose SQL fails (a timeout, a bad
-            # cast) rolls back to here instead of leaving the transaction
-            # aborted -- which would fail every later tool call and then the
-            # INSERT that stores the (already paid-for) answer.
-            async with ctx.session.begin_nested():
-                content = await handler(ctx, dict(block.input or {}))
-            # A malformed result would 400 the next (billed) request and end
-            # the run; here it is only this call's failure.
-            assert_tool_result_content(content)
-            is_error = False
-        except ToolError as exc:
-            content = [{"type": "text", "text": f"Error: {exc}"}]
-            is_error = True
-            span.set_status(Status(StatusCode.ERROR, str(exc)))
-        except Exception as exc:  # a tool bug must not end the run
-            logger.exception("tool %s failed", block.name)
-            span.record_exception(exc)
-            span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
-            content = [{"type": "text", "text": "Error: the tool failed unexpectedly."}]
-            is_error = True
-        result: dict[str, Any] = {
-            "type": "tool_result",
-            "tool_use_id": block.id,
-            "content": content,
-        }
-        if is_error:
-            result["is_error"] = True
-        return result, ToolCall(block.name, dict(block.input or {}), is_error, _summarize_result(content))
+    tool_input = dict(block.input or {})
+    outcome = await execute_tool(ctx, block.name, dict(tool_input), block.id)
+    result: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": block.id,
+        "content": outcome.content,
+    }
+    if outcome.is_error:
+        result["is_error"] = True
+    return result, ToolCall(
+        block.name, tool_input, outcome.is_error, _summarize_result(outcome.content)
+    )
 
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]

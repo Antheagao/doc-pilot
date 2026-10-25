@@ -13,18 +13,31 @@ the record). The registry (ToolContext.sources) keeps, per source, which
 char span or field each block is, so a citation's block range resolves
 back to an exact span of the stored page text -- the same span /search
 cites.
+
+Page text is masked as it is read: a line's card numbers (13 to 19 digits
+that pass the Luhn check) are cut to "****" and their last four digits
+before the line is sent or kept in Source.lines. The span still indexes the
+stored line, so a masked line may be shorter than its span; cited_text, which
+is rebuilt from Source.lines, is exactly what the model was shown.
+
+execute_tool is the one place a tool call runs, with its span, savepoint and
+error mapping: the /ask loop calls it, and anything else that serves these
+tools should too, so every caller gets the same behavior.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, Inexact, localcontext
 from typing import Any, Literal
 
+from opentelemetry.trace import SpanKind, Status, StatusCode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.extraction_fields import SCHEMA_V1
+from app.langfuse_link import observation_attributes
 from app.models import Document, DocumentPage
 from app.money import (
     MAX_AMOUNT,
@@ -34,9 +47,18 @@ from app.money import (
     to_decimal,
     to_plain_string,
 )
+from app.pii import mask_card_numbers
 from app.records import DocumentRecord, load_records, schema_for_stored
 from app.retrieval.embeddings import Embedder
 from app.retrieval.search import search
+from app.telemetry import (
+    GEN_AI_OPERATION_NAME,
+    GEN_AI_TOOL_CALL_ID,
+    GEN_AI_TOOL_NAME,
+    tracer,
+)
+
+logger = logging.getLogger(__name__)
 
 SOURCE_SCHEME = "doc-pilot://documents"
 # The match summary of a query_extractions result. The API takes a tool
@@ -115,6 +137,15 @@ class Source:
     # is rebuilt from these, one line per block: the API's runs the blocks
     # of a multi-block citation together with no separator.
     lines: list[str]
+
+
+@dataclass(frozen=True)
+class ToolOutcome:
+    """What one tool call returned: the tool_result content blocks, and
+    whether the call failed (the blocks are then one text block saying why)."""
+
+    content: list[dict[str, Any]]
+    is_error: bool
 
 
 @dataclass
@@ -200,15 +231,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 
 
 def _line_blocks(text: str, offset: int) -> tuple[list[dict[str, Any]], list[tuple[int, int]]]:
-    """One text block per non-blank line of `text`, plus each line's span
-    in the page (offset = where `text` starts within the page)."""
+    """One text block per non-blank line of `text`, with its card numbers
+    masked, plus each line's span in the page (offset = where `text` starts
+    within the page). The span is where the line sits in the stored text, so
+    it can be longer than the masked block."""
     blocks, spans = [], []
     pos = 0
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
         if stripped:
             start = offset + pos + (len(line) - len(line.lstrip()))
-            blocks.append({"type": "text", "text": stripped})
+            blocks.append({"type": "text", "text": mask_card_numbers(stripped)})
             spans.append((start, start + len(stripped)))
         pos += len(line)
     return blocks, spans
@@ -556,3 +589,46 @@ TOOL_HANDLERS = {
     "search_documents": search_documents,
     "get_page": get_page,
 }
+
+
+async def execute_tool(
+    ctx: ToolContext, name: str, tool_input: dict[str, Any], call_id: str
+) -> ToolOutcome:
+    """Run one tool call under an `execute_tool` span. A failure never
+    raises: a ToolError, or a bug in the tool, comes back as an error outcome
+    the caller can show the model."""
+    with tracer().start_as_current_span(
+        f"execute_tool {name}",
+        kind=SpanKind.INTERNAL,
+        attributes={
+            GEN_AI_OPERATION_NAME: "execute_tool",
+            GEN_AI_TOOL_NAME: name,
+            GEN_AI_TOOL_CALL_ID: call_id,
+            **observation_attributes("tool"),
+        },
+    ) as span:
+        handler = TOOL_HANDLERS.get(name)
+        try:
+            if handler is None:
+                raise ToolError(f"unknown tool {name!r}")
+            # A savepoint per call: a tool whose SQL fails (a timeout, a bad
+            # cast) rolls back to here instead of leaving the transaction
+            # aborted -- which would fail every later tool call and then the
+            # INSERT that stores the (already paid-for) answer.
+            async with ctx.session.begin_nested():
+                content = await handler(ctx, tool_input)
+            # A malformed result would 400 the next (billed) request and end
+            # the run; here it is only this call's failure.
+            assert_tool_result_content(content)
+            is_error = False
+        except ToolError as exc:
+            content = [{"type": "text", "text": f"Error: {exc}"}]
+            is_error = True
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+        except Exception as exc:  # a tool bug must not end the run
+            logger.exception("tool %s failed", name)
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+            content = [{"type": "text", "text": "Error: the tool failed unexpectedly."}]
+            is_error = True
+        return ToolOutcome(content, is_error)

@@ -60,7 +60,7 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _enforce(request: Request, bucket: str, limit: int) -> None:
+def enforce_rate_limit(request: Request, bucket: str, limit: int) -> None:
     if limit <= 0:
         return
     retry_after = _limiter.check(f"{bucket}:{_client_key(request)}", limit)
@@ -77,8 +77,8 @@ def _enforce(request: Request, bucket: str, limit: int) -> None:
 # the limiter's check-then-record (overshooting the limit, or popping an
 # emptied deque). On the event loop each check runs to completion alone.
 async def limit_ask(request: Request, settings: Settings = Depends(get_settings)) -> None:
-    _enforce(request, "ask", settings.ask_rate_limit_per_minute)
+    enforce_rate_limit(request, "ask", settings.ask_rate_limit_per_minute)
 
 
 async def limit_upload(request: Request, settings: Settings = Depends(get_settings)) -> None:
-    _enforce(request, "upload", settings.upload_rate_limit_per_minute)
+    enforce_rate_limit(request, "upload", settings.upload_rate_limit_per_minute)
