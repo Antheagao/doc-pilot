@@ -8,15 +8,17 @@ from sqlalchemy import (
     Computed,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -50,6 +52,23 @@ JOB_KIND_JUDGE = "judge"
 REVIEW_REASON_CONFIDENCE = "confidence"
 REVIEW_REASON_RECONCILIATION_PREFIX = "reconciliation:"
 REVIEW_REASON_QUOTE_PREFIX = "quote:"
+
+# The organization every row written before multi-tenancy belongs to. A literal,
+# copied (not imported) into the migration that inserts the row;
+# tests/test_auth_core.py pins the two equal.
+DEFAULT_ORGANIZATION_ID = uuid.UUID("270ad65a-150a-498e-bbb1-584f6d21d86e")
+
+# Membership.role values: an 'owner' also manages the organization's API keys,
+# a 'member' only uses it (ck_memberships_role).
+MEMBERSHIP_ROLE_OWNER = "owner"
+MEMBERSHIP_ROLE_MEMBER = "member"
+MEMBERSHIP_ROLES = (MEMBERSHIP_ROLE_OWNER, MEMBERSHIP_ROLE_MEMBER)
+
+# The global identity tables (app/auth/): no organization owns a row, and a
+# login or a key lookup reads them before any organization is known. Every
+# other table is content, and the demo reset (app/demo_seed.py) deletes only
+# those.
+IDENTITY_TABLES = frozenset({"organizations", "users", "memberships", "auth_sessions", "api_keys"})
 
 
 def reconciliation_reason(check_id: str) -> str:
@@ -410,3 +429,147 @@ class AskRun(Base):
     judge_cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
     judge_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Organization(Base):
+    """A tenant: the unit that owns documents, keys, and spend. Created by
+    scripts/accounts.py; there is no self-signup."""
+
+    __tablename__ = "organizations"
+    __table_args__ = (
+        CheckConstraint("char_length(name) BETWEEN 1 AND 100", name="ck_organizations_name"),
+        CheckConstraint("slug ~ '^[a-z0-9][a-z0-9-]{1,62}$'", name="ck_organizations_slug"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    # The stable handle the CLI and --organization flags take.
+    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class User(Base):
+    """A person who can sign in. `email` is citext, so it is unique and
+    compared without regard to case. A disabled user (`disabled_at` set) is
+    refused at login and keeps their rows."""
+
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("char_length(email) BETWEEN 1 AND 254", name="ck_users_email"),
+        # Exactly one "@" with something on each side, and no whitespace or
+        # control characters (app/auth/accounts.py canonical_email is stricter
+        # and also normalizes, so a stored email is always its canonical form).
+        CheckConstraint(
+            "email::text ~ '^[^@[:space:][:cntrl:]]+@[^@[:space:][:cntrl:]]+$'",
+            name="ck_users_email_shape",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    email: Mapped[str] = mapped_column(CITEXT, nullable=False, unique=True)
+    # The encoded argon2id hash (app/auth/passwords.py), never the password.
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Membership(Base):
+    """A user's role in an organization. Removing it ends the user's
+    sessions in that organization (the composite foreign key on
+    auth_sessions cascades)."""
+
+    __tablename__ = "memberships"
+    __table_args__ = (
+        CheckConstraint("role IN ('owner', 'member')", name="ck_memberships_role"),
+        Index("ix_memberships_user_id", "user_id"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AuthSession(Base):
+    """A browser sign-in, pinned to one of the user's organizations. Only the
+    SHA-256 digest of the cookie's token is stored (app/auth/tokens.py), so a
+    database read never yields a usable cookie. The expiry is absolute: a read
+    never extends it."""
+
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "user_id"],
+            ["memberships.organization_id", "memberships.user_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("octet_length(token_digest) = 32", name="ck_auth_sessions_token_digest"),
+        Index("ix_auth_sessions_organization_id_user_id", "organization_id", "user_id"),
+        Index("ix_auth_sessions_user_id", "user_id"),
+        # The sweep of expired sessions filters on it.
+        Index("ix_auth_sessions_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    token_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ApiKey(Base):
+    """An organization credential for programmatic access (MCP, scripts).
+    `prefix` is stored in the clear to find the row and to show in a list;
+    `token_digest` is the SHA-256 of the whole `dpk_<prefix>_<secret>` token,
+    which is shown once at creation and never stored. A revoked key keeps its
+    row for audit."""
+
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        CheckConstraint("char_length(name) BETWEEN 1 AND 100", name="ck_api_keys_name"),
+        CheckConstraint("prefix ~ '^[a-z2-7]{12}$'", name="ck_api_keys_prefix"),
+        CheckConstraint("octet_length(token_digest) = 32", name="ck_api_keys_token_digest"),
+        Index("ix_api_keys_organization_id", "organization_id"),
+        Index("ix_api_keys_created_by_user_id", "created_by_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    # NULL when an operator made the key through scripts/accounts.py without
+    # naming a user, or after that user was removed (ON DELETE SET NULL).
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    prefix: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    token_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # NULL until the key is first used.
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # NULL while the key is active.
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -186,6 +186,26 @@ class Settings(BaseSettings):
     # so this guards the database and embedder, not spend.
     mcp_rate_limit_per_minute: int = Field(default=120, ge=0)
 
+    # --- Sign-in (app/auth/) ----------------------------------------------
+    # The browser session cookie's name. The demo stack sets its own: cookies
+    # ignore ports, so the dev API (8000) and the demo API (8100) on localhost
+    # would otherwise overwrite each other's cookie.
+    session_cookie_name: str = "docpilot_session"
+    # The cookie's Secure flag. Off by default because the stacks are plain
+    # HTTP on loopback, where a browser would drop a Secure cookie; turn it on
+    # wherever TLS terminates.
+    session_cookie_secure: bool = False
+    # How long a sign-in lasts, absolute from the login (a read never extends
+    # it, so a request never writes a session row). 12 hours is a working day.
+    session_ttl_hours: int = Field(default=12, ge=1)
+    # Sign-in attempts per minute per client address, and per account (keyed
+    # by a digest of the case-folded email), both checked before any password
+    # is hashed (app/ratelimit.py); 0 turns a limit off. The account limit is
+    # lower because the address limit alone lets one client try a password
+    # against many accounts, and many clients try one account.
+    login_rate_limit_per_minute: int = Field(default=10, ge=0)
+    login_account_rate_limit_per_minute: int = Field(default=5, ge=0)
+
     @field_validator("extraction_prompt_version")
     @classmethod
     def _known_extraction_prompt_version(cls, value: str) -> str:

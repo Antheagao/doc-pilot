@@ -27,6 +27,7 @@ dependencies = [
     # server API provisional within 2.x, so minor releases are not taken blindly.
     "mcp>=2.3.0,<2.4",
     "jsonschema>=4.20",  # MCP tool arguments are validated in code (app/mcp_server/server.py)
+    "argon2-cffi>=25.1,<26",  # password hashes (app/auth/passwords.py)
 ]
 
 [project.optional-dependencies]

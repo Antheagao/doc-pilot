@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import demo_seed
+from app.auth import accounts, api_keys, sessions
 from app.budget import day_start, spent_today_usd
 from app.config import BACKEND_DIR, Settings
 from app.demo_seed import (
@@ -41,11 +42,18 @@ from app.evals.checks import label_tool_input
 from app.evals.dataset import load_cases
 from app.extraction_fields import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3
 from app.models import (
+    DEFAULT_ORGANIZATION_ID,
+    IDENTITY_TABLES,
+    ApiKey,
+    AuthSession,
     Document,
     DocumentPage,
     ExtractedField,
     Extraction,
+    Membership,
+    Organization,
     Reconciliation,
+    User,
 )
 from app.retrieval.embeddings import HashingEmbedder
 from app.routers.documents import ALLOWED_MIME_TYPES
@@ -421,6 +429,43 @@ async def test_reset_deletes_rows_and_leaves_the_files_for_after_the_commit(
     remove_stale_uploads(settings, seeded)
     assert not old_upload.exists()
     assert len(list(tmp_path.iterdir())) == 32
+
+
+@pytest.mark.usefixtures("demo_database")
+async def test_reset_and_wipe_delete_content_and_never_an_identity_row(
+    db_session: AsyncSession, settings: Settings, seeded: SeedSummary, tmp_path
+) -> None:
+    user = await accounts.create_user(db_session, email="ada@example.com", password="correct horse battery")
+    membership = await accounts.add_membership(
+        db_session, organization_id=DEFAULT_ORGANIZATION_ID, user_id=user.id, role="owner"
+    )
+    token = await sessions.create_session(
+        db_session, user_id=user.id, organization_id=membership.organization_id, ttl=timedelta(hours=1)
+    )
+    _, api_key_token = await api_keys.create_api_key(
+        db_session, organization_id=DEFAULT_ORGANIZATION_ID, name="demo"
+    )
+
+    async def identity_rows() -> list[int]:
+        counts = []
+        for model in (Organization, User, Membership, AuthSession, ApiKey):
+            assert model.__tablename__ in IDENTITY_TABLES
+            counts.append((await db_session.execute(select(func.count()).select_from(model))).scalar_one())
+        return counts
+
+    before = await identity_rows()
+    assert all(count >= 1 for count in before)
+
+    await reset_demo_data(db_session, settings)
+    assert await _count_seeded(db_session, seeded) == 0
+    assert await identity_rows() == before
+
+    await seed_demo_data(db_session, settings, HashingEmbedder(), now=NOW)
+    await _wipe(db_session, tmp_path)
+    assert await identity_rows() == before
+    assert await db_session.get(Organization, DEFAULT_ORGANIZATION_ID) is not None
+    assert await sessions.lookup_session(db_session, token) is not None
+    assert await api_keys.find_active_api_key(db_session, api_key_token) is not None
 
 
 @pytest.mark.usefixtures("demo_database")

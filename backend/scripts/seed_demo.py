@@ -7,7 +7,7 @@ document no run scored replays its label); no model call is made. Normally run i
 
 It only ever touches the demo database (docpilot_demo). An empty database
 is seeded as is; a non-empty one is refused unless --reset, which replaces
-every app row and upload.
+every content row and upload (accounts, sessions, and API keys are kept).
 """
 
 import argparse
@@ -75,6 +75,6 @@ async def main(reset: bool) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "--reset", action="store_true", help="replace every app row and upload first"
+        "--reset", action="store_true", help="replace every content row and upload first"
     )
     sys.exit(asyncio.run(main(parser.parse_args().reset)))

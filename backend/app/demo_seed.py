@@ -50,6 +50,7 @@ from app.evals.retrieval import load_gold_corpus
 from app.extraction import build_extracted_fields
 from app.extraction_fields import SCHEMA_V2, SCHEMAS, ExtractionSchema, schema_for
 from app.models import (
+    IDENTITY_TABLES,
     REVIEW_REASON_CONFIDENCE,
     Document,
     DocumentPage,
@@ -433,12 +434,15 @@ def _unreferenced_uploads(upload_dir: Path, keep: set[Path]) -> list[Path]:
 async def _delete_rows(session: AsyncSession) -> None:
     # Row deletes, children first: unlike TRUNCATE they take only row locks,
     # so they cannot deadlock with a parallel session on the same database.
+    # Content tables only: the accounts, sessions, and keys (IDENTITY_TABLES)
+    # are not demo data, and wiping them would sign everyone out.
     for table in reversed(Base.metadata.sorted_tables):
-        await session.execute(table.delete())
+        if table.name not in IDENTITY_TABLES:
+            await session.execute(table.delete())
 
 
 async def _wipe(session: AsyncSession, upload_dir: Path) -> None:
-    """Delete every app row and every upload file, with no identity checks
+    """Delete every content row and every upload file, with no identity checks
     (reset_demo_data and remove_stale_uploads are the guarded entry points)."""
     stale = _unreferenced_uploads(upload_dir, set())
     await _delete_rows(session)
@@ -447,7 +451,8 @@ async def _wipe(session: AsyncSession, upload_dir: Path) -> None:
 
 
 async def reset_demo_data(session: AsyncSession, settings: Settings) -> None:
-    """Delete every app row, in the caller's transaction. Refuses unless the
+    """Delete every content row (never an account, session, or API key), in the
+    caller's transaction. Refuses unless the
     session is bound to the demo database and DOCPILOT_DEMO=1 (only the demo
     seed service sets it), and unless the upload directory holds nothing but
     uploads.
