@@ -6,7 +6,7 @@ AI document intelligence: upload messy real-world receipts and invoices → a vi
 
 ![15-second demo: a receipt is uploaded, extraction runs live, and the extracted fields appear with per-field confidence scores](screenshots/demo.gif)
 
-890 mocked backend tests and 71 demo-tooling tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
+2,488 mocked backend tests and 84 demo-tooling tests across five CI jobs (backend, frontend, compose config validation, a retrieval-quality gate, and Terraform `fmt` / `validate` / `test` against mocked providers) run on every push -- see the badge above. A separate opt-in live smoke suite hits the real Anthropic API to catch drift a mock can't: `RUN_LIVE_SMOKE=1 pytest -m live` (from `backend/`), about $0.02 for a full run and hard-capped at $0.10 regardless.
 
 ## Features
 
@@ -58,6 +58,11 @@ python scripts/demos/demo.py record all     # ask-agent and document-chat call t
 python scripts/demos/demo.py check          # every GIF at most 15 s, under 1 MB, 960 px wide
 python scripts/demos/demo.py stack down
 ```
+
+The seed also creates the demo stack's one sign-in, `demo@doc-pilot.local` with the password `docpilot-demo!`, an owner of the `default` organization, and prints it; sign in at http://localhost:3100.
+The password is public by design: it is committed here, and the seed refuses to run against any database but `docpilot_demo`, so no other database can hold that account.
+The demo API uses its own cookie name, so signing in there does not sign the dev stack out.
+The recorder signs in before a take starts, so no frame shows it.
 
 The live scenarios refuse to start unless the demo API has a key and its daily budget is on and at most $1.50, and they print the spend after every take.
 A clean take of both live GIFs costs about two cents.
@@ -120,14 +125,23 @@ docker compose up --build
 
 After pulling changes, rebuild with `docker compose up -d --build`: a stale worker image never writes the heartbeat file its healthcheck reads, so `docker compose up --wait` would report it unhealthy.
 
-Migrations run automatically -- a one-shot `migrate` service runs `alembic upgrade head` and `api`/`worker` wait on it before starting. Once the stack is up:
+Migrations run automatically -- a one-shot `migrate` service runs `alembic upgrade head` as the database owner, then creates the login role the application connects as, `docpilot_runtime` (`scripts/provision_db_role.py`), and `api`/`worker` wait on it before starting. Once the stack is up:
 
 - Frontend: http://localhost:3000
 - API: http://localhost:8000
-- Postgres: `localhost:5434` (bound to loopback, `docpilot`/`docpilot`)
-- Search: `curl "http://localhost:8000/search?q=a+light+for+my+desk"` once a document has been indexed. The first index job (and the first search) downloads the embedding model -- pinned files at a fixed commit of `BAAI/bge-small-en-v1.5` on Hugging Face (about 135 MB), each checked against its SHA-256 -- into the `models` volume; after that it's cached.
+- Postgres: `localhost:5434` (bound to loopback; the owner is `docpilot`/`docpilot`, and the services connect as `docpilot_runtime`/`docpilot_runtime`)
+- Search: `curl -H "Authorization: Bearer $DOCPILOT_API_KEY" "http://localhost:8000/search?q=a+light+for+my+desk"` once a document has been indexed, with an API key from the [MCP section](#mcp-server-the-same-tools-for-any-mcp-client). The first index job (and the first search) downloads the embedding model -- pinned files at a fixed commit of `BAAI/bge-small-en-v1.5` on Hugging Face (about 135 MB), each checked against its SHA-256 -- into the `models` volume; after that it's cached.
 
-Open http://localhost:3000, upload a file from [`samples/`](samples/) (or generate fresh ones with `python backend/scripts/make_samples.py`), and watch it go `uploaded` -> `extracted` with per-field confidence.
+Every route but `/healthz` needs a sign-in, and there is no signup page, so create your user first.
+The first command prompts for a password of 12 to 128 characters; the `default` organization already exists.
+
+```sh
+docker compose exec api python scripts/accounts.py create-user --email you@example.com
+docker compose exec api python scripts/accounts.py add-member --organization default --email you@example.com --role owner
+```
+
+Then sign in at http://localhost:3000, upload a file from [`samples/`](samples/) (or generate fresh ones with `python backend/scripts/make_samples.py`), and watch it go `uploaded` -> `extracted` with per-field confidence.
+The demo stack has its own sign-in; see [Recording the demos](#recording-the-demos).
 
 > **Gotcha:** the frontend's `NEXT_PUBLIC_API_URL` is inlined into the JS bundle at *build* time (`frontend/Dockerfile`), not read at container start. Pointing the UI at a different API means rebuilding the image, not just restarting it: `docker compose build --build-arg NEXT_PUBLIC_API_URL=https://your-api frontend`.
 
@@ -151,7 +165,23 @@ pip install -e .[dev]
 copy .env.example .env
 # edit .env and set ANTHROPIC_API_KEY=sk-ant-...
 alembic upgrade head
+python scripts/provision_db_role.py
+python scripts/accounts.py create-user --email you@example.com
+python scripts/accounts.py add-member --organization default --email you@example.com --role owner
 ```
+
+The API, the worker, and the stdio MCP server connect as a database role that row-level security binds, and refuse to start as the owner ([Security model](#security-model)).
+So `backend/.env` needs two URLs, which `.env.example` already has:
+
+```
+DATABASE_URL=postgresql+asyncpg://docpilot_runtime:docpilot_runtime@localhost:5434/docpilot
+MIGRATION_DATABASE_URL=postgresql+asyncpg://docpilot:docpilot@localhost:5434/docpilot
+```
+
+`DATABASE_URL` is the runtime role the application uses.
+`MIGRATION_DATABASE_URL` is the owner, used only by `alembic` and `provision_db_role.py`.
+A `backend/.env` from before the multi-tenant change names the owner in `DATABASE_URL`: change it to the line above and add the second one.
+`docker compose up` runs `provision_db_role.py` for you in its `migrate` service.
 
 **Terminal 1 -- API** (from `backend/`, venv active):
 
@@ -173,7 +203,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000, upload a file from [`samples/`](samples/) (or generate fresh ones with `python backend/scripts/make_samples.py`), and watch it go `uploaded` -> `extracted` with per-field confidence.
+Sign in at http://localhost:3000, upload a file from [`samples/`](samples/) (or generate fresh ones with `python backend/scripts/make_samples.py`), and watch it go `uploaded` -> `extracted` with per-field confidence.
 
 ### Deploying to Google Cloud
 
@@ -210,6 +240,11 @@ flowchart LR
 ```
 
 This is the data-flow shape (what happens to a document and a question), not the deployment topology -- for that, `docker compose up --build` runs five services: `db`, a one-shot `migrate`, `api`, `worker`, and `frontend`, plus an opt-in `jaeger` for traces (see the Quickstart above and `docker-compose.yml`). Every job -- extract, index, judge -- goes through the same Postgres `SKIP LOCKED` queue and the same worker, and carries the traceparent of whatever enqueued it.
+
+Every row in that diagram belongs to an organization, and two backend modules carry that.
+`app/auth/` holds sign-in: password hashing, sessions, API keys, and `current_principal`, the dependency every router but `/auth` hangs off.
+`app/tenancy.py` binds each database session to one organization and filters every query to it, with row-level security under a non-owner role as the second layer.
+The [Security model](#security-model) describes both.
 
 ## Why these tech choices
 
@@ -328,7 +363,7 @@ Every extracted document's page has a chat beside its fields: ask about *this* r
 
 It is the same agent, not a second one. `POST /documents/{id}/chat` (and `/chat/stream`, the same events as `/ask/stream`) runs the [Ask](#ask-an-agent-over-search-and-the-extracted-data) loop with its tools scoped to the one document (`ToolContext.document_ids` -- a `get_page` on another document is an error result, not a leak) and a second system block (`prompts/document_chat_v1.md`) saying so; runs are stored under prompt version `agent_v1+document_chat_v1`. A follow-up carries the conversation: the server rebuilds the last 10 turns from storage on every request, so the client only holds a `conversation_id` and can't put words in the assistant's mouth, and a conversation id from another document is a 404. Earlier answers go in as plain text with their `[n]` markers stripped -- their sources aren't in the request -- and the prompt says they're context, not evidence, so a fact is looked up and cited again rather than repeated from memory.
 
-Each turn is an `ask_runs` row with `document_id` and `conversation_id` set, so a chat gets everything `/ask` has with no second code path: the daily spend cap, the per-client rate limit (the same bucket), *was this right?* feedback, sampled groundedness grading -- where the grader also sees the earlier turns, since "and the tax?" means nothing alone -- `/stats`, and traces, where the `invoke_agent` span carries `gen_ai.conversation.id`. `GET /documents/{id}/chat/conversations` lists a document's conversations and `.../conversations/{conversation_id}` reads one back; reopening the page picks up the latest.
+Each turn is an `ask_runs` row with `document_id` and `conversation_id` set, so a chat gets everything `/ask` has with no second code path: the daily spend cap, the per-caller rate limit (the same bucket), *was this right?* feedback, sampled groundedness grading -- where the grader also sees the earlier turns, since "and the tax?" means nothing alone -- `/stats`, and traces, where the `invoke_agent` span carries `gen_ai.conversation.id`. `GET /documents/{id}/chat/conversations` lists a document's conversations and `.../conversations/{conversation_id}` reads one back; reopening the page picks up the latest.
 
 ### Agent eval
 
@@ -375,35 +410,50 @@ The grader is held to the same standard as the eval judge: `python evals/run_jud
 doc-pilot also serves the three tools of the [Ask](#ask-an-agent-over-search-and-the-extracted-data) agent (`query_extractions`, `search_documents`, `get_page`, in the table there) over the [Model Context Protocol](https://modelcontextprotocol.io).
 An MCP client such as Claude Code or Claude Desktop can then search and query your documents from its own conversation.
 They are the same tools run by the same code (`execute_tool` in `app/agent/tools.py`), so an MCP call and an `/ask` call get the same savepoint, the same error mapping, and the same results.
+It acts as an API key, and a key belongs to one organization, so the client sees that organization's documents and no other's ([Security model](#security-model)).
 The client is the model: doc-pilot makes no model call for MCP, needs no `ANTHROPIC_API_KEY` for it, and adds nothing to the daily spend.
 A test proves it by failing if serving a call builds a model client, and another by importing the server in a fresh process and checking that `app.agent.loop`, `app.extraction`, and `anthropic` stay unloaded.
 
-Connect Claude Code to the running API over HTTP (use port 8100 for the demo stack):
+Both transports need an API key.
+Create one on the API keys page (`http://localhost:3000/settings/api-keys`, owners only; the secret is shown once), or with the accounts CLI, which prints the key alone on stdout:
 
 ```sh
-claude mcp add --transport http doc-pilot http://127.0.0.1:8000/mcp
+export DOCPILOT_API_KEY="$(docker compose exec -T api python scripts/accounts.py create-api-key --organization default --name "claude code")"
+```
+
+Connect Claude Code to the running API over HTTP (use port 8100 for the demo stack, with a key made in that stack):
+
+```sh
+claude mcp add --transport http doc-pilot http://127.0.0.1:8000/mcp --header "Authorization: Bearer $DOCPILOT_API_KEY"
 ```
 
 Or let it start the server itself over stdio, from the repository's backend virtual environment:
 
 ```sh
-claude mcp add doc-pilot -- sh -c 'cd /path/to/doc-pilot/backend && exec .venv/bin/python -m app.mcp_server'
+claude mcp add doc-pilot -e DOCPILOT_API_KEY="$DOCPILOT_API_KEY" -- sh -c 'cd /path/to/doc-pilot/backend && exec .venv/bin/python -m app.mcp_server'
 ```
 
+Put `-e` after the server name: it takes any number of values, so before the name it swallows the name.
 The stdio server reads `DATABASE_URL` from `backend/.env` (the dev database on host port 5434), so it needs the compose `db` service up and does not need the API.
+That URL must name the `docpilot_runtime` role (see the [Quickstart](#local-development-without-docker)), or the server refuses to start.
 The demo stack's database has no host port, so the demo uses HTTP.
-Claude Desktop takes the same command and arguments in `claude_desktop_config.json`:
+Claude Desktop takes the same command and arguments in `claude_desktop_config.json`, with the key in an `env` block:
 
 ```json
 {
   "mcpServers": {
     "doc-pilot": {
       "command": "sh",
-      "args": ["-c", "cd /path/to/doc-pilot/backend && exec .venv/bin/python -m app.mcp_server"]
+      "args": ["-c", "cd /path/to/doc-pilot/backend && exec .venv/bin/python -m app.mcp_server"],
+      "env": { "DOCPILOT_API_KEY": "dpk_..." }
     }
   }
 }
 ```
+
+Without a key, `/mcp` answers `401` with a `WWW-Authenticate: Bearer realm="doc-pilot"` challenge.
+Claude Code then tries the MCP OAuth flow and reports a failed OAuth client registration (404), because doc-pilot does not implement that flow.
+Pass the `Authorization` header as above instead.
 
 **What a result looks like.**
 A result is one text block plus `structuredContent`.
@@ -433,6 +483,12 @@ The model should cite the URIs; the server instructions (`prompts/mcp_instructio
 **What is enforced.**
 A document is a stranger's text handed to a model, and the route is reachable from a browser tab, so each layer is checked in code and tested (`tests/test_mcp.py`):
 
+- **A key is required, and it names the organization.**
+  Every request needs a valid key, so a key revoked mid-session fails at its next call.
+  A request with none is a `401` before the rate limiter, so it spends nobody's allowance.
+  The checks run in this order: Host and Origin, the method, the key, the per-key rate limit, then the body-size limit.
+  The tools run in a database session bound to the key's organization, and a key of one organization sees nothing of another through any of the three tools.
+  Over stdio the key (`DOCPILOT_API_KEY`) is verified at startup, with exit status 2 and a reason on stderr if it is missing or revoked, and again before every tool call, where a revoked key gives an `isError` result.
 - **Arguments are validated** against each tool's input schema before it runs, because the SDK's low-level server does not do it, and a string argument over 500 characters is refused.
   A bad call is an `isError` result naming the field, which the client's model can read and retry; only an unknown tool name is a protocol error.
 - **Document text cannot close its fence.** The code on the `BEGIN` line comes from `secrets.token_hex(8)` per call and is replaced if it ever appears in the data, so a page that prints `END DOCUMENT DATA` and fake instructions stays inside the real fence.
@@ -441,12 +497,21 @@ A document is a stranger's text handed to a model, and the route is reachable fr
 - **Card numbers are masked in page text** as the tools read it, with the same Luhn-checked rule as the evidence quotes, so a page that holds `VISA 4111 1111 1111 1111` reaches the client as `VISA ****1111`; the Security model below says what that does not cover.
 - **Only a local client is served.** A Host header other than `127.0.0.1`, `localhost`, or `[::1]` is refused with `421`, any `Origin` header with `403` (the frontend is not an MCP client, so it is refused too), anything but `POST` with `405` (the route is stateless and has no stream to open), and a body over 64 KiB with `413`.
   The Host and Origin checks run before the rate limiter, so a refused request spends none of a client's allowance.
-- **Requests are rate limited.** Every JSON-RPC message is a `POST` and counts toward `MCP_RATE_LIMIT_PER_MINUTE` (120 by default, per client address, `0` turns it off), answered like the rest of the API with `429`, `Retry-After`, and a `{"detail": ...}` body.
-  It has its own bucket in `app/ratelimit.py`; like the other limits it is in memory and per process, and behind Docker's port mapping every host connection can arrive from the bridge gateway's address, so there it is effectively global (the comment in `docker-compose.yml`).
+- **Requests are rate limited.**
+  Every JSON-RPC message is a `POST` and counts toward `MCP_RATE_LIMIT_PER_MINUTE` (120 by default, per API key, `0` turns it off), answered like the rest of the API with `429`, `Retry-After`, and a `{"detail": ...}` body.
+  It has its own bucket in `app/ratelimit.py`; like the other limits it is in memory and per process.
 
-**What waits for auth.**
-`/mcp` has the threat model of `/search`: local, single user, no credentials.
-API keys or bearer tokens, a document scope and a rate-limit bucket per key, access from other machines (non-loopback hosts and TLS), browser origins, an audit log of tool calls, and MCP resources (pages as readable resources) are deferred until the app has auth; none of them exist yet.
+**What is still deferred.**
+API keys and the per-key rate bucket are built.
+`/mcp` is authenticated but still local only: a key is a bearer secret sent over plain HTTP on loopback.
+These are deferred, and none of them exist yet:
+
+- a document scope per key (`ToolContext.document_ids` in `app/agent/tools.py` is the seam)
+- access from other machines (non-loopback hosts and TLS)
+- browser origins
+- an audit log of tool calls (the database records only each key's `last_used_at`)
+- MCP resources (pages as readable resources)
+- the MCP OAuth flow, so a client has to pass a static header
 
 ## Monitoring dashboard
 
@@ -522,19 +587,192 @@ Four independent recovery paths cover the ways a VLM call can go wrong, all in `
 
 ## Security model
 
-doc-pilot is currently a **single-user local tool** and its security posture is scoped to that: there is no authentication, because everything binds to localhost and the only user is the person running it. What *is* enforced regardless of deployment:
+doc-pilot is a local tool built as if it would be shared.
+Several organizations can use one installation, and each sees only its own documents, answers, and numbers.
+It is still never hosted: everything binds to loopback over plain HTTP, and `infra/terraform` is a sample that is never applied.
+Every route needs a credential except `/healthz`, `/auth/login`, `/auth/logout`, and the API docs, and `tests/test_route_auth.py` fails if a route is added without one.
+
+### Tenancy
+
+- **Organizations, users, and memberships.**
+  A user belongs to an organization through a membership, whose role is `owner` or `member`.
+  The one action only an owner can take is managing API keys; a member can use everything else.
+  A session is signed in to one organization at a time, and the account menu shows a switcher only for a user with more than one membership.
+- **There is no signup.**
+  No route creates an account.
+  An operator makes them with `backend/scripts/accounts.py` (`create-organization`, `create-user`, `add-member`, `set-password`, `create-api-key`, `prune-sessions`).
+  A password is typed at a prompt or read from stdin, never passed as an argument, so it stays out of shell history and the process list.
+- **Eight tables carry an organization.**
+  `documents`, `jobs`, `extractions`, `extracted_fields`, `reconciliations`, `document_pages`, `document_chunks`, and `ask_runs` each have an `organization_id`.
+  Code never sets it: the database fills it from the transaction's organization and refuses any other value.
+  The five identity tables (`organizations`, `users`, `memberships`, `auth_sessions`, `api_keys`) are global and have no row-level security, because a sign-in has to read them before any organization is known; only the sign-in and key code, the accounts CLI, and the demo seed touch them.
+- **Not per organization.**
+  The eval history in `/monitoring/evals` and `last_eval` in `/stats` come from artifacts committed to the repository, so every signed-in user sees the same ones.
+
+### Two isolation layers
+
+Tenant data is protected twice, by layers that do not depend on each other.
+Each is tested alone: `tests/test_tenancy.py` runs the application filter on a superuser connection, `tests/test_rls.py` sends raw SQL at the policies, and `tests/test_tenant_isolation.py` asks for one organization's ids as another through every route, the agent, MCP, and the worker.
+CI runs the isolation tests as their own "Tenant isolation" step.
+
+- **The application filter (`app/tenancy.py`).**
+  Every database session is bound to one organization before it runs a query.
+  Binding applies the organization to each transaction, and every ORM select, update, and delete is filtered to it, so a query that forgets its own filter still cannot see another organization's rows.
+  It fails closed.
+  A session with no organization raises `TenantScopeError` before any SQL is sent.
+  A statement the filter cannot be applied to is refused instead of run: one built from `Table` objects, a bulk update or delete by primary key, `INSERT ... SELECT`, `from_statement` over a tenant table, and any write that names `organization_id`.
+  The filter works on every connection, including a superuser's, and it cannot see raw `text()` SQL or SQL sent straight to a connection.
+- **Row-level security (migration `73a7d8691932`).**
+  The eight tables have row-level security enabled and forced.
+  One policy admits a row only when its `organization_id` is the transaction's organization, for reads and as a check on every write.
+  With no organization set, a read finds nothing and a write is refused.
+  This layer catches raw `text()` SQL and a route added later that forgets the filter.
+  It binds only a role that is not a superuser, has no `BYPASSRLS`, and owns no table.
+  So the application connects as `docpilot_runtime`, a login role in the group role `docpilot_app`, which holds every grant, and the owner (`docpilot`) runs only migrations and `scripts/provision_db_role.py`.
+- **A startup guard.**
+  The API, the worker, and the stdio MCP server call `verify_tenant_isolation` before they serve.
+  They refuse to start when their role is a superuser, has `BYPASSRLS`, owns the `documents` table, or can `SET ROLE` into any role that does, and when the database is missing a content table or has one without row-level security.
+  No setting skips it, so a `backend/.env` that still names the owner fails loudly instead of turning the second layer off.
+- **Composite foreign keys.**
+  Each child row is tied to its parent's organization, for example `(document_id, organization_id)` on `extractions`, so no bug can attach one organization's row to another's document.
+
+**What the database layer does not do.**
+The organization setting is written by the application.
+So row-level security here contains application bugs, such as a query that forgets its filter, a raw `text()` query, or a new route, and it does not contain an attacker who can run arbitrary SQL as the application's role, because that attacker could set the setting to any organization.
+Every query is bound and parameterized, so there is no injection surface today.
+Making the setting unforgeable, for example with a definer function that derives it from a verified session token, is a hardening option and is not built.
+
+**The worker's queue scope.**
+The worker claims the oldest pending job of any organization, which is the one read across organizations.
+It happens in a queue session.
+A second setting, `docpilot.queue_scope`, and two extra policies on `jobs` and on no other table let that session select and update jobs, and the application filter lets it touch only the job model.
+It can neither insert nor delete.
+The scope ends the moment the claim binds the job's organization, before the job's document is read, and every handler runs in a session bound to that organization.
+The role may update `jobs` only in the six columns the worker changes (`state`, `attempts`, `last_error`, `started_at`, `finished_at`, `run_after`).
+A policy cannot compare a row's old and new values, so a wider grant would let a claim re-file a job under another organization.
+
+### Sign-in, sessions, and CSRF
+
+- **Sessions live on the server.**
+  Signing in creates a row in `auth_sessions` and sets a cookie that holds a random 256-bit token.
+  Only the token's SHA-256 digest is stored, so a read of the database does not yield a usable cookie.
+  Signing out deletes the row, so it takes effect at once; so does a password change (`set-password` ends the user's sessions) and the removal of a membership (a foreign key ends its sessions).
+  A session lasts `SESSION_TTL_HOURS` from sign-in (12 by default) with no renewal, so a read never writes.
+  Switching organization replaces the session with a new token that keeps the old expiry, and the old cookie stops working.
+- **The cookie** is `HttpOnly`, `SameSite=Lax`, and `Path=/`.
+  It is `Secure` when `SESSION_COOKIE_SECURE` is set, which is off by default because the stacks are plain HTTP on loopback.
+  The demo stack has its own cookie name, because cookies ignore ports and the two APIs would otherwise overwrite each other's cookie on `localhost`.
+- **CSRF.**
+  A request that changes state and is authenticated by the cookie must carry an `Origin` listed in `CORS_ORIGINS`, or it gets 403 before any database work.
+  `SameSite=Lax` is not enough here, because every other local app on `localhost:<port>` is same-site with the API.
+  Sign-in and sign-out check the same rule.
+  A request with an API key is exempt, because CSRF is a cookie problem and a page cannot make a browser attach that header.
+  CORS allows credentials for the listed origins only, a `*` is refused when settings load, and the methods and headers are narrowed to what the frontend sends.
+- **Nothing is cached.**
+  Every response except `/healthz` and the API docs is marked uncacheable (`Cache-Control: private, no-store`, or `no-store` on the sign-in and key responses), so a shared cache cannot store one person's data.
+- **Passwords.**
+  They are hashed with argon2id at RFC 9106's low-memory parameters (3 passes, 64 MiB, 4 lanes), pinned in code so a library default cannot change them, and rehashed at the next sign-in if the stored parameters differ.
+  A password is 12 to 128 characters, checked by the request schema before any hashing, and Unicode-normalized (NFKC) before it is hashed or compared.
+  At most two hashes run at once, in the threadpool, because each takes 64 MiB.
+  An unknown or disabled email is verified against a dummy hash, and every failure is the one message "email or password is incorrect", so neither the answer nor its timing says which accounts exist.
+  A 422 on sign-in never echoes what was typed.
+- **Sign-in limits.**
+  Both run before any hashing and answer 429 with `Retry-After`: 10 attempts a minute per client address (`LOGIN_RATE_LIMIT_PER_MINUTE`) and 5 a minute per account (`LOGIN_ACCOUNT_RATE_LIMIT_PER_MINUTE`).
+  The account bucket is keyed by a digest of the email as the database folds its case, for every email whether or not an account has it.
+  So every spelling of one address shares a bucket, and a 429 cannot reveal which accounts exist.
+
+### API keys
+
+- **Format and storage.**
+  A key is `dpk_<12-character prefix>_<43-character secret>`, where the secret is 256 random bits.
+  The prefix is stored in the clear to find and list the key, and the SHA-256 digest of the whole key is stored and compared in constant time.
+  SHA-256 and not a slow hash, because a 256-bit random secret cannot be guessed.
+  A value that is not exactly that shape is refused without a database query.
+- **Lifecycle.**
+  The secret is shown once, in the response that creates the key or the output of `create-api-key`, and it appears in no list, log, or span.
+  A key can be revoked, and its row stays for audit.
+  Its `last_used_at` is written at most once a minute.
+  An organization can hold at most 25 active keys through the API (a 409 past that); the CLI is not held to the cap.
+- **Who manages them.**
+  Only an owner, and only from a signed-in session: a key cannot list, create, or revoke keys or touch sessions (403), and a member can list keys but not create or revoke them.
+- **An organization credential.**
+  A key belongs to its organization and not to the person who created it.
+  It outlives a session, it ignores the cookie and Origin protections, and it keeps working after its creator loses their membership.
+  Revoke it to end it.
+  That is why creating one is an owner action.
+  Apart from key and session management, a key may call every route of its organization.
+
+### MCP
+
+- **A key is required over both transports.**
+  `/mcp` needs `Authorization: Bearer dpk_...`, and the stdio server needs `DOCPILOT_API_KEY`.
+  Every HTTP request is checked, so a key revoked mid-session fails at its next call.
+  The stdio server verifies its key at startup (exit status 2 and a reason on stderr) and again before every tool call.
+- **The check order** is: the route is up (503), Host (421) and Origin (403), the method (405), the key (401 with `WWW-Authenticate`), the per-key rate limit (429), and the SDK's body-size limit (413).
+  A request with no valid key is refused before it spends anyone's allowance.
+- **A key sees one organization.**
+  The tools run in a session bound to the key's organization, through both layers above, and a key of one organization sees nothing of another through any of the three tools in either protocol era.
+- **Read-only, no model.**
+  The tools call no model and add no spend, but they hand document text, which is a stranger's text, to whatever model the client runs.
+  Results carry an untrusted-data notice and a per-call fence, and card numbers in page text are masked as the tools read it (not yet when a page is stored, so `/search` snippets still show them).
+  The [MCP section](#mcp-server-the-same-tools-for-any-mcp-client) lists what is enforced and what is deferred.
+
+### Spend
+
+- **Two daily caps.**
+  Uploads and `/ask` questions (chat and the streams included) are refused with `429` and a `Retry-After` once the model spend recorded since midnight UTC reaches a cap.
+  The check runs before anything is stored or called.
+  `DAILY_BUDGET_USD` ($5 by default, `0` turns it off) is the installation's cap, because it guards the one Anthropic key, so it counts every organization's spend.
+  It reads the total through `docpilot_spend_since`, a `SECURITY DEFINER` function that returns a number and no rows, so the application learns the sum and never another organization's rows.
+  Its refusal prints no figure, because the figure would be other organizations' spend.
+  `ORGANIZATION_DAILY_BUDGET_USD` (off by default) caps one organization's own spend, is checked first, and answers with that organization's figures, so one organization cannot use up the installation's budget alone.
+  Both are soft caps: work already admitted finishes, so a day can end over budget by at most what was in flight, and each question is itself capped at `AGENT_MAX_COST_USD` (`app/budget.py`).
+  `GET /stats` shows the organization's spend today, the installation's cap, the organization's cap, and whether the installation's cap is reached.
+- **Request rates are per caller.**
+  `/ask`, `/ask/stream`, and the per-document chat share a sliding window (`ASK_RATE_LIMIT_PER_MINUTE`, 10 by default), uploads have their own (`UPLOAD_RATE_LIMIT_PER_MINUTE`, off by default because dropping in a stack of receipts at once is normal local use), and `/mcp` has its own (`MCP_RATE_LIMIT_PER_MINUTE`, 120 by default, per key).
+  All answer `429` with `Retry-After` (`app/ratelimit.py`).
+  The caller is the signed-in user or the API key and not a client address, which behind Docker's port mapping can be one address for every request.
+  The limits are in memory and per process, which fits the single API process here; scaling the API out would need a shared store.
+
+### Uploads, served files, and model output
 
 - **Uploads are verified, not trusted.** The client's Content-Type must be on the allowlist, the file's magic bytes must actually match that type (a payload claiming `image/png` without a PNG signature is rejected with 415), the storage filename is a server-generated UUID with an extension derived from the *verified* type (never from the client filename), and oversized bodies are aborted at the ASGI layer before they reach disk.
 - **Re-serving is locked down.** Files are served back with their stored content type plus `X-Content-Type-Options: nosniff`, closing the stored-payload-served-as-image pattern from both ends.
 - **No injection surfaces.** All SQL goes through the ORM with bound parameters; the frontend renders extracted values as React text nodes (VLM output is treated as untrusted data, never HTML); document content reaches the model under forced tool-choice with a fixed schema, and the eval corpus includes an adversarial prompt-injection case to measure that boundary.
 - **Retrieved text is untrusted data, too.** Transcriptions -- including the eval corpus's prompt-injection receipt -- land in the search index verbatim, and `/search` returns them as data. The `/ask` agent feeds them back into a model, so its system prompt treats everything inside tool results as document content, never instructions, and the agent eval includes the injection receipt as a scored question.
 - **`/ask` is the one API route that calls the model.** It is capped per question (steps and dollars), and it is why the api service now gets `ANTHROPIC_API_KEY` in `docker-compose.yml` -- every other route still runs without it.
-- **Spend is capped per day.** Uploads (each queues a billed extraction and transcription) and `/ask` questions are refused with `429` and a `Retry-After` once the model spend recorded since midnight UTC -- extraction, transcription, the agent, its grader -- reaches `DAILY_BUDGET_USD` ($5 by default; `0` turns it off; `app/budget.py`). The check runs before anything is stored or called. It's a soft cap: work already admitted finishes, so a day can end over budget by at most what was in flight (each question is itself capped at `AGENT_MAX_COST_USD`). `GET /stats` shows today's spend against the budget.
-- **Spend rate is capped per client.** So one client can't burn the whole day's budget in a minute and lock everyone else out until midnight, `/ask`, `/ask/stream` and the per-document chat share a per-client sliding window (`ASK_RATE_LIMIT_PER_MINUTE`, 10 by default) and uploads have their own (`UPLOAD_RATE_LIMIT_PER_MINUTE`, off by default -- dropping in a stack of receipts at once is normal local use), answering `429` with `Retry-After` (`app/ratelimit.py`). It's in-memory and per process, which fits the single API process here; scaling the API out would need a shared store, and behind a reverse proxy uvicorn needs `--proxy-headers` for the client address to be the real one.
-- **`/mcp` serves the agent's tools read-only, to local clients.** It calls no model, so it adds no spend, but it hands document text, which is a stranger's text, to whatever model the client runs: results carry an untrusted-data notice and a per-call fence, card numbers in page text are masked as the tools read them (not yet when a page is stored, so `/search` snippets still show them), and the route refuses non-loopback Hosts, any Origin, and anything but `POST`, with its own rate limit (`MCP_RATE_LIMIT_PER_MINUTE`, 120 by default). Like the rest of the API it has no authentication; see [MCP server](#mcp-server-the-same-tools-for-any-mcp-client) for what waits for it.
-- **The dev database binds to loopback only**, so its dev-grade credentials are never LAN-reachable.
 
-**Before the hosted demo ships**, the threat model changes and two things become blocking: some form of auth (even a single bearer token -- the spend cap and rate limits bound what anonymous traffic can cost, not who can use it), and a storage quota with cleanup for uploads. Until then the Terraform deployment (`infra/terraform`) stands in for auth at the platform: it is private by default, with Cloud Run admitting only callers that hold `roles/run.invoker`, and making it public is an explicit `public = true`.
+### What stays local-only
+
+- Every port binds `127.0.0.1`, the dev database on host port 5434 included, so its dev-grade credentials are never reachable from the LAN.
+- The stacks speak plain HTTP.
+  `SESSION_COOKIE_SECURE` exists for the day there is TLS, and it is off because there is not.
+- `/mcp` serves only loopback Host values and refuses any Origin.
+  There is no non-loopback MCP host and no TLS.
+- doc-pilot is never hosted.
+  `infra/terraform` predates the tenancy layer: it names one database user for migrations and services alike and has no step that creates the runtime role, so the API's startup guard would refuse it as written.
+
+### Known gaps
+
+- **Sign-in limits are in memory.**
+  A restart resets them.
+  They also allow a lockout: anyone who knows an owner's email can keep the owner out of sign-in with five wrong tries a minute, and behind Docker's port mapping the per-address limit can be shared by every client.
+- **Lexical search scans the organization's chunks.**
+  Under row-level security the GIN full-text index cannot serve `@@`, because the match function is not leakproof, so lexical search reads the organization's rows through the `organization_id` index and filters them.
+  Dense search still uses the HNSW index, with `hnsw.iterative_scan` so that a small organization among large ones still fills a result.
+  That is fine at local scale; a larger one would need partitioning or a search function that is safe under the policy.
+- **The job queue is first in, first out across organizations.**
+  One organization's burst of uploads delays everyone's extraction.
+- **Same-site sibling ports.**
+  The Origin rule covers writes.
+  A page served from another local port is same-site with the API, so a GET it triggers, such as an image tag naming a known document id, carries the cookie.
+  Document ids are random UUIDs.
+- **No upload quota or cleanup.**
+  Nothing limits how much one organization stores, and nothing deletes a document's file, pages, and chunks (Batch G4).
+- **No account deletion.**
+  No route or command removes a user or an organization.
+- **A running stream outlives its credential.**
+  The stream of an `/ask` or chat answer that began before its key or session was revoked finishes.
 
 ## Evals
 

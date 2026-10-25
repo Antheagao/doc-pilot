@@ -11,6 +11,12 @@ Load the global `error-handling-logging` guide for the rules; this file holds wh
 
 - Handlers raise `fastapi.HTTPException(status_code, detail=...)`, so bodies are `{"detail": "<sentence>"}`, or `{"detail": [...]}` for 422 validation; there is no backend `ApiError` type and no error `code`.
 - `MaxBodySizeMiddleware` builds its 413 as a `JSONResponse` with the same `detail` shape.
+- Auth failures are one body on purpose: `principal.unauthenticated()` is `401` `{"detail": "not authenticated"}` with `WWW-Authenticate: Bearer realm="doc-pilot"` for a missing, unknown, expired, or revoked credential, a disabled user, and a removed membership, so a response never says which; `/mcp` sends the same body.
+  A failed sign-in is the one message `email or password is incorrect` (an unknown email, a disabled user, a wrong password, and an account with no membership alike); the last also logs a warning with the user id for the operator.
+- The `RequestValidationError` handler in `main.py` is scoped to `/auth/login` and drops each error's `input` and `ctx`, because Pydantic puts the failing input in the error and that would echo a password; every other route keeps FastAPI's own 422.
+- `TenantScopeError` (`app/tenancy.py`) is a programming error: a session touched tenant data with no organization bound, or a statement the filter cannot scope.
+  It is raised before any SQL is sent, is not mapped to a status (the request is a 500), and must be fixed by binding the session, not caught.
+  `TenantIsolationError` (`app/db.py`) is the startup refusal of `verify_tenant_isolation`: the process exits instead of serving with row-level security off, and its message names the role and what to set.
 - `model_error` (`routers/ask.py`) maps `NonRetryableExtractionError` to 502 and other `ExtractionError` to 503 with `Retry-After`; a streamed run sends an `error` event instead and logs surprises with `logger.exception("streamed agent run failed")`.
 - Frontend: `handle()` in `src/lib/api.ts` raises `ApiError(status, message)`, and pages show it in `.error-banner`.
 
@@ -28,10 +34,15 @@ Load the global `error-handling-logging` guide for the rules; this file holds wh
 - stdlib `logging` with `logger = logging.getLogger(__name__)` and `%`-style arguments (`logger.info("claimed %s job %s (attempt %d)", ...)`); only `worker.py` calls `logging.basicConfig`, and the API runs on uvicorn's defaults.
 - There are no request ids; correlation is OpenTelemetry (`app/telemetry.py`): a `job <kind>` span with `docpilot.job.*` attributes and outcome, a `model_call_span` per model call, and `jobs.traceparent` plus `ask_runs.trace_id` to join them.
 - Jaeger runs under the compose `tracing` profile; Langfuse score failures are logged and dropped, never raised.
+- No secret reaches a log, span, or error: nothing logs a password, session token, cookie, or API key; log lines carry ids (`login refused: user %s has no membership`, `could not record last_used_at for API key %s`); an API key's `AccessToken.token` is its public prefix; the accounts CLI turns a constraint refusal into one line naming the constraint (`refusal_message`), because the exception text holds the statement's parameters; and `ProvisioningError` never holds a password.
+  `tests/test_api_keys.py` checks `caplog` and spans for a key's secret.
+- `last_used_at` is an audit stamp: a failed write is logged with `exc_info` and the verified key is still accepted.
+- The stdio MCP server prints nothing on stdout (it is the protocol channel): a missing or revoked key at startup is exit status 2 with the reason on stderr, and a key revoked later gives an `isError` result at the next call.
 
 ## Expired ORM objects in the worker
 
 - All three handlers roll back before their model call, which expires the session's `Job`; a read of `job.id` afterwards raises `MissingGreenlet`, which once escaped to `run_worker`, lost the real failure, and left the job in `processing`.
+- The session's organization survives the rollback: the `after_begin` listener re-applies it to the transaction the rollback begins, so a re-fetch with `session.get(Model, id)` sees the same tenant.
 - So `complete_job` and `fail_job` take `job_id` and re-fetch, and `_run_handler` logs the carried `job_id`; after any rollback, never touch ORM attributes of an object loaded before it.
 - `tests/test_worker.py` covers handlers that roll back and then succeed, fail, fail for good, or are cancelled.
 - The worker touches a heartbeat file (`WORKER_HEARTBEAT_FILE`) every 10 s from a task beside the poll loop; compose's worker healthcheck fails when it is over 60 s old.

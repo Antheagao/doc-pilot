@@ -10,7 +10,7 @@ network every request arrives from one address, which made an address limit
 effectively global. /ask, /ask/stream and the per-document chat share one
 bucket; uploads have their own. /mcp (app/mcp_server/http.py) calls no model but
 has a bucket of its own, "mcp", to bound the database and embedder work a client
-can ask for; it still counts by address until API keys name its callers.
+can ask for; it counts per API key.
 
 Sign-in is the one route with no principal, so it is counted twice, both before
 any password is hashed: per client address (`limit_login`, a dependency, so it

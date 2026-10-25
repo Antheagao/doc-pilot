@@ -10,24 +10,30 @@ Load the global `design-principles` guide for the rules; this file holds what ex
 ## System shape
 
 - Local-only resume demo, never hosted; `infra/terraform/` (Cloud Run and Cloud SQL) is kept as a sample, checked in CI, and never applied.
-- The browser calls the API directly at `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`, inlined at build time); `CORS_ORIGINS` admits the frontend; there is no proxy and no auth.
-- API: `backend/app/main.py` mounts `app/routers/` at the root behind `MaxBodySizeMiddleware` (20 MB) and `SecurityHeadersMiddleware`.
-- Worker: `python -m app.worker`, one process, one job at a time; `claim_job` takes the oldest `pending` row with `FOR UPDATE SKIP LOCKED`, and `dispatch_job` routes `jobs.kind` through `HANDLERS`.
+- The browser calls the API directly at `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`, inlined at build time); `CORS_ORIGINS` admits the frontend with credentials, so the browser sends the session cookie; there is no proxy.
+- API: `backend/app/main.py` mounts `app/routers/` at the root behind `MaxBodySizeMiddleware` (20 MB) and `SecurityHeadersMiddleware`; every router but `auth` carries `dependencies=[Depends(current_principal)]`.
+- Auth and tenancy: `app/auth/` is sign-in (`passwords`, `sessions`, `tokens`, `accounts`, `api_keys`, and `principal.current_principal`), `app/tenancy.py` binds a session to one organization, and `db.get_session` hands a route a session bound to its principal's organization.
+  Two layers hold the line: the ORM filter in `tenancy.py` and row-level security under the non-owner role `docpilot_runtime`; the README "Security model" is the narrative.
+  The identity tables are read on sessions of their own (`get_identity_session_factory`), because a sign-in precedes any organization.
+- Worker: `python -m app.worker`, one process, one job at a time; `claim_job` takes the oldest `pending` row of any organization with `FOR UPDATE SKIP LOCKED` in a `queue_session`, then binds the job's organization, and `dispatch_job` routes `jobs.kind` through `HANDLERS` in a session for that organization.
+  The worker, the API, and stdio MCP call `verify_tenant_isolation` at startup.
 - `extract` (`extraction.process_document_job`): forced tool use (`tool_choice` names `record_extraction`), the tool built from the `ExtractionSchema` that `EXTRACTION_PROMPT_VERSION` names (`app/extraction_fields.py`), `{value, confidence}` leaves, one schema-repair reprompt, PDFs over `pdf_max_pages_per_call` split per page and merged; fields under `review_threshold` get `needs_review` with `review_reason` `confidence`, then `review_routing.refresh_reconciliation` (inside a savepoint, so a rules failure is logged and costs only the reconciliation, never the billed extraction) stores the `reconciliations` row and re-routes the flags.
 - `index` (`retrieval/index_job.process_index_job`), enqueued by the extract job in its own transaction: `transcription.py` (one page per call), `retrieval/chunking.py`, an `Embedder`, then pgvector plus full-text hybrid search fused by RRF (`retrieval/search.py`).
 - `judge` (`evals/online.process_judge_job`): grades a sampled `AskRun` for groundedness (`ASK_JUDGE_SAMPLE_RATE`).
 - `/ask` (`routers/ask.py`, `agent/loop.py`, `agent/tools.py`): a manual tool-use loop over `search_documents`, `query_extractions`, and `get_page`, capped by `agent_max_steps` and `agent_max_cost_usd`; every answer is stored as an `AskRun`.
 - MCP (`app/mcp_server/`): `build_server` puts the same three tools behind `agent/tools.execute_tool` for any MCP client, and calls no model.
-  Stdio is `python -m app.mcp_server` (database from `backend/.env`); Streamable HTTP is `McpHttpEndpoint`, stateless with JSON responses, routed at `/mcp` and `/mcp/` on the API and run inside `main.lifespan`, sharing the API's embedder and in-memory limiter (`mcp` bucket).
+  Stdio is `python -m app.mcp_server` (database from `backend/.env`, key from `DOCPILOT_API_KEY`); Streamable HTTP is `McpHttpEndpoint`, stateless with JSON responses, routed at `/mcp` and `/mcp/` on the API and run inside `main.lifespan`, sharing the API's embedder and in-memory limiter (`mcp` bucket, keyed per API key).
+  Both transports authenticate an API key (`mcp_server/auth.py`: `ApiKeyVerifier`, `principal_from_request_context`, `StdioPrincipals`), and a tool call runs in a session bound to the key's organization.
 - Per-document chat (`routers/chat.py`) reuses `run_agent` with a `ChatScope`; its turns are `AskRun` rows with `document_id` and `conversation_id`.
-- Spend guards: `budget.enforce_daily_budget` (`DAILY_BUDGET_USD`) and `ratelimit.limit_ask` / `limit_upload` (in memory, one API process); `/mcp` spends nothing and has only its rate limit (`ratelimit.enforce_rate_limit`).
+- Spend guards: `budget.enforce_daily_budget` (`ORGANIZATION_DAILY_BUDGET_USD`, then the installation's `DAILY_BUDGET_USD`) and `ratelimit.limit_ask` / `limit_upload` keyed by principal (in memory, one API process); `/mcp` spends nothing and has only its rate limit (`ratelimit.enforce_rate_limit`); sign-in has `limit_login` and `limit_login_account`.
 - Evals: logic in `backend/app/evals/`, CLIs in `evals/run*.py`, committed artifacts in `evals/results/`, read by `GET /stats` and `GET /monitoring/*`.
 - `app/evals/checks.py` replays stored answers and labels through `build_extracted_fields`, `reconcile`, and `route` (no database): `caught_by_checks` per run at render time, and the mutation eval behind `evals/run_checks.py`; `harvest.py` refuses a label that fails the checks.
 - Telemetry: OpenTelemetry in `app/telemetry.py`, off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set; `jobs.traceparent` carries a document's trace across the queue; Langfuse (`app/langfuse_link.py`) is off unless its keys are set.
-- Frontend: Next.js 16 in `frontend/`; every page is a client component fetching through `src/lib/api.ts`.
+- Frontend: Next.js 16 in `frontend/`; every page is a client component fetching through `apiFetch` in `src/lib/api.ts`, which sends the session cookie and sends a 401 to `/login`.
 
 ## Where new work goes
 
+- A route that touches data takes its session from `get_session` (or `get_tenant_session_factory` for a stream) and gets its sign-in from its router's `dependencies`; a content table takes `TenantMixin` and the grants and policies in a revision (see the database overlay).
 - A background step is a new `JOB_KIND_*` in `models.py`, a handler in `HANDLERS`, and an enqueue in the same transaction as the change that causes it (the extract-to-index pattern).
 - The extraction schema lives in `app/extraction_fields.py` (no app imports): a prompt version is a `SCHEMAS` entry holding its prompt, repair prompt, `FieldSpec` list, and token budget, and every reader of stored data takes `schema_for(extraction.prompt_version)` instead of a module constant.
 - A model call reuses `_build_client`, `_classify_api_error`, `_ensure_model_priced`, and `PRICING_PER_MTOK` from `extraction.py`, loads a versioned file from `backend/prompts/`, opens a `model_call_span`, and stores its cost on a row that `budget.spent_today_usd` sums.
@@ -41,6 +47,9 @@ Load the global `design-principles` guide for the rules; this file holds what ex
 - Every setting is a field on `Settings` in `backend/app/config.py` (pydantic-settings, reads `backend/.env`), bounded with `Field(ge=...)` where it matters, and read through `get_settings()`, which tests override.
 - Read straight from `os.environ` instead: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` (`telemetry.py`) and `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` (`langfuse_link.py`).
 - A new variable also goes into `docker-compose.yml` for each service that reads it (`api`, `worker`), and into `docker-compose.demo.yml` when the demo must pin it.
+- `DATABASE_URL` is the runtime role (`docpilot_runtime`) and `MIGRATION_DATABASE_URL` the owner, which only `alembic` and `scripts/provision_db_role.py` use; compose sets both on `migrate` and the runtime URL on `api` and `worker`.
+- `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, `SESSION_TTL_HOURS`, `LOGIN_RATE_LIMIT_PER_MINUTE`, and `LOGIN_ACCOUNT_RATE_LIMIT_PER_MINUTE` are not passed by compose; the demo overlay sets `SESSION_COOKIE_NAME` and `CORS_ORIGINS`.
+  `ORGANIZATION_DAILY_BUDGET_USD` is passed to `api`, and `DOCPILOT_API_KEY` is the stdio MCP server's key (a `SecretStr`, set in the client's `env`).
 - `MCP_RATE_LIMIT_PER_MINUTE` (default 120, `0` is off) is passed to the `api` service in `docker-compose.yml`; `MCP_MAX_RESULT_CHARS` (default 24,000, 2,000 to 200,000) is not, so the containers use the default and the stdio server reads `backend/.env`.
 - `EXTRACTION_PROMPT_VERSION` (default `extract_v1`) is checked against `SCHEMAS` when settings load, and the worker service in `docker-compose.yml` passes it through; the demo overlay inherits it.
-- Known gap: `backend/.env.example` lists only `ANTHROPIC_API_KEY`, `DATABASE_URL`, `EXTRACTION_MODEL`, `REVIEW_THRESHOLD`, and `EXTRACTION_PROMPT_VERSION`.
+- Known gap: `backend/.env.example` lists `ANTHROPIC_API_KEY`, both database URLs, and commented overrides for the model, review threshold, prompt version, budgets, and the session and sign-in settings; `CORS_ORIGINS`, the ask, upload, and MCP limits, and `DOCPILOT_API_KEY` exist only in `config.py`.

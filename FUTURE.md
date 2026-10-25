@@ -94,7 +94,7 @@ Goal: the answer to "what did we spend with Acme in Q3" is computed by code from
 
 ## Batch G - Back-office workflow (local, single machine)
 
-No multi-tenant auth, organizations, or hosting: those were dropped with the local-only scope.
+Multi-tenant auth and organizations were built by Batch N (sign-in, API keys, and tenant isolation in the application and in row-level security), and doc-pilot is still local-only: hosting was dropped with the local-only scope.
 What remains is the workflow a company would recognize, all demoable on one machine.
 
 - **G1 Real audit trail:** a `field_events` history table with before, after, reason, and a local display name for the actor, replacing the single correction slot; allow re-review instead of 409.

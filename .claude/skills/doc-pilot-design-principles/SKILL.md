@@ -15,7 +15,10 @@ The Rust and axum subsections of the global guide do not apply; the backend is F
 | Port with two adapters and a factory: `Embedder` (`Protocol`), `FastEmbedEmbedder`, `HashingEmbedder`, `build_embedder(settings)` | `app/retrieval/embeddings.py` |
 | Kind-keyed dispatch `HANDLERS` plus `dispatch_job`; an unknown kind fails permanently | `app/worker.py` |
 | Injected callable `ExtractFn`, with `build_mock_extract_fn` as the offline stand-in | `app/evals/runner.py` |
-| FastAPI dependencies as seams: `get_session`, `get_session_factory`, `get_settings`, `get_embedder`, `get_anthropic_client` | `app/db.py`, `app/config.py`, `app/retrieval/embeddings.py`, `app/routers/ask.py` |
+| FastAPI dependencies as seams: `current_principal`, `get_session`, `get_tenant_session_factory`, `get_identity_session_factory`, `get_settings`, `get_embedder`, `get_anthropic_client` | `app/auth/principal.py`, `app/db.py`, `app/config.py`, `app/retrieval/embeddings.py`, `app/routers/ask.py` |
+| The caller is one frozen value, `Principal` (organization, user or API key, role), resolved once by `current_principal`; limits key on `Principal.rate_key` and a route that only sessions may call uses `session_only(message)` | `app/auth/principal.py` |
+| One home for tenancy: `bind_tenant`, `tenant_session`, and `queue_session` bind a session to an organization, and code never sets `organization_id` (the database fills it) | `app/tenancy.py` |
+| Identity code gets its own sessions from `get_identity_session_factory` (no organization is known at sign-in), which tests replace with their transaction; work that outlives a request, such as a stream, takes a tenant session factory instead of the request's session | `app/auth/`, `app/routers/ask.py`, `app/routers/chat.py` |
 | One Anthropic client per API process, built by `_build_client` | `routers/ask.py`, `extraction.py` |
 | Outbox: the extract job adds its `index` job in the same transaction | `extraction.process_document_job` |
 | No transaction across a model call: copy ids, `rollback()`, call, re-fetch | all three job handlers |
@@ -32,6 +35,7 @@ The Rust and axum subsections of the global guide do not apply; the backend is F
 - Closed sets (`Document.status`, `Job.state`, `Job.kind`) are strings with module constants, not `Literal` or `Enum`.
 - `complete_job` and `fail_job` write unconditionally instead of compare-and-set; that holds only while exactly one worker runs.
 - Rate limits live in process memory, which assumes one API process.
+- `get_identity_session_factory` imports `app.db` inside the function because `app.db` imports `app.auth.principal`; a new module should not add to that cycle.
 
 ## Planned modules (`FUTURE.md`)
 

@@ -209,7 +209,10 @@ async def _term_idf(session: AsyncSession, query: str, scope) -> dict[str, float
     """BM25's IDF for each distinct query lexeme, over the chunks in scope:
     ln((N - df + 0.5) / (df + 0.5) + 1). Lexemes come from Postgres's own
     parser, so they match the stored tsvectors exactly (same stemming, same
-    stopwords); each document frequency is a GIN-indexed count."""
+    stopwords). Each document frequency is a count over the caller's own chunks:
+    under row-level security the GIN index cannot serve `@@` (the match function
+    is not leakproof), so the count reads the tenant's rows through the
+    `organization_id` index and filters them, as lexical search does."""
     lexemes = (
         await session.execute(
             select(func.unnest(func.tsvector_to_array(func.to_tsvector("english", query))))

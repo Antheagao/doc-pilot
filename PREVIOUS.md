@@ -2,6 +2,19 @@
 
 > Append-only log of finished batches/tasks, newest first. `/batch-loop` moves completed tasks here from [PRESENT.md](PRESENT.md) with the date and commit hash. Keep entries short — detail lives in git history.
 
+## Batch N - Auth and multi-tenant isolation (COMPLETE 2026-10-25)
+
+macOS, planned against `57a5fe1` from item 4 of the portfolio queue; model spend about $0.01 (one draft test reached the real model before the suite was made unable to spend).
+- [x] N1 Organizations, users, memberships, sessions, and API keys; argon2id pinned to RFC 9106 low-memory, NFKC-normalized emails and passwords, the accounts CLI - `20a4bbb`
+- [x] N2 `organization_id` on the eight content tables, composite foreign keys, and the fail-closed ORM filter in `app/tenancy.py` for every entry point - `1db867c`
+- [x] N3 FORCE row-level security under the non-owner `docpilot_runtime` role, the startup guard, a column-level UPDATE grant on `jobs`, the installation and organization budgets, SCRAM-provisioned login roles - `1ffb636`
+- [x] N4 Server-side sessions, the Origin rule on cookie writes, sign-in limits keyed by the database's email fold, a route walk that fails CI on an unauthenticated route, and a suite that cannot spend - `d155803`
+- [x] N5 API keys (shown once, revocable, owner-managed) as bearer credentials, and `/mcp` and stdio MCP requiring one - `108a654`
+- [x] N6 The tenant isolation suite (57 tests, every surface by cookie and by key, worker on committed rows, a hypothesis property) as its own CI step; each layer proven alone - `8645c39`
+- [x] N7 Sign-in page, account menu, and API keys page, checked in a browser light and dark at 360 to 1440 px; light status chips raised to WCAG AA - `4d0f015`
+- [x] N8 Demo user (demo database only) and the GIF harness signing in before the screencast; scenarios unchanged - `af92f16`
+- [x] N9 README Security model rewritten for multi-tenant use, MCP and Quickstart sections with key setup (commands run as written: both transports Connected), every overlay, FUTURE.md - this batch's closing commit
+
 ## Batch A - Deterministic money and reconciliation (COMPLETE 2026-10-14)
 
 A1-A4 on Windows, A5-A7 on macOS; zero model spend for the batch.

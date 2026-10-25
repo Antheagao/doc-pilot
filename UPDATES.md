@@ -25,6 +25,14 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-25 (macOS, continued: Batch N, auth and multi-tenant isolation, N1-N9)
+- Planned by the planner from item 4 of the portfolio queue, with spikes on a throwaway database; every task implemented by a coder and reviewed by a deep reviewer before its commit.
+- Landed `20a4bbb`, `1db867c`, `1ffb636`, `d155803`, `108a654`, `8645c39`, `4d0f015`, `af92f16`, and the closing documentation commit; 2488 backend tests and 84 demo-script tests pass.
+- Reviews caught: citext and Python folding emails differently (two accounts for one address, and a limiter key that revealed whether an account exists), unions and Core statements escaping the ORM filter, a queue-scope UPDATE policy that could move a job to another organization, a startup guard blind to `SET ROLE` reach, a row lock on organizations that stalled every upload behind a key creation, and an organization switcher that switched on the first arrow key.
+- The dev stack was backed up, rebuilt, and moved to `docpilot_runtime`; `backend/.env` now names that role in `DATABASE_URL` and the owner in `MIGRATION_DATABASE_URL` (the old file is in `~/doc-pilot-backups/`). The PC's `backend/.env` needs the same change.
+- Spend: about $0.01, three real model calls from a draft test, because pydantic-settings read the key from `backend/.env` even with the environment variable unset. The suite now blanks it unless `RUN_LIVE_SMOKE=1` and `test_no_spend.py` proves it.
+- Waiting on Anthony: M5 (the MCP GIF, which now also needs the key header), B11b and B12, and a batch GIF for the sign-in and keys flow (zero model spend, not recorded without a go-ahead).
+
 ### 2026-10-25 (macOS: Batch M, the MCP server, M1-M4; M5 waits for approval)
 - Batch M added from item 3 of the portfolio queue (`project-dossier/PROJECT-QUEUE.md`), planned by the planner against the installed `mcp` 2.3.0 (FastMCP is gone in 2.x; a stateless 2026-07-28 protocol era sits beside the 2025-11-25 handshake).
 - M1 (`4758851`): one tool-execution path for `/ask` and MCP, and card numbers masked in page text as the tools read it. Two review rounds rewrote the shared `pii.mask_card_numbers`: it had sent a card in full whenever an expiry, auth code, or amount sat beside it, and masked one date range in ten; committed data is byte-identical under the old and new rules.

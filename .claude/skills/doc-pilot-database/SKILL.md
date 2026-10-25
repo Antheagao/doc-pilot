@@ -11,13 +11,30 @@ The sqlx subsections of the global guide map to SQLAlchemy and Alembic here.
 ## Stack and migrations
 
 - PostgreSQL 16 with pgvector (`pgvector/pgvector:pg16-trixie`, pinned to match the glibc 2.41 the dev volume was initialized under), SQLAlchemy 2 async ORM over asyncpg; models in `backend/app/models.py`, engine and `async_session_maker` (`expire_on_commit=False`) in `app/db.py`.
+- Two database URLs: `DATABASE_URL` is the runtime login role `docpilot_runtime` (the suite uses `docpilot_test_runtime`), which row-level security binds, and `MIGRATION_DATABASE_URL` is the owner `docpilot`, used only by `alembic/env.py` (`migration_database_url or database_url`) and `scripts/provision_db_role.py`.
 - Migrations: `backend/alembic/versions/<revision>_<slug>.py`; async `alembic/env.py` sets `target_metadata = Base.metadata`; the module docstring's first line is the header.
-- Chain: `0eb534561f35` initial, `c538cc803902` `jobs.run_after`, `b7a91c4de2f0` review columns, `e3f19a7c2d40` retrieval tables and `CREATE EXTENSION vector`, `f7c2d9e4a1b3` `jobs.traceparent`, `a4d8e2f6b901` `search_aliases`, `b9e4c1d7f302` `ask_runs`, `c6f1a2b3d4e5` spend time indexes, `d2a7b5c9e013` chat columns, `e8c3a6f1b254` reconciliations and `extracted_fields.review_reason`, `a7d2f4c9b108` the `quote:` review reason (its downgrade is lossy: `quote:%` rows become `confidence`), `b4e7c1a9d625` `extractions.cache_creation_input_tokens` and `cache_read_input_tokens` (head).
-- Compose's one-shot `migrate` service runs `alembic upgrade head`; the test session does the same to its own `docpilot_test` database (created when missing) before the first test.
+- Chain: `0eb534561f35` initial, `c538cc803902` `jobs.run_after`, `b7a91c4de2f0` review columns, `e3f19a7c2d40` retrieval tables and `CREATE EXTENSION vector`, `f7c2d9e4a1b3` `jobs.traceparent`, `a4d8e2f6b901` `search_aliases`, `b9e4c1d7f302` `ask_runs`, `c6f1a2b3d4e5` spend time indexes, `d2a7b5c9e013` chat columns, `e8c3a6f1b254` reconciliations and `extracted_fields.review_reason`, `a7d2f4c9b108` the `quote:` review reason (its downgrade is lossy: `quote:%` rows become `confidence`), `b4e7c1a9d625` `extractions.cache_creation_input_tokens` and `cache_read_input_tokens`, `aa652338a4ae` the five identity tables and `CREATE EXTENSION citext`, `127aac687508` `organization_id` on the eight content tables with the composite foreign keys (its downgrade is lossy: every organization's rows land in the default one on the next upgrade), `73a7d8691932` the grants, row-level security, and `docpilot_spend_since` (head).
+- Compose's one-shot `migrate` service runs `alembic upgrade head` as the owner and then `scripts/provision_db_role.py`; the test session migrates its own `docpilot_test` database (created when missing) as the owner and provisions `docpilot_test_runtime` before the first test.
+- A login role and its password do not belong in a migration: `app/db_roles.py` creates or alters the runtime role from the user and password of `DATABASE_URL` over `MIGRATION_DATABASE_URL`, sends a SCRAM verifier, and refuses an owner or a different server or database.
+- Roles are cluster-wide and the dev, demo, and test databases share a cluster, so the group role `docpilot_app` (NOLOGIN, holds every grant) is dropped by a downgrade only when no login role is a member and no other database grants to it (SQLSTATE `2BP01` otherwise).
 
 ## Schema facts
 
-- Tables: `documents`, `jobs`, `extractions`, `extracted_fields`, `reconciliations`, `document_pages`, `document_chunks`, `ask_runs`.
+- Content tables (`TenantMixin`): `documents`, `jobs`, `extractions`, `extracted_fields`, `reconciliations`, `document_pages`, `document_chunks`, `ask_runs`.
+  Identity tables (global, no RLS, `IDENTITY_TABLES`): `organizations`, `users` (`email citext`), `memberships` (PK `(organization_id, user_id)`, role `owner` or `member`), `auth_sessions`, `api_keys`.
+- `organization_id uuid NOT NULL DEFAULT docpilot_current_organization_id()` is on every content table; code never sets it.
+  The function is `STABLE` and reads `nullif(current_setting('docpilot.organization_id', true), '')::uuid`, so with no tenant it is NULL and an insert is refused.
+  The default organization has the literal id `270ad65a-150a-498e-bbb1-584f6d21d86e` and slug `default` (copied into migrations, not imported).
+- Composite foreign keys tie a child to its parent's organization, each backed by `UNIQUE (id, organization_id)` on the parent (`documents`, `extractions`, `document_pages`, `ask_runs`): `(document_id, organization_id)` on jobs, extractions, document_pages, document_chunks, and ask_runs, `(extraction_id, organization_id)` on extracted_fields and reconciliations, `(page_id, organization_id)` on document_chunks, and `(ask_run_id, organization_id)` on jobs.
+  A nullable `document_id` skips the check (MATCH SIMPLE).
+- The two settings: `docpilot.organization_id` (the tenant) and `docpilot.queue_scope` (`on` only in `tenancy.queue_session`), both transaction-local and set by the `after_begin` listener on every new transaction.
+- Policies: `tenant_isolation` (`FOR ALL`, `USING` and `WITH CHECK` the tenant) on each content table with ENABLE and FORCE, plus `jobs_queue_claim` (`FOR SELECT`) and `jobs_queue_update` (`FOR UPDATE`) on `jobs` alone.
+  The role holds `UPDATE` on `jobs` only for `state`, `attempts`, `last_error`, `started_at`, `finished_at`, and `run_after`; `alembic_version` has no grant.
+  A new table needs its own `GRANT` to `docpilot_app` and, for a content table, its policies, or `tests/test_rls.py` fails.
+- `docpilot_spend_since(timestamptz) RETURNS numeric` is `SECURITY DEFINER` with a fixed `search_path`, executable only by `docpilot_app`; it is the one way the application sums across tenants.
+- Measured search plans under RLS (PostgreSQL 16.15, pgvector 0.8.7):
+  - The GIN index on `tsv` cannot serve `tsv @@ query`, because the match function is not leakproof, so lexical search is the tenant's rows through `ix_document_chunks_organization_id` plus a filter; `_term_idf` counts the tenant's chunks.
+  - The HNSW index still orders dense search with the policy as a filter, a tiny tenant is planned as an exact sort over its own rows, and `_dense_ranking` sets `hnsw.iterative_scan = relaxed_order` so a small tenant still fills `k`; the retrieval eval pins `enable_indexscan = off`, so its numbers do not move.
 - Local exception: primary keys are `UUID` with a Python-side `uuid.uuid4` default, because ids appear in URLs and upload file names.
 - Timestamps are `DateTime(timezone=True)` with `server_default=func.now()`; no table has `updated_at`.
 - `document_chunks.embedding` is `Vector(384)` (`EMBEDDING_DIM`) with an HNSW `vector_cosine_ops` index; `tsv` is a persisted generated column with a GIN index, and `a4d8e2f6b901` shows how to change one (drop the index and column, add both back).
@@ -38,10 +55,13 @@ The sqlx subsections of the global guide map to SQLAlchemy and Alembic here.
 - Job handlers never commit: the worker commits in `complete_job` or rolls back in `fail_job`, and each handler rolls back before its model call so no transaction spans it.
 - After `session.rollback()` every loaded ORM object is expired, and `AsyncSession` cannot lazy-load, so reading `job.id` raises `MissingGreenlet`.
   Copy ids into locals before any rollback, carry the ids, and re-fetch with `session.get(Model, id)` (as `process_document_job` does for the document).
-- Queries are ORM or Core expressions; raw `text()` appears only for `SET LOCAL enable_indexscan = off` in `app/evals/`.
+- Queries are ORM expressions on a session bound to an organization (`get_session`, `tenant_session`, `queue_session`); a content table is never reached through `text()`, a `Table` statement, or a write that names `organization_id`, which `app/tenancy.py` refuses or row-level security catches.
+  Raw `text()` appears for `SET LOCAL enable_indexscan = off` in `app/evals/` and for the `set_config` calls of `app/tenancy.py`, both with bound parameters.
+- Identity rows are read and written on a session with no organization (`get_identity_session_factory`), only by `app/auth/`, the auth routes, `scripts/accounts.py`, and the demo seed.
+- A new session that touches content needs `bind_tenant` first; `TenantScopeError` is the sign it was missed.
 
 ## Known gaps
 
 - Closed sets with no `CHECK`: `documents.status`, `jobs.state`, `jobs.kind`, `extracted_fields.review_action`, `document_pages.source`, `ask_runs.status`.
-- No `ON DELETE` except `jobs.ask_run_id` (`CASCADE`), and no index on `jobs.document_id`, `extractions.document_id`, or `document_chunks.page_id`; no document deletion path exists (Batch G4).
+- No `ON DELETE` on the content keys except `jobs.ask_run_id` and `reconciliations.extraction_id` (`CASCADE`), and `organizations.id` is `RESTRICT`; no document, user, or organization deletion path exists (Batch G4).
 - No migration states a retention period for receipt text (`document_pages`, `document_chunks`) or stored questions and answers (`ask_runs`).

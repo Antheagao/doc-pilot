@@ -12,11 +12,19 @@ The Tailwind and theme-toggle rules of the global guide do not apply: there is n
 ## What exists
 
 - Next.js `16.2.12`, React `19.2.4`, TypeScript `strict`; no UI, chart, or data-fetching library; `next.config.ts` sets only `output: "standalone"`.
-- Routes in `src/app/`: `/` (upload, stats strip, document list), `/documents/[id]`, `/review`, `/search`, `/ask`, `/dashboard`.
-- `layout.tsx` is the only server component and holds the header nav with `ReviewQueueLink`.
-- Local exception: every page is a `"use client"` component that calls the API from the browser through `src/lib/api.ts` (`API_URL` from `NEXT_PUBLIC_API_URL`, `cache: "no-store"`, failures raised as `ApiError`); there is no server-only data module.
+- Routes in `src/app/`: the route group `(app)/` holds every signed-in page (`/` upload, stats strip, and document list; `/documents/[id]`, `/review`, `/search`, `/ask`, `/dashboard`, `/settings/api-keys`), with URLs unchanged, and `login/` sits outside it.
+- `layout.tsx` (the root) is html and body only.
+  `(app)/layout.tsx` is a server component and holds the header nav with `ReviewQueueLink` and `AccountMenu`; the login page is outside the group so it renders without the header and polls nothing (`ReviewQueueLink` would 401-loop there).
+- Local exception: every page is a `"use client"` component that calls the API from the browser through `src/lib/api.ts` (`API_URL` from `NEXT_PUBLIC_API_URL`, failures raised as `ApiError`); there is no server-only data module.
+- Every call goes through `apiFetch`, which adds `credentials: "include"` (the API is another origin and the session is a cookie) and `cache: "no-store"` (SSE included), and on a 401 sends the browser to `/login?next=<path>` once per page load and never from `/login`.
+  `safeNextPath` accepts `next` only as a same-origin path starting with `/` (not `//` or `/\`, no control characters, never `/login`), and anything else is `/`.
+  There is no `proxy.ts`: the API's 401 is the real check, and an optimistic cookie check would need the per-stack cookie name inlined.
+- The login page is `login/page.tsx` plus `components/LoginForm.tsx`, which reads `?next=` with `useSearchParams` inside a `<Suspense>` boundary (the page is prerendered).
+  Its email and password inputs mirror the API's limits (`EMAIL_MAX_LENGTH`, `PASSWORD_MIN_LENGTH`, `PASSWORD_MAX_LENGTH`), keep the input on error, and show failures in a `role="alert"` banner that switches on the status, not the API's wording (the 401 is one message for every cause; a 429 says the wait from `Retry-After`).
+- `AccountMenu` is a disclosure (email, organization, a switcher with a Switch button only for more than one membership, a link to API keys, Sign out); `ApiKeysManager` is the `/settings/api-keys` page (list, create with the secret shown once in a read-only field outside any form and gone after Done, revoke with an inline confirm; read-only with a note for a member).
+  The auth helpers in `api.ts` are `login`, `logout`, `getMe`, `switchOrganization`, `listApiKeys`, `createApiKey`, and `revokeApiKey`.
 - `/documents/[id]` reads its id with `useParams`; `/` and `/documents/[id]` poll with `setTimeout` (`POLL_INTERVAL_MS` 3000 and 2000) while a document is `uploaded` or `processing`.
-- Components in `src/components/`: `AgentRun`, `ChatPanel`, `ConfidenceBadge`, `ExtractionPanel`, `ReconciliationPanel`, `ReviewQueueLink`, `StatsStrip`, `StatusChip`, `UploadZone`, and `charts.tsx` (`ChartCard`, `LineChart`, `Legend`, `niceDomain`).
+- Components in `src/components/`: `AccountMenu`, `AgentRun`, `ApiKeysManager`, `ChatPanel`, `ConfidenceBadge`, `ExtractionPanel`, `LoginForm`, `ReconciliationPanel`, `ReviewQueueLink`, `StatsStrip`, `StatusChip`, `UploadZone`, and `charts.tsx` (`ChartCard`, `LineChart`, `Legend`, `niceDomain`).
 - Shared helpers in `src/lib/`: `api.ts` (fetch helpers and the JSON types), `format.ts` (`formatAmount`, `formatRate`, `formatEvidence`, `fieldLabel`, and `MONEY_FIELDS`, the one frontend copy of the schema's money fields), `reconciliation.ts` (the report's words: `pathLabel`, `humanize`, `checkText`, `equationView`, the quote helpers), `evidence.ts` (`leafEvidence`, `evidenceAt`, `hasEvidence`).
 - `ExtractionPanel` has two layouts, picked by field presence: a schema v1 extraction renders the flat list of six rows and the line items table exactly as it always did, and one with any v2 field renders the groups Document, line items, Amounts (the tax lines table sits in it), and Payment, with every null field nobody waits on folded into one muted "Not on this document: ..." line.
   The tax lines table rows have the ids `field-tax_lines-<i>`, like the line item rows.
@@ -30,17 +38,18 @@ The Tailwind and theme-toggle rules of the global guide do not apply: there is n
 - Styling is plain CSS with class names in one file, `src/app/globals.css`; tokens on `:root`: `--background`, `--surface`, `--border`, `--foreground`, `--muted`, `--accent`, `--accent-contrast`, `--status-*`, `--confidence-low-*`, `--confidence-ok-*`, `--radius-card`, `--radius-control`, `--shadow-card`.
 - Theme follows the OS only: `@media (prefers-color-scheme: dark)` redefines every token and sets `color-scheme: dark`.
 - The token header comment states WCAG AA (4.5:1, most 7:1) for every pairing in both themes; a new token needs values for both themes.
+  The light `--status-processing` and `--status-extracted` are `#92400e` and `#166534` (5.69:1 and 5.73:1 on their tinted chips; the earlier values were 4.15:1 and 4.14:1), and dark is unchanged; the revoked-key chip reuses `--status-uploaded`.
 - Global `:focus-visible` and `prefers-reduced-motion` rules exist in `globals.css`.
-- The document preview is an `<iframe>` for PDFs (with `#page=` from a chat citation) and an `<img>` for images, both from `GET /documents/{id}/file`.
+- The document preview is an `<iframe>` for PDFs (with `#page=` from a chat citation) and an `<img>` for images, both from `GET /documents/{id}/file`; they carry the session cookie because the frontend and API are same-site, which is why the session is a cookie and not a bearer token in `localStorage`.
 - Fonts are a system stack on `body`; there is no `next/font`.
 - Live progress uses `aria-live="polite"` (`ask/page.tsx`, `AgentRun.tsx`).
 - CI runs `npx eslint src` (`eslint-config-next` core-web-vitals and typescript) and `npm run build`.
 
 ## Known gaps
 
-- No `error.tsx`, `not-found.tsx`, `global-error.tsx`, or `loading.tsx`; errors render as `<div className="error-banner">` without `role="alert"`.
+- No `error.tsx`, `not-found.tsx`, `global-error.tsx`, or `loading.tsx`; outside the sign-in form, the account menu, and the API keys page, errors render as `<div className="error-banner">` without `role="alert"`.
 - No script measures contrast, so the AA claim in `globals.css` is not checked by tooling.
 - Costs are formatted ad hoc with `toFixed` (`ask/page.tsx`, `dashboard/page.tsx`).
-- The pure helpers (`fractionAsPercent`, `parseTaxRows`, `evidenceAt`) have no unit tests, because there is no frontend test runner; they were checked in the browser against the demo seed's documents.
+- The pure helpers (`fractionAsPercent`, `parseTaxRows`, `evidenceAt`, `safeNextPath`) have no unit tests, because there is no frontend test runner; they were checked in the browser against the demo seed's documents.
 - Document amounts arrive as decimal strings and are never parsed to `Number`: `formatAmount` in `src/lib/format.ts` groups the integer part (BigInt) and shows the fraction exactly as given, a missing value as `EMPTY_VALUE`, and a non-numeric stored value as stored; a tax rate is the printed percent as a plain string and `formatRate` adds its sign, the review form validates the trimmed input against `^-?\d+(\.\d+)?$` (a comma or space is refused, never stripped) and sends the string, and the queue shows the document's currency code beside each amount, and a backend `422` sentence lands in the `error-banner`.
 - Batch C replaces the `<iframe>` preview with `pdfjs-dist` canvas rendering under an SVG overlay.
