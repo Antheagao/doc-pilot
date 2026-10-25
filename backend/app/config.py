@@ -169,6 +169,15 @@ class Settings(BaseSettings):
     # each graded answer is one more billed model call.
     ask_judge_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
+    # --- MCP server (app/mcp_server/) -------------------------------------
+    # The most characters of text one MCP tool result carries. The MCP client
+    # is the model, so a result goes straight into its context: 24,000 is a
+    # little over 6,000 tokens, more than a ten-passage search or a long page
+    # fills (the tools already cap passages at 10 and records at 20), and well
+    # under what a client will truncate or reject on its own. A longer result
+    # drops its trailing lines and says so (app/mcp_server/server.py).
+    mcp_max_result_chars: int = Field(default=24_000, ge=2_000, le=200_000)
+
     @field_validator("extraction_prompt_version")
     @classmethod
     def _known_extraction_prompt_version(cls, value: str) -> str:

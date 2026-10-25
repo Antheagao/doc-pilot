@@ -500,3 +500,31 @@ class DailyPoint(BaseModel):
     spend: DailySpend
     answers: DailyAnswers
     extractions: DailyExtractions
+
+
+class McpSource(BaseModel):
+    """One passage, page, or extracted record in an MCP tool result: the
+    `doc-pilot://` URI a client can cite, what it is, and its lines as the
+    model reads them (card numbers already masked)."""
+
+    source: str
+    kind: Literal["chunk", "page", "record"]
+    document_id: uuid.UUID
+    filename: str
+    page_number: int | None
+    title: str
+    lines: list[str]
+
+
+class McpToolOutput(BaseModel):
+    """The structured content of an MCP tool result, and the output schema its
+    tools advertise. `summary` is a query_extractions match summary (counts
+    and per-currency sums computed in code); `message` is a result with no
+    sources ("No matching passages found."); `truncated` says trailing lines
+    were dropped to fit MCP_MAX_RESULT_CHARS."""
+
+    notice: str
+    summary: str | None
+    message: str | None
+    sources: list[McpSource]
+    truncated: bool
