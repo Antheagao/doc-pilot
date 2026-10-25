@@ -21,11 +21,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.budget import enforce_daily_budget
 from app.config import Settings, get_settings
-from app.db import get_session, get_session_factory
+from app.db import SessionFactory, get_session, get_tenant_session_factory
 from app.evals.online import earlier_turns
 from app.extraction import ExtractionError
 from app.models import AskRun, Document
@@ -103,7 +103,7 @@ async def chat_stream(
     embedder: Embedder = Depends(get_embedder),
     settings: Settings = Depends(get_settings),
     client: anthropic.AsyncAnthropic | None = Depends(get_anthropic_client),
-    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
+    session_factory: SessionFactory = Depends(get_tenant_session_factory),
 ) -> StreamingResponse:
     """The chat turn as server-sent events -- the same events as POST
     /ask/stream. Everything that can refuse the turn (an unknown document

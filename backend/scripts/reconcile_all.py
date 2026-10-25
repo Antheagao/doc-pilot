@@ -12,18 +12,24 @@ takes are held for one document at a time and never stall a reviewer, an
 interrupted run keeps what it finished, and only a small summary per extraction
 stays in memory. A dry run rolls each transaction back instead of committing it.
 
+It runs once per organization, each in sessions bound to that organization
+(app/tenancy.py): every organization by default, or only the one named with
+--organization.
+
 Run from backend/ with the venv active, or in the stack with
 `docker compose exec api python scripts/reconcile_all.py`:
 
     python scripts/reconcile_all.py --dry-run   # compute, print, write nothing
     python scripts/reconcile_all.py             # compute, print, write, commit
+    python scripts/reconcile_all.py --organization acme   # one organization, by slug
 """
 
 import argparse
 import asyncio
 import sys
+import uuid
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +43,7 @@ from app.config import Settings, get_settings
 from app.db import async_session_maker, engine
 from app.models import Document, Extraction
 from app.review_routing import Refresh, Routing, refresh_reconciliation
+from app.tenancy import organization_ids, tenant_session
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -72,22 +79,41 @@ def _summarize(filename: str, refresh: Refresh) -> Outcome:
 
 
 async def reconcile_all(
-    session_factory: SessionFactory, settings: Settings, *, dry_run: bool
+    session_factory: SessionFactory,
+    settings: Settings,
+    *,
+    dry_run: bool,
+    organization_ids: Sequence[uuid.UUID],
 ) -> tuple[list[Outcome], list[str]]:
-    """Refresh every extraction, each in its own transaction (committed, or
-    rolled back on a dry run). Returns an Outcome per extraction that worked
-    and an error line per extraction that did not."""
+    """Refresh every extraction of each organization, each in its own
+    transaction (committed, or rolled back on a dry run). Returns an Outcome
+    per extraction that worked and an error line per extraction that did not."""
+    done: list[Outcome] = []
+    errors: list[str] = []
+    for organization_id in organization_ids:
+        organization_done, organization_errors = await _reconcile_organization(
+            session_factory, settings, organization_id, dry_run=dry_run
+        )
+        done += organization_done
+        errors += organization_errors
+    return done, errors
+
+
+async def _reconcile_organization(
+    session_factory: SessionFactory, settings: Settings, organization_id: uuid.UUID, *, dry_run: bool
+) -> tuple[list[Outcome], list[str]]:
+    """One organization's extractions; every session is bound to it."""
     stmt = (
         select(Extraction.id, Document.filename)
         .join(Document, Extraction.document_id == Document.id)
         .order_by(Extraction.created_at, Extraction.id)
     )
-    async with session_factory() as session:
+    async with tenant_session(session_factory, organization_id) as session:
         rows = [tuple(row) for row in (await session.execute(stmt)).all()]
     done: list[Outcome] = []
     errors: list[str] = []
     for extraction_id, filename in rows:
-        async with session_factory() as session:
+        async with tenant_session(session_factory, organization_id) as session:
             try:
                 outcome = _summarize(
                     filename, await refresh_reconciliation(session, extraction_id, settings)
@@ -128,9 +154,17 @@ def render(done: list[Outcome], errors: list[str], *, dry_run: bool) -> str:
     return "\n".join(lines)
 
 
-async def main(dry_run: bool) -> int:
+async def main(dry_run: bool, organization: str | None) -> int:
     try:
-        done, errors = await reconcile_all(async_session_maker, get_settings(), dry_run=dry_run)
+        async with async_session_maker() as session:
+            try:
+                organizations = await organization_ids(session, organization)
+            except ValueError as exc:  # no organization with that slug
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+        done, errors = await reconcile_all(
+            async_session_maker, get_settings(), dry_run=dry_run, organization_ids=organizations
+        )
         print(render(done, errors, dry_run=dry_run))
         if not dry_run:
             print(f"Committed {len(done)} reconciliations.")
@@ -144,4 +178,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dry-run", action="store_true", help="compute and print, but write nothing"
     )
-    sys.exit(asyncio.run(main(parser.parse_args().dry_run)))
+    parser.add_argument(
+        "--organization", metavar="SLUG", help="only this organization (default: every one)"
+    )
+    args = parser.parse_args()
+    sys.exit(asyncio.run(main(args.dry_run, args.organization)))

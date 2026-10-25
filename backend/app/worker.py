@@ -49,6 +49,14 @@ abandoned is picked up within the lease. SIGTERM (Cloud Run's and docker
 stop's shutdown signal) stops the loop claiming new work; the job in hand
 finishes if the platform's grace period allows, and is reclaimed if not.
 
+Tenancy: a job belongs to an organization (jobs.organization_id), and
+everything a worker does for it runs as that organization (app/tenancy.py).
+The claim is the one step that cannot: it picks the oldest pending job of any
+organization, so it runs in a queue_session, which may touch the job queue and
+nothing else. The claim then binds the job's organization to its session
+before it reads the document, and the handler, complete_job and fail_job run
+in a new session bound to the same one.
+
 Retry/backoff: failed jobs are requeued (state -> pending) up to
 MAX_ATTEMPTS times, with an equal-jitter exponential backoff (see
 _backoff_delay) applied via the `run_after` column, capped at
@@ -112,6 +120,7 @@ from app.telemetry import (
     tracer,
     untraced,
 )
+from app.tenancy import bind_tenant, queue_session, tenant_session
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +211,10 @@ async def claim_job(session: AsyncSession, document_id: uuid.UUID | None = None)
     """Claim the oldest eligible pending job, if any, and commit the
     claim. Uses FOR UPDATE SKIP LOCKED so concurrent workers scanning the
     same table never block on or double-claim a row.
+
+    `session` is a queue_session: it finds the job in any organization, then
+    binds the job's organization to itself before touching the document, so
+    from the first line that reads anything else it is that organization's.
     """
     now = datetime.now(UTC)
     job = (await session.execute(pending_job_stmt(now, document_id))).scalars().first()
@@ -211,6 +224,7 @@ async def claim_job(session: AsyncSession, document_id: uuid.UUID | None = None)
     job.state = "processing"
     job.started_at = now
     job.attempts += 1
+    await bind_tenant(session, job.organization_id)
 
     if job.kind == JOB_KIND_EXTRACT:
         document = await session.get(Document, job.document_id)
@@ -333,7 +347,8 @@ RECLAIM_CHECK_SECONDS = 60.0
 async def reclaim_orphaned_jobs(
     session: AsyncSession, older_than: timedelta | None = None
 ) -> int:
-    """Reset jobs stuck in 'processing' back to 'pending'. With no lease
+    """Reset jobs stuck in 'processing' back to 'pending', in every
+    organization (`session` is a queue_session). With no lease
     (older_than=None), every one -- meant to be called exactly once, at
     startup, before the poll loop begins; see the "Consequence" paragraph
     in the module docstring for why that is only safe in a single-worker
@@ -368,13 +383,13 @@ async def run_once(
     # The claim poll is untraced: it runs every poll interval, work or not.
     # A claimed job's own span (below) starts the traced part.
     with untraced():
-        async with async_session_maker() as session:
+        async with queue_session(async_session_maker) as session:
             job = await claim_job(session, document_id=document_id)
             if job is None:
                 return False
-            job_id = job.id
+            job_id, organization_id = job.id, job.organization_id
 
-    async with async_session_maker() as session:
+    async with tenant_session(async_session_maker, organization_id) as session:
         job = await session.get(Job, job_id)
         if job is None:
             logger.warning("job %s vanished before handler could run", job_id)
@@ -480,7 +495,7 @@ async def run_worker(handler: Handler = dispatch_job, stop: asyncio.Event | None
                 if lease is not None and time.monotonic() >= next_reclaim:
                     next_reclaim = time.monotonic() + RECLAIM_CHECK_SECONDS
                     with untraced():
-                        async with async_session_maker() as session:
+                        async with queue_session(async_session_maker) as session:
                             await reclaim_orphaned_jobs(session, older_than=lease)
                 claimed = await run_once(handler)
             except Exception:
@@ -529,7 +544,7 @@ async def main() -> None:
         logger.info("tracing enabled (OTLP export)")
 
     with untraced():
-        async with async_session_maker() as session:
+        async with queue_session(async_session_maker) as session:
             await reclaim_orphaned_jobs(session, older_than=_reclaim_lease())
 
     # Load the embedding model before claiming work, so the first index

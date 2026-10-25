@@ -38,10 +38,12 @@ from app.mcp_server.server import (
     NOTICE,
     OUTPUT_SCHEMA,
     build_server,
+    default_principal,
 )
 from app.models import Document
 from app.ratelimit import WINDOW_SECONDS, SlidingWindowLimiter
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
+from app.tenancy import bind_tenant
 
 pytestmark = pytest.mark.usefixtures("spans")
 
@@ -86,11 +88,14 @@ async def _add_poisoned_document(db_session: AsyncSession) -> uuid.UUID:
 
 def _server(db_session: AsyncSession, document_ids: list[uuid.UUID] | None = None, **settings):
     @asynccontextmanager
-    async def shared_session() -> AsyncGenerator[AsyncSession]:
+    async def shared_session(organization_id: uuid.UUID) -> AsyncGenerator[AsyncSession]:
+        # The session a call gets is bound to the organization it asked for.
+        await bind_tenant(db_session, organization_id)
         yield db_session
 
     return build_server(
-        session_factory=shared_session,
+        tenant_session_factory=shared_session,
+        resolve_principal=default_principal,
         embedder=EMBEDDER,
         settings=Settings(**settings),
         document_ids=document_ids,
@@ -155,6 +160,64 @@ async def test_the_list_and_instructions_do_not_depend_on_stored_documents(
     if mode == "legacy":
         assert before[1] == INSTRUCTIONS
     assert "untrusted" in INSTRUCTIONS.lower()
+
+
+# --- tenancy ----------------------------------------------------------------
+
+
+async def test_a_call_runs_for_the_organization_its_principal_resolves_to(
+    db_session: AsyncSession, second_organization, mode: str
+) -> None:
+    """The principal resolver names the organization and the tenant factory
+    opens a session for it: a tool sees that organization's documents and no
+    other's."""
+    from contextlib import asynccontextmanager
+
+    from app.auth.principal import Principal
+    from app.models import DEFAULT_ORGANIZATION_ID
+    from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
+
+    async def add(text: str) -> uuid.UUID:
+        document = Document(filename=f"{text}.png", mime_type="image/png", storage_path="/tmp/t", status="extracted")
+        db_session.add(document)
+        await db_session.flush()
+        await index_document_pages(
+            db_session, document.id, [PageText(1, f"{text} receipt total 10.00", "gold")], EMBEDDER,
+            ChunkingConfig(0, 0, False),
+        )
+        return document.id
+
+    mine = await add("zebrafoo")
+    await bind_tenant(db_session, second_organization.id)
+    theirs = await add("zebrabar")
+    await bind_tenant(db_session, DEFAULT_ORGANIZATION_ID)
+    opened: list[uuid.UUID] = []
+    calling_as = [DEFAULT_ORGANIZATION_ID]
+
+    @asynccontextmanager
+    async def factory(organization_id: uuid.UUID) -> AsyncGenerator[AsyncSession]:
+        opened.append(organization_id)
+        await bind_tenant(db_session, organization_id)
+        yield db_session
+
+    async def resolver(ctx) -> Principal:
+        return Principal(calling_as[0])
+
+    server = build_server(
+        tenant_session_factory=factory, resolve_principal=resolver, embedder=EMBEDDER, settings=Settings()
+    )
+    async with Client(server, mode=mode) as client:
+        as_default = await client.call_tool("search_documents", {"query": "zebrafoo zebrabar receipt", "k": 10})
+        calling_as[0] = second_organization.id
+        as_second = await client.call_tool("search_documents", {"query": "zebrafoo zebrabar receipt", "k": 10})
+
+    assert opened == [DEFAULT_ORGANIZATION_ID, second_organization.id]
+    assert _documents(as_default) == {str(mine)}
+    assert _documents(as_second) == {str(theirs)}
+
+
+def _documents(result: types.CallToolResult) -> set[str]:
+    return {source["document_id"] for source in result.structured_content["sources"]}
 
 
 # --- each tool end to end ---------------------------------------------------

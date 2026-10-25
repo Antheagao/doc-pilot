@@ -38,7 +38,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.budget import day_start
@@ -435,10 +435,14 @@ async def _delete_rows(session: AsyncSession) -> None:
     # Row deletes, children first: unlike TRUNCATE they take only row locks,
     # so they cannot deadlock with a parallel session on the same database.
     # Content tables only: the accounts, sessions, and keys (IDENTITY_TABLES)
-    # are not demo data, and wiping them would sign everyone out.
+    # are not demo data, and wiping them would sign everyone out. They are ORM
+    # deletes so they are scoped to the session's organization.
+    classes = {mapper.local_table: mapper.class_ for mapper in Base.registry.mappers}
     for table in reversed(Base.metadata.sorted_tables):
         if table.name not in IDENTITY_TABLES:
-            await session.execute(table.delete())
+            await session.execute(
+                delete(classes[table]).execution_options(synchronize_session=False)
+            )
 
 
 async def _wipe(session: AsyncSession, upload_dir: Path) -> None:

@@ -1134,7 +1134,7 @@ async def test_streamed_runs_use_a_session_of_their_own(
     run outlives a client that disconnects mid-stream."""
     from contextlib import asynccontextmanager
 
-    from app.db import get_session_factory
+    from app.db import get_tenant_session_factory
 
     opened = []
 
@@ -1143,7 +1143,7 @@ async def test_streamed_runs_use_a_session_of_their_own(
         opened.append(1)
         yield db_session
 
-    app.dependency_overrides[get_session_factory] = lambda: recording_factory
+    app.dependency_overrides[get_tenant_session_factory] = lambda: recording_factory
 
     response = await _stream(client, db_session, SETTINGS, _northgate_client())
 

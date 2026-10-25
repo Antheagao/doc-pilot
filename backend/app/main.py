@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import partial
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,11 +14,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.config import get_settings
 from app.db import async_session_maker, engine
 from app.mcp_server.http import McpHttpEndpoint
-from app.mcp_server.server import build_server
+from app.mcp_server.server import build_server, default_principal
 from app.retrieval.embeddings import get_embedder, warm_up_embedder
 from app.routers import ask, chat, documents, monitoring, review, search, stats
 from app.routers.documents import MAX_UPLOAD_SIZE
 from app.telemetry import configure_tracing, instrument_api, otlp_enabled
+from app.tenancy import tenant_session
 
 
 class MaxBodySizeMiddleware:
@@ -98,7 +100,10 @@ class SecurityHeadersMiddleware:
 # tracing; its session manager runs inside the lifespan below.
 mcp_endpoint = McpHttpEndpoint(
     build_server(
-        session_factory=async_session_maker, embedder=get_embedder(), settings=get_settings()
+        tenant_session_factory=partial(tenant_session, async_session_maker),
+        resolve_principal=default_principal,
+        embedder=get_embedder(),
+        settings=get_settings(),
     ),
     get_settings(),
 )

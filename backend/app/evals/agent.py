@@ -43,6 +43,7 @@ from app.evals.retrieval import GoldDoc
 from app.extraction import ExtractionError, _build_client
 from app.retrieval.embeddings import Embedder
 from app.retrieval.indexing import ChunkingConfig
+from app.tenancy import ephemeral_organization
 
 QUESTIONS_PATH = EVALS_DIR / "agent" / "questions_v1.json"
 RESULTS_DIR = EVALS_DIR / "results" / "agent"
@@ -363,6 +364,10 @@ async def run_agent_eval(
         )
         try:
             await session.execute(text("SET LOCAL enable_indexscan = off"))
+            # Its own organization, rolled back with the run: an eval corpus
+            # can never mix with real data, and the corpus statistics search
+            # computes (term frequencies) are the corpus's alone.
+            await ephemeral_organization(session)
             ids = await seed_labeled_corpus(
                 session,
                 cases,

@@ -5,7 +5,8 @@ document no run scored replays its label); no model call is made. Normally run i
 
     backend\\.venv\\Scripts\\python scripts\\demos\\demo.py seed [--reset]
 
-It only ever touches the demo database (docpilot_demo). An empty database
+It only ever touches the demo database (docpilot_demo), as the default
+organization. An empty database
 is seeded as is; a non-empty one is refused unless --reset, which replaces
 every content row and upload (accounts, sessions, and API keys are kept).
 """
@@ -28,7 +29,8 @@ from app.demo_seed import (
     reset_demo_data,
     seed_demo_data,
 )
-from app.models import Document
+from app.models import DEFAULT_ORGANIZATION_ID, Document
+from app.tenancy import tenant_session
 
 
 async def run(session: AsyncSession, settings: Settings, reset: bool) -> int:
@@ -63,7 +65,7 @@ async def run(session: AsyncSession, settings: Settings, reset: bool) -> int:
 
 async def main(reset: bool) -> int:
     try:
-        async with async_session_maker() as session:
+        async with tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID) as session:
             return await run(session, get_settings(), reset)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)

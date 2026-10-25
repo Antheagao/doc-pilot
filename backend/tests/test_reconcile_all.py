@@ -13,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import BACKEND_DIR, Settings
 from app.extraction import build_extracted_fields
 from app.extraction_fields import SCHEMA_V1
-from app.models import Document, ExtractedField, Extraction, Reconciliation
+from app.models import (
+    DEFAULT_ORGANIZATION_ID,
+    Document,
+    ExtractedField,
+    Extraction,
+    Reconciliation,
+)
 
 
 def _load_cli():
@@ -94,7 +100,9 @@ async def test_backfills_a_missing_report_and_is_idempotent(db_session: AsyncSes
     extraction_id = await _seed_unreconciled(db_session, filename)
     settings = Settings(review_threshold=0.8)
 
-    done, errors = await cli.reconcile_all(_factory(db_session), settings, dry_run=False)
+    done, errors = await cli.reconcile_all(
+        _factory(db_session), settings, dry_run=False, organization_ids=[DEFAULT_ORGANIZATION_ID]
+    )
 
     assert errors == []
     ours = [o for o in done if o.filename == filename]
@@ -107,7 +115,9 @@ async def test_backfills_a_missing_report_and_is_idempotent(db_session: AsyncSes
     assert "subtotal confidence -> reconciliation:lines_sum" in text
     assert "lines_sum, total_math" in text
 
-    again, errors = await cli.reconcile_all(_factory(db_session), settings, dry_run=False)
+    again, errors = await cli.reconcile_all(
+        _factory(db_session), settings, dry_run=False, organization_ids=[DEFAULT_ORGANIZATION_ID]
+    )
 
     assert errors == []
     second = [o for o in again if o.filename == filename]
@@ -128,7 +138,10 @@ async def test_a_dry_run_leaves_the_database_as_it_found_it(db_session: AsyncSes
     await db_session.commit()
 
     done, _ = await cli.reconcile_all(
-        _factory(db_session), Settings(review_threshold=0.8), dry_run=True
+        _factory(db_session),
+        Settings(review_threshold=0.8),
+        dry_run=True,
+        organization_ids=[DEFAULT_ORGANIZATION_ID],
     )
     assert any(o.filename == filename and o.created for o in done)
 
@@ -174,7 +187,10 @@ async def test_one_failing_extraction_is_reported_and_the_rest_still_run(
     monkeypatch.setattr(cli, "refresh_reconciliation", refresh)
 
     done, errors = await cli.reconcile_all(
-        _factory(db_session), Settings(review_threshold=0.8), dry_run=False
+        _factory(db_session),
+        Settings(review_threshold=0.8),
+        dry_run=False,
+        organization_ids=[DEFAULT_ORGANIZATION_ID],
     )
 
     assert [e for e in errors if bad in e and "RuntimeError: rules bug" in e]

@@ -17,7 +17,8 @@ from app.extraction import (
     ModelRefusalError,
     NonRetryableExtractionError,
 )
-from app.models import Document, Job
+from app.models import DEFAULT_ORGANIZATION_ID, Document, Job
+from app.tenancy import queue_session, tenant_session
 from app.worker import (
     BACKOFF_BASE,
     BACKOFF_MAX,
@@ -104,6 +105,12 @@ def test_backoff_delay_jitter_within_base_half_to_base(monkeypatch: pytest.Monke
     assert delay == pytest.approx(4.0 + 2.0)  # base/2 + midpoint of [0, base/2]
 
 
+def _default_organization():
+    """A new session bound to the default organization: what a handler's
+    session is, and so what these tests read and write through."""
+    return tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID)
+
+
 @pytest_asyncio.fixture
 async def real_documents() -> AsyncGenerator[Callable]:
     """Creates documents committed for real against the running Postgres
@@ -129,7 +136,7 @@ async def real_documents() -> AsyncGenerator[Callable]:
     created: list[uuid.UUID] = []
 
     async def make(status: str = "uploaded") -> Document:
-        async with async_session_maker() as session:
+        async with _default_organization() as session:
             document = Document(
                 filename="test.png",
                 mime_type="image/png",
@@ -144,7 +151,7 @@ async def real_documents() -> AsyncGenerator[Callable]:
 
     yield make
 
-    async with async_session_maker() as session:
+    async with _default_organization() as session:
         for document_id in created:
             await session.execute(delete(Job).where(Job.document_id == document_id))
             await session.execute(delete(Document).where(Document.id == document_id))
@@ -152,7 +159,7 @@ async def real_documents() -> AsyncGenerator[Callable]:
 
 
 async def _make_job(document_id: uuid.UUID, **kwargs) -> Job:
-    async with async_session_maker() as session:
+    async with _default_organization() as session:
         job = Job(document_id=document_id, **kwargs)
         session.add(job)
         await session.commit()
@@ -161,12 +168,12 @@ async def _make_job(document_id: uuid.UUID, **kwargs) -> Job:
 
 
 async def _refresh_job(job_id: uuid.UUID) -> Job:
-    async with async_session_maker() as session:
+    async with _default_organization() as session:
         return await session.get(Job, job_id)
 
 
 async def _refresh_document(document_id: uuid.UUID) -> Document:
-    async with async_session_maker() as session:
+    async with _default_organization() as session:
         return await session.get(Document, document_id)
 
 
@@ -192,9 +199,9 @@ async def test_skip_locked_never_double_claims(real_documents: Callable) -> None
     # up instead of job_a/job_b.
     stmt = pending_job_stmt(datetime.now(UTC), document_id=document.id)
 
-    session1 = async_session_maker()
-    session2 = async_session_maker()
-    try:
+    async with queue_session(async_session_maker) as session1, queue_session(
+        async_session_maker
+    ) as session2:
         claimed1 = (await session1.execute(stmt)).scalars().first()
         assert claimed1 is not None
         assert claimed1.id in {job_a.id, job_b.id}
@@ -219,9 +226,6 @@ async def test_skip_locked_never_double_claims(real_documents: Callable) -> None
 
         await session1.commit()
         await session2.commit()
-    finally:
-        await session1.close()
-        await session2.close()
 
 
 async def test_success_path_marks_job_done(real_documents: Callable) -> None:
@@ -541,7 +545,7 @@ async def test_reclaim_orphaned_jobs_resets_processing_to_pending(
     document = await real_documents()
     job = await _make_job(document.id, state="processing", attempts=1)
 
-    async with async_session_maker() as session:
+    async with queue_session(async_session_maker) as session:
         await reclaim_orphaned_jobs(session)
 
     result = await _refresh_job(job.id)
@@ -559,7 +563,7 @@ async def test_a_reclaim_lease_leaves_jobs_still_being_worked_alone(
     stale = await _make_job(document.id, state="processing", attempts=1, started_at=now - timedelta(hours=1))
     unstamped = await _make_job(document.id, state="processing", attempts=1)
 
-    async with async_session_maker() as session:
+    async with queue_session(async_session_maker) as session:
         await reclaim_orphaned_jobs(session, older_than=timedelta(minutes=30))
 
     assert (await _refresh_job(fresh.id)).state == "processing"

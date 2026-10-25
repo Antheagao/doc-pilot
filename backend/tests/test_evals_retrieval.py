@@ -160,10 +160,18 @@ async def test_eval_leaves_no_rows_behind() -> None:
     from sqlalchemy import func, select
 
     from app.db import async_session_maker
-    from app.models import Document
+    from app.models import DEFAULT_ORGANIZATION_ID, Document, Organization
+    from app.tenancy import tenant_session
 
-    async with async_session_maker() as session:
-        before = (await session.execute(select(func.count()).select_from(Document))).scalar_one()
+    async def counts() -> tuple[int, int]:
+        async with tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID) as session:
+            documents = (await session.execute(select(func.count()).select_from(Document))).scalar_one()
+            organizations = (
+                await session.execute(select(func.count()).select_from(Organization))
+            ).scalar_one()
+        return documents, organizations
+
+    before = await counts()
 
     corpus, cases = _corpus_cases()
     _, queries = load_queries(cases)
@@ -176,9 +184,8 @@ async def test_eval_leaves_no_rows_behind() -> None:
         modes=("lexical",),
     )
 
-    async with async_session_maker() as session:
-        after = (await session.execute(select(func.count()).select_from(Document))).scalar_one()
-    assert after == before
+    # Neither the corpus nor the organization it ran in is left behind.
+    assert await counts() == before
 
 
 def test_readme_update_uses_the_retrieval_markers(tmp_path) -> None:

@@ -14,7 +14,11 @@ the venv active and `ANTHROPIC_API_KEY` set (via backend/.env, already
 gitignored):
 
     cd backend
-    python scripts/smoke.py
+    python scripts/smoke.py [--organization SLUG]
+
+The rows are created, read, and deleted as one organization (default: the
+organization with slug `default`); the worker cycle claims only the job it
+inserted, never another organization's or an older pending one.
 
 See tests/test_live_smoke.py for the assertion-bearing counterpart to
 this script: same pipeline, opt-in via RUN_LIVE_SMOKE=1 and pytest's
@@ -24,7 +28,9 @@ console dump.
 Requires pillow (dev dependency, see pyproject.toml `[project.optional-dependencies].dev`).
 """
 
+import argparse
 import asyncio
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -34,6 +40,7 @@ from sqlalchemy import delete, select
 
 from app.db import async_session_maker, engine
 from app.models import Document, ExtractedField, Extraction, Job
+from app.tenancy import organization_ids, tenant_session
 from app.worker import run_once
 
 
@@ -83,8 +90,10 @@ def generate_receipt_image(path: Path) -> None:
     image.save(path)
 
 
-async def insert_document_and_job(image_path: Path) -> tuple[uuid.UUID, uuid.UUID]:
-    async with async_session_maker() as session:
+async def insert_document_and_job(
+    organization_id: uuid.UUID, image_path: Path
+) -> tuple[uuid.UUID, uuid.UUID]:
+    async with tenant_session(async_session_maker, organization_id) as session:
         document = Document(
             filename="smoke_receipt.png",
             mime_type="image/png",
@@ -99,8 +108,8 @@ async def insert_document_and_job(image_path: Path) -> tuple[uuid.UUID, uuid.UUI
         return document.id, job.id
 
 
-async def print_results(document_id: uuid.UUID) -> None:
-    async with async_session_maker() as session:
+async def print_results(organization_id: uuid.UUID, document_id: uuid.UUID) -> None:
+    async with tenant_session(async_session_maker, organization_id) as session:
         document = await session.get(Document, document_id)
         print(f"\nDocument status: {document.status}")
 
@@ -146,8 +155,8 @@ async def print_results(document_id: uuid.UUID) -> None:
             )
 
 
-async def cleanup(document_id: uuid.UUID, job_id: uuid.UUID) -> None:
-    async with async_session_maker() as session:
+async def cleanup(organization_id: uuid.UUID, document_id: uuid.UUID, job_id: uuid.UUID) -> None:
+    async with tenant_session(async_session_maker, organization_id) as session:
         extraction_ids = select(Extraction.id).where(Extraction.document_id == document_id)
         await session.execute(
             delete(ExtractedField).where(ExtractedField.extraction_id.in_(extraction_ids))
@@ -158,26 +167,39 @@ async def cleanup(document_id: uuid.UUID, job_id: uuid.UUID) -> None:
         await session.commit()
 
 
-async def main() -> None:
+async def main(organization: str) -> int:
+    async with async_session_maker() as session:
+        try:
+            (organization_id,) = await organization_ids(session, organization)
+        except ValueError as exc:  # no organization with that slug
+            print(f"error: {exc}", file=sys.stderr)
+            await engine.dispose()
+            return 1
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         image_path = Path(tmp_dir) / "smoke_receipt.png"
         generate_receipt_image(image_path)
         print(f"Generated synthetic receipt: {image_path}")
 
-        document_id, job_id = await insert_document_and_job(image_path)
+        document_id, job_id = await insert_document_and_job(organization_id, image_path)
         print(f"Inserted document={document_id} job={job_id}")
 
         print("Running one worker cycle against the real Anthropic API...")
-        claimed = await run_once()
+        claimed = await run_once(document_id=document_id)
         if not claimed:
             print("run_once claimed no job -- something is wrong with the insert above.")
 
-        await print_results(document_id)
-        await cleanup(document_id, job_id)
+        await print_results(organization_id, document_id)
+        await cleanup(organization_id, document_id, job_id)
         print("\nCleaned up document/job/extraction rows.")
 
     await engine.dispose()
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument(
+        "--organization", default="default", metavar="SLUG", help="the organization to run as"
+    )
+    sys.exit(asyncio.run(main(parser.parse_args().organization)))

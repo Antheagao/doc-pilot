@@ -2,6 +2,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -47,8 +48,10 @@ TEST_DATABASE_URL = _test_database_url()
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL.render_as_string(hide_password=False)
 
 from app.config import get_settings
-from app.db import engine, get_session, get_session_factory
+from app.db import engine, get_session, get_tenant_session_factory
 from app.main import app
+from app.models import DEFAULT_ORGANIZATION_ID, Organization
+from app.tenancy import bind_tenant
 
 if engine.url.database != TEST_DATABASE_URL.database:
     raise pytest.UsageError(
@@ -123,6 +126,11 @@ async def db_session() -> AsyncGenerator[AsyncSession]:
     database. join_transaction_mode="create_savepoint"
     lets app code call session.commit() (as the upload endpoint does)
     without prematurely ending the outer transaction.
+
+    The session is bound to the default organization, as every request and
+    every worker handler is (app/tenancy.py), so what a test adds belongs to
+    it and what it queries is scoped to it. A test that needs another
+    organization uses `second_organization`, or binds one itself.
     """
     async with engine.connect() as connection:
         trans = await connection.begin()
@@ -131,11 +139,22 @@ async def db_session() -> AsyncGenerator[AsyncSession]:
             expire_on_commit=False,
             join_transaction_mode="create_savepoint",
         )
+        await bind_tenant(session, DEFAULT_ORGANIZATION_ID)
         try:
             yield session
         finally:
             await session.close()
             await trans.rollback()
+
+
+@pytest_asyncio.fixture
+async def second_organization(db_session: AsyncSession) -> Organization:
+    """A second organization, created in the test's transaction. The session
+    stays bound to the default organization; bind this one to act as it."""
+    organization = Organization(name="Second", slug=f"second-{uuid.uuid4().hex[:8]}")
+    db_session.add(organization)
+    await db_session.flush()
+    return organization
 
 
 @pytest_asyncio.fixture
@@ -161,7 +180,7 @@ async def client(db_session: AsyncSession, tmp_path) -> AsyncGenerator[AsyncClie
         yield db_session
 
     app.dependency_overrides[get_session] = override_get_session
-    app.dependency_overrides[get_session_factory] = lambda: shared_session
+    app.dependency_overrides[get_tenant_session_factory] = lambda: shared_session
     app.dependency_overrides[get_settings] = override_get_settings
     try:
         transport = ASGITransport(app=app)

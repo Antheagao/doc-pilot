@@ -17,11 +17,15 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB, TSVECTOR, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from app.db import Base
+
+class Base(DeclarativeBase):
+    pass
+
 
 # Width of document_chunks.embedding. Fixed at the column (not per row)
 # because an HNSW index needs a fixed dimension; every embedder in
@@ -76,8 +80,34 @@ def reconciliation_reason(check_id: str) -> str:
     return f"{REVIEW_REASON_RECONCILIATION_PREFIX}{check_id}"
 
 
-class Document(Base):
+class TenantMixin:
+    """The organization a content row belongs to. Code never sets it: the
+    database fills it from the transaction's tenant (the column default reads
+    the `docpilot.organization_id` setting that app/tenancy.py applies at the
+    start of every transaction), and with no tenant the default is NULL, which
+    NOT NULL refuses. app/tenancy.py also filters every ORM select, update, and
+    delete on this class to the session's organization.
+
+    A model that a worker claims across organizations (the job queue) sets
+    `__queue_scoped__`; see app.tenancy.queue_session.
+    """
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=False,
+        server_default=text("docpilot_current_organization_id()"),
+    )
+
+
+class Document(TenantMixin, Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        # The target of the composite foreign keys that tie a child row to its
+        # document's organization.
+        UniqueConstraint("id", "organization_id", name="uq_documents_id_organization_id"),
+        Index("ix_documents_organization_id_created_at", "organization_id", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -91,10 +121,27 @@ class Document(Base):
     )
 
 
-class Job(Base):
+class Job(TenantMixin, Base):
     __tablename__ = "jobs"
+    # The worker claims the oldest pending job of any organization, so it
+    # reads this table before it knows a tenant (app.tenancy.queue_session).
+    __queue_scoped__ = True
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["documents.id", "documents.organization_id"],
+            name="jobs_document_id_organization_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["ask_run_id", "organization_id"],
+            ["ask_runs.id", "ask_runs.organization_id"],
+            ondelete="CASCADE",
+            name="jobs_ask_run_id_organization_id_fkey",
+        ),
         Index("ix_jobs_state_created_at", "state", "created_at"),
+        Index("ix_jobs_organization_id", "organization_id"),
+        Index("ix_jobs_document_id_organization_id", "document_id", "organization_id"),
+        Index("ix_jobs_ask_run_id_organization_id", "ask_run_id", "organization_id"),
         # Every job is about something: a document (extract, index) or a
         # stored /ask answer (judge).
         CheckConstraint(
@@ -105,12 +152,10 @@ class Job(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    document_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True
-    )
-    ask_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("ask_runs.id", ondelete="CASCADE"), nullable=True
-    )
+    # Both keys are composite (see __table_args__) and MATCH SIMPLE: a job
+    # that has no document, or no ask run, is not checked against one.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    ask_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     state: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -130,18 +175,26 @@ class Job(Base):
     traceparent: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
-class Extraction(Base):
+class Extraction(TenantMixin, Base):
     __tablename__ = "extractions"
     # The daily budget (app/budget.py) sums today's spend on every billed
     # request; these time indexes keep that from scanning all history.
-    __table_args__ = (Index("ix_extractions_created_at", "created_at"),)
+    __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_extractions_id_organization_id"),
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["documents.id", "documents.organization_id"],
+            name="extractions_document_id_organization_id_fkey",
+        ),
+        Index("ix_extractions_created_at", "created_at"),
+        Index("ix_extractions_organization_id_created_at", "organization_id", "created_at"),
+        Index("ix_extractions_document_id_organization_id", "document_id", "organization_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
-    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String, nullable=False)
     model: Mapped[str] = mapped_column(String, nullable=False)
     raw_response: Mapped[dict] = mapped_column(JSONB, nullable=False)
@@ -162,10 +215,21 @@ class Extraction(Base):
     )
 
 
-class ExtractedField(Base):
+class ExtractedField(TenantMixin, Base):
     __tablename__ = "extracted_fields"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["extraction_id", "organization_id"],
+            ["extractions.id", "extractions.organization_id"],
+            name="extracted_fields_extraction_id_organization_id_fkey",
+        ),
         Index("ix_extracted_fields_extraction_id", "extraction_id"),
+        Index(
+            "ix_extracted_fields_organization_id_needs_review_reviewed_at",
+            "organization_id",
+            "needs_review",
+            "reviewed_at",
+        ),
         # The review-queue scan: fields with needs_review=true and
         # reviewed_at IS NULL are the pending queue (see routers/review.py).
         Index("ix_extracted_fields_review_queue", "needs_review", "reviewed_at"),
@@ -184,9 +248,7 @@ class ExtractedField(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    extraction_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("extractions.id"), nullable=False
-    )
+    extraction_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     field_name: Mapped[str] = mapped_column(String, nullable=False)
     value: Mapped[dict] = mapped_column(JSONB, nullable=False)
     confidence: Mapped[float] = mapped_column(nullable=False)
@@ -208,7 +270,7 @@ class ExtractedField(Base):
     corrected_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
-class Reconciliation(Base):
+class Reconciliation(TenantMixin, Base):
     """The arithmetic check of one extraction (app/reconcile.py): do the
     subtotal, tax, total, and line items agree? One row per extraction,
     recomputed on write by app/review_routing.refresh_reconciliation (the
@@ -226,15 +288,20 @@ class Reconciliation(Base):
     __tablename__ = "reconciliations"
     __table_args__ = (
         UniqueConstraint("extraction_id", name="uq_reconciliations_extraction_id"),
+        ForeignKeyConstraint(
+            ["extraction_id", "organization_id"],
+            ["extractions.id", "extractions.organization_id"],
+            ondelete="CASCADE",
+            name="reconciliations_extraction_id_organization_id_fkey",
+        ),
+        Index("ix_reconciliations_organization_id", "organization_id"),
         CheckConstraint("status IN ('pass', 'fail', 'skipped')", name="ck_reconciliations_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    extraction_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("extractions.id", ondelete="CASCADE"), nullable=False
-    )
+    extraction_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     rules_version: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     report: Mapped[dict] = mapped_column(JSONB, nullable=False)
@@ -243,7 +310,7 @@ class Reconciliation(Base):
     )
 
 
-class DocumentPage(Base):
+class DocumentPage(TenantMixin, Base):
     """One page of a document's text: the source the retrieval index is
     chunked from, and what a search citation's char offsets point into.
 
@@ -257,15 +324,20 @@ class DocumentPage(Base):
     __tablename__ = "document_pages"
     __table_args__ = (
         UniqueConstraint("document_id", "page_number", name="uq_document_pages_document_page"),
+        UniqueConstraint("id", "organization_id", name="uq_document_pages_id_organization_id"),
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["documents.id", "documents.organization_id"],
+            name="document_pages_document_id_organization_id_fkey",
+        ),
         Index("ix_document_pages_created_at", "created_at"),
+        Index("ix_document_pages_organization_id_created_at", "organization_id", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
-    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     # 1-based, matching how a person (and a PDF viewer) numbers pages.
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -281,7 +353,7 @@ class DocumentPage(Base):
     )
 
 
-class DocumentChunk(Base):
+class DocumentChunk(TenantMixin, Base):
     """A retrievable span of one page (app/retrieval/chunking.py).
 
     `text` is always an exact substring of its page's text --
@@ -299,7 +371,21 @@ class DocumentChunk(Base):
 
     __tablename__ = "document_chunks"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["documents.id", "documents.organization_id"],
+            name="document_chunks_document_id_organization_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["page_id", "organization_id"],
+            ["document_pages.id", "document_pages.organization_id"],
+            name="document_chunks_page_id_organization_id_fkey",
+        ),
         Index("ix_document_chunks_document_id", "document_id"),
+        # The tenant's rows by themselves: the path lexical search takes once
+        # the GIN index can no longer be used under row-level security.
+        Index("ix_document_chunks_organization_id", "organization_id"),
+        Index("ix_document_chunks_page_id_organization_id", "page_id", "organization_id"),
         Index(
             "ix_document_chunks_embedding_hnsw",
             "embedding",
@@ -313,12 +399,8 @@ class DocumentChunk(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
-    )
-    page_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("document_pages.id"), nullable=False
-    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    page_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     # Position within its page, 0-based.
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -349,7 +431,7 @@ class DocumentChunk(Base):
     )
 
 
-class AskRun(Base):
+class AskRun(TenantMixin, Base):
     """One POST /ask: the question, the agent's answer with its resolved
     citations and tool trail, and the evidence it saw -- enough to audit
     an answer, grade it later, or turn it into an eval case, without
@@ -372,7 +454,14 @@ class AskRun(Base):
     __tablename__ = "ask_runs"
     __table_args__ = (
         CheckConstraint("feedback IN ('up', 'down')", name="ck_ask_runs_feedback"),
+        UniqueConstraint("id", "organization_id", name="uq_ask_runs_id_organization_id"),
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["documents.id", "documents.organization_id"],
+            name="ask_runs_document_id_organization_id_fkey",
+        ),
         Index("ix_ask_runs_created_at", "created_at"),
+        Index("ix_ask_runs_organization_id_created_at", "organization_id", "created_at"),
         Index("ix_ask_runs_judged_at", "judged_at"),
         Index("ix_ask_runs_conversation", "conversation_id", "created_at"),
         Index("ix_ask_runs_document_id", "document_id"),
@@ -405,9 +494,7 @@ class AskRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    document_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True
-    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     feedback: Mapped[str | None] = mapped_column(String, nullable=True)

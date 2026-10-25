@@ -19,8 +19,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -30,13 +29,13 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.loop import DOCUMENT_CHAT_PROMPT, EventSink, Turn, answer_question
 from app.agent.tools import ToolContext
 from app.budget import enforce_daily_budget
 from app.config import Settings, get_settings
-from app.db import get_session, get_session_factory
+from app.db import SessionFactory, get_session, get_tenant_session_factory
 from app.evals.online import record_ask_run
 from app.extraction import ExtractionError, NonRetryableExtractionError, _build_client
 from app.langfuse_link import score_feedback
@@ -200,7 +199,7 @@ _RUNS: set[asyncio.Task] = set()
 
 
 async def stream_answer(
-    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    session_factory: SessionFactory,
     embedder: Embedder,
     settings: Settings,
     client: anthropic.AsyncAnthropic,
@@ -261,7 +260,7 @@ async def ask_stream(
     embedder: Embedder = Depends(get_embedder),
     settings: Settings = Depends(get_settings),
     client: anthropic.AsyncAnthropic | None = Depends(get_anthropic_client),
-    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
+    session_factory: SessionFactory = Depends(get_tenant_session_factory),
 ) -> StreamingResponse:
     """POST /ask, streamed. Everything that can refuse the question (a
     missing key, the daily budget, validation) is checked first and

@@ -13,6 +13,7 @@ library lands there too instead of corrupting a frame.
 import asyncio
 import logging
 import sys
+from functools import partial
 
 import anyio
 from mcp.server.stdio import stdio_server
@@ -20,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.db import async_session_maker, engine
-from app.mcp_server.server import build_server
+from app.mcp_server.server import build_server, default_principal
 from app.retrieval.embeddings import get_embedder, warm_up_embedder
 from app.telemetry import (
     configure_tracing,
@@ -28,6 +29,7 @@ from app.telemetry import (
     otlp_enabled,
     shutdown_tracing,
 )
+from app.tenancy import tenant_session
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,10 @@ async def serve() -> None:
         instrument_engine(engine)
         logger.info("tracing enabled (OTLP export)")
     server = build_server(
-        session_factory=async_session_maker, embedder=get_embedder(), settings=get_settings()
+        tenant_session_factory=partial(tenant_session, async_session_maker),
+        resolve_principal=default_principal,
+        embedder=get_embedder(),
+        settings=get_settings(),
     )
     warm_up: asyncio.Task | None = None
     try:

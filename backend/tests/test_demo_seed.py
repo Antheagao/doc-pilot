@@ -57,6 +57,7 @@ from app.models import (
 )
 from app.retrieval.embeddings import HashingEmbedder
 from app.routers.documents import ALLOWED_MIME_TYPES
+from app.tenancy import bind_tenant
 
 NOW = datetime(2026, 10, 10, 15, 30, tzinfo=UTC)
 STAGED = STAGED_REVIEW_CASES[0]
@@ -466,6 +467,24 @@ async def test_reset_and_wipe_delete_content_and_never_an_identity_row(
     assert await db_session.get(Organization, DEFAULT_ORGANIZATION_ID) is not None
     assert await sessions.lookup_session(db_session, token) is not None
     assert await api_keys.find_active_api_key(db_session, api_key_token) is not None
+
+
+@pytest.mark.usefixtures("demo_database")
+async def test_reset_deletes_only_the_bound_organizations_content(
+    db_session: AsyncSession, settings: Settings, seeded: SeedSummary, second_organization: Organization
+) -> None:
+    await bind_tenant(db_session, second_organization.id)
+    other = Document(filename="other.png", mime_type="image/png", storage_path="/tmp/o", status="extracted")
+    db_session.add(other)
+    await db_session.flush()
+    other_id = other.id
+    await bind_tenant(db_session, DEFAULT_ORGANIZATION_ID)
+
+    await reset_demo_data(db_session, settings)
+
+    assert await _count_seeded(db_session, seeded) == 0
+    await bind_tenant(db_session, second_organization.id)
+    assert (await db_session.execute(select(Document.id).where(Document.id == other_id))).scalar_one() == other_id
 
 
 @pytest.mark.usefixtures("demo_database")

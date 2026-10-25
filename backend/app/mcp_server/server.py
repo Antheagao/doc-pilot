@@ -30,7 +30,7 @@ wrong is an `isError` result the client's model can read and recover from.
 """
 
 import secrets
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from copy import deepcopy
 from importlib.metadata import version
@@ -49,6 +49,7 @@ from app.agent.tools import (
     ToolContext,
     execute_tool,
 )
+from app.auth.principal import Principal, current_principal
 from app.config import Settings
 from app.extraction_fields import PROMPTS_DIR
 from app.retrieval.embeddings import Embedder
@@ -94,7 +95,15 @@ _TOOL_ANNOTATIONS = types.ToolAnnotations(
 )
 OUTPUT_SCHEMA = McpToolOutput.model_json_schema()
 
-SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+# A session for one organization, and who is calling.
+TenantSessionFactory = Callable[[UUID], AbstractAsyncContextManager[AsyncSession]]
+PrincipalResolver = Callable[[ServerRequestContext], Awaitable[Principal]]
+
+
+async def default_principal(ctx: ServerRequestContext) -> Principal:
+    """Every call is the default organization, as every request to the API is,
+    until API keys name one."""
+    return await current_principal()
 
 
 def tool_list() -> list[types.Tool]:
@@ -264,14 +273,17 @@ def _success_result(output: McpToolOutput, max_chars: int) -> types.CallToolResu
 
 def build_server(
     *,
-    session_factory: SessionFactory,
+    tenant_session_factory: TenantSessionFactory,
+    resolve_principal: PrincipalResolver,
     embedder: Embedder,
     settings: Settings,
     document_ids: list[UUID] | None = None,
 ) -> Server:
-    """The MCP server over the agent tools. Each call opens its own session
-    from `session_factory`; `document_ids`, when given, scopes every tool to
-    those documents (None reads them all, as /ask does)."""
+    """The MCP server over the agent tools. Each call resolves its principal
+    (`resolve_principal`) and opens its own session for that principal's
+    organization from `tenant_session_factory`, so a tool sees one
+    organization's documents and no other's; `document_ids`, when given, scopes
+    every tool to those documents (None reads them all, as /ask does)."""
     tools = tool_list()
     validators = {tool.name: Draft202012Validator(tool.input_schema) for tool in tools}
     input_schemas = {tool.name: tool.input_schema for tool in tools}
@@ -292,7 +304,8 @@ def build_server(
         if problem is not None:
             return _error_result(f"Error: {problem}")
         call_id = "" if ctx.request_id is None else str(ctx.request_id)
-        async with session_factory() as session:
+        principal = await resolve_principal(ctx)
+        async with tenant_session_factory(principal.organization_id) as session:
             tool_context = ToolContext(session=session, embedder=embedder, document_ids=document_ids)
             outcome = await execute_tool(tool_context, name, arguments, call_id)
         if outcome.is_error:

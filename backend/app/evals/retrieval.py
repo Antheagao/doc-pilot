@@ -49,6 +49,7 @@ from app.models import Document, DocumentPage
 from app.retrieval.embeddings import Embedder
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
 from app.retrieval.search import SEARCH_MODES, LexicalScoring, SearchMode, search
+from app.tenancy import ephemeral_organization
 
 TEXT_DIR = EVALS_DIR / "text"
 QUERIES_PATH = EVALS_DIR / "retrieval" / "queries_v1.json"
@@ -291,6 +292,10 @@ async def run_retrieval_eval(
         )
         try:
             await session.execute(text("SET LOCAL enable_indexscan = off"))
+            # Its own organization, rolled back with the run: an eval corpus
+            # can never mix with real data, and the corpus statistics search
+            # computes (term frequencies) are the corpus's alone.
+            await ephemeral_organization(session)
 
             documents = {
                 doc.doc_id: Document(

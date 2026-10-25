@@ -37,7 +37,14 @@ from app.evals.dataset import load_cases
 from app.evals.scoring import score_case
 from app.extraction import extract_document
 from app.extraction_fields import SCHEMA_V1
-from app.models import Document, ExtractedField, Extraction, Job
+from app.models import (
+    DEFAULT_ORGANIZATION_ID,
+    Document,
+    ExtractedField,
+    Extraction,
+    Job,
+)
+from app.tenancy import tenant_session
 from app.worker import run_once
 
 pytestmark = [
@@ -132,7 +139,7 @@ async def test_live_run_once_end_to_end(live_budget) -> None:
     """
     case = load_cases(limit=1)[0]
 
-    async with async_session_maker() as session:
+    async with tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID) as session:
         document = Document(
             filename=case.image_path.name,
             mime_type=case.mime_type,
@@ -151,7 +158,7 @@ async def test_live_run_once_end_to_end(live_budget) -> None:
         claimed = await run_once(document_id=document_id)
         assert claimed is True
 
-        async with async_session_maker() as session:
+        async with tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID) as session:
             document = await session.get(Document, document_id)
             assert document.status == "extracted"
 
@@ -183,7 +190,7 @@ async def test_live_run_once_end_to_end(live_budget) -> None:
             )
             assert len(fields) > 0
     finally:
-        async with async_session_maker() as session:
+        async with tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID) as session:
             extraction_ids = select(Extraction.id).where(Extraction.document_id == document_id)
             await session.execute(
                 delete(ExtractedField).where(ExtractedField.extraction_id.in_(extraction_ids))

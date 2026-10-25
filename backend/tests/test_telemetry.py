@@ -28,10 +28,11 @@ from app.config import Settings
 from app.db import async_session_maker
 from app.extraction import extract_document, process_document_job
 from app.extraction_fields import SCHEMA_V1
-from app.models import Document, Job
+from app.models import DEFAULT_ORGANIZATION_ID, Document, Job
 from app.retrieval.embeddings import HashingEmbedder
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
 from app.retrieval.search import search
+from app.tenancy import tenant_session
 from app.transcription import transcribe_document
 from app.worker import run_once
 
@@ -262,7 +263,7 @@ async def committed_document() -> AsyncGenerator[Callable]:
     created: list[uuid.UUID] = []
 
     async def make() -> Document:
-        async with async_session_maker() as session:
+        async with tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID) as session:
             document = Document(
                 filename="t.png", mime_type="image/png", storage_path="/tmp/t", status="uploaded"
             )
@@ -273,7 +274,7 @@ async def committed_document() -> AsyncGenerator[Callable]:
 
     yield make
 
-    async with async_session_maker() as session:
+    async with tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID) as session:
         for document_id in created:
             await session.execute(delete(Job).where(Job.document_id == document_id))
             await session.execute(delete(Document).where(Document.id == document_id))
@@ -281,7 +282,7 @@ async def committed_document() -> AsyncGenerator[Callable]:
 
 
 async def _job(document_id: uuid.UUID, traceparent: str | None) -> Job:
-    async with async_session_maker() as session:
+    async with tenant_session(async_session_maker, DEFAULT_ORGANIZATION_ID) as session:
         job = Job(document_id=document_id, state="pending", traceparent=traceparent)
         session.add(job)
         await session.commit()

@@ -102,6 +102,13 @@ async def _dense_ranking(
     await session.execute(
         select(func.set_config("hnsw.ef_search", str(max(limit + _TIE_MARGIN, 40)), True))
     )
+    # The tenant filter (and the document scope) are applied to what the index
+    # yields, so a small tenant among large ones could get fewer than `limit`
+    # rows from the first ef_search candidates. An iterative scan (pgvector
+    # 0.8) keeps scanning until the filter has passed enough rows. Relaxed
+    # order may return them slightly out of order, which the outer sort below
+    # fixes.
+    await session.execute(select(func.set_config("hnsw.iterative_scan", "relaxed_order", True)))
     distance = DocumentChunk.embedding.cosine_distance(query_vector)
     # The inner query is the shape the HNSW index serves (ORDER BY distance
     # LIMIT n, filters applied to what it yields). A chunk with cosine
