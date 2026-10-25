@@ -26,7 +26,7 @@ from mcp.server.stdio import stdio_server
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
-from app.db import async_session_maker, engine, verify_tenant_isolation
+from app.db import async_session_maker, engine, name_process, verify_tenant_isolation
 from app.mcp_server.auth import StdioPrincipals
 from app.mcp_server.server import build_server
 from app.retrieval.embeddings import get_embedder, warm_up_embedder
@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 async def serve() -> int:
     """Serve until the client disconnects; returns the exit status."""
     settings = get_settings()
+    name_process("doc-pilot-mcp")
     # A host backend/.env that still names the database owner would otherwise
     # read every organization's documents; fail before the client connects.
     await verify_tenant_isolation(engine)

@@ -135,6 +135,26 @@ async def test_judge_job_writes_the_verdict_onto_the_run(
     assert client.beta.messages.create.await_count == 1
 
 
+async def test_the_langfuse_score_waits_for_the_worker_to_settle_the_job(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A judge worker whose job was reclaimed rolls its verdict back, so it must
+    not have posted the score already: the handler returns the post instead."""
+    posted: list[AskRun] = []
+    monkeypatch.setattr(online, "_build_client", lambda settings: _grader(GROUNDED))
+    monkeypatch.setattr(online, "score_judgment", posted.append)
+    run = _run()
+    job = await _stored(db_session, run)
+
+    after_done = await process_judge_job(db_session, job)
+
+    assert posted == []
+    after_done()
+    assert posted == [run]
+    # A re-delivered job with a verdict has nothing to post.
+    assert await process_judge_job(db_session, job) is None
+
+
 async def test_an_unreadable_verdict_is_recorded_not_retried(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -243,10 +263,10 @@ async def test_a_judge_job_that_fails_for_good_marks_its_run(db_session: AsyncSe
 
     run = _run(judge_sampled=True)
     job = await _stored(db_session, run)
-    job.attempts = MAX_ATTEMPTS
+    job.state, job.attempts = "processing", MAX_ATTEMPTS
     await db_session.commit()
 
-    await fail_job(db_session, job.id, NonRetryableExtractionError("unpriced model"))
+    await fail_job(db_session, job.id, MAX_ATTEMPTS, NonRetryableExtractionError("unpriced model"))
 
     await db_session.refresh(run)
     assert run.judged_at is not None and run.judge_grounded is None

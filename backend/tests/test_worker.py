@@ -1,13 +1,17 @@
 import asyncio
+import contextlib
+import logging
+import signal
 import tempfile
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, text
+from sqlalchemy import delete, func, select, text, update
 
 from app import worker as worker_module
 from app.config import Settings
@@ -17,7 +21,7 @@ from app.extraction import (
     ModelRefusalError,
     NonRetryableExtractionError,
 )
-from app.models import DEFAULT_ORGANIZATION_ID, Document, Job
+from app.models import DEFAULT_ORGANIZATION_ID, AskRun, Document, Job
 from app.tenancy import queue_session, tenant_session
 from app.worker import (
     BACKOFF_BASE,
@@ -25,6 +29,8 @@ from app.worker import (
     MAX_ATTEMPTS,
     RETRY_AFTER_MAX,
     _backoff_delay,
+    complete_job,
+    fail_job,
     pending_job_stmt,
     reclaim_orphaned_jobs,
     run_once,
@@ -646,6 +652,461 @@ async def test_stop_lets_the_job_in_hand_finish(monkeypatch) -> None:
 def test_worker_settings_are_validated() -> None:
     with pytest.raises(ValueError):
         Settings(worker_reclaim_after_seconds=-1)
+
+
+# --- two workers racing for one job: compare-and-set settling ---------------
+#
+# Every test here commits for real and uses two independent run_once calls, the
+# way two worker processes would: worker A claims a job and is held inside its
+# handler after a content write; its lease is backdated; worker B reclaims and
+# claims the job. What A does when it is finally released is the subject.
+
+
+@pytest_asyncio.fixture
+async def marked_documents() -> AsyncGenerator[str]:
+    """A marker for the filenames of the content rows a handler writes, and
+    their removal afterwards."""
+    marker = f"cas-{uuid.uuid4().hex[:12]}"
+    yield marker
+    async with _default_organization() as session:
+        await session.execute(delete(Document).where(Document.filename.like(f"{marker}%")))
+        await session.commit()
+
+
+async def _marked_filenames(marker: str) -> list[str]:
+    async with _default_organization() as session:
+        stmt = select(Document.filename).where(Document.filename.like(f"{marker}%"))
+        return sorted((await session.execute(stmt)).scalars())
+
+
+def _written_row(marker: str, who: str) -> Document:
+    return Document(
+        filename=f"{marker}-{who}", mime_type="image/png", storage_path="/tmp/cas", status="uploaded"
+    )
+
+
+async def _backdate_lease(job_id: uuid.UUID) -> None:
+    async with _default_organization() as session:
+        await session.execute(
+            update(Job).where(Job.id == job_id).values(started_at=func.now() - timedelta(hours=1))
+        )
+        await session.commit()
+
+
+class _TwoWorkers:
+    """Worker A held mid-handler, then reclaimed from and replaced by worker B."""
+
+    def __init__(self, document: Document, job: Job, marker: str, how_a_ends: str) -> None:
+        self.document, self.job, self.marker, self.how_a_ends = document, job, marker, how_a_ends
+        self.a_wrote, self.release_a = asyncio.Event(), asyncio.Event()
+        self.b_wrote, self.release_b = asyncio.Event(), asyncio.Event()
+        self.release_b.set()
+        self.a_task: asyncio.Task | None = None
+        self.b_task: asyncio.Task | None = None
+        # What each worker's after-done callback ran: only a settled job's does.
+        self.posted: list[str] = []
+
+    async def _handler_a(self, session, job) -> None:
+        session.add(_written_row(self.marker, "a"))
+        await session.flush()
+        self.a_wrote.set()
+        await self.release_a.wait()
+        if self.how_a_ends == "fails":
+            raise ExtractionError("a failed late")
+        if self.how_a_ends == "fails for good":
+            raise NonRetryableExtractionError("a failed late for good")
+        if self.how_a_ends == "is cancelled":
+            raise asyncio.CancelledError()
+        return lambda: self.posted.append("a")
+
+    async def _handler_b(self, session, job) -> None:
+        session.add(_written_row(self.marker, "b"))
+        await session.flush()
+        self.b_wrote.set()
+        await self.release_b.wait()
+        return lambda: self.posted.append("b")
+
+    async def start_a_then_reclaim_and_start_b(self, *, hold_b: bool) -> None:
+        self.a_task = asyncio.ensure_future(run_once(self._handler_a, document_id=self.document.id))
+        await asyncio.wait_for(self.a_wrote.wait(), timeout=10)
+        await _backdate_lease(self.job.id)
+        async with queue_session(async_session_maker) as session:
+            await reclaim_orphaned_jobs(session, older_than=timedelta(minutes=30))
+        assert (await _refresh_job(self.job.id)).state == "pending"
+        if hold_b:
+            self.release_b.clear()
+        self.b_task = asyncio.ensure_future(run_once(self._handler_b, document_id=self.document.id))
+        await asyncio.wait_for(self.b_wrote.wait(), timeout=10)
+
+    async def release_a_and_wait(self) -> None:
+        self.release_a.set()
+        if self.how_a_ends == "is cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await self.a_task
+        else:
+            assert await asyncio.wait_for(self.a_task, timeout=10) is True
+
+    async def finish_b(self) -> None:
+        self.release_b.set()
+        assert await asyncio.wait_for(self.b_task, timeout=10) is True
+
+    async def cancel_whatever_is_left(self) -> None:
+        for task in (self.a_task, self.b_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
+_A_ENDINGS = ["succeeds", "fails", "fails for good", "is cancelled"]
+
+
+@pytest.mark.parametrize("how_a_ends", _A_ENDINGS)
+async def test_a_stale_worker_after_the_new_claim_finished_changes_nothing(
+    real_documents: Callable,
+    marked_documents: str,
+    caplog: pytest.LogCaptureFixture,
+    how_a_ends: str,
+) -> None:
+    """A is reclaimed mid-run, B claims the job and completes it; then A is
+    released. A's settling (a completion, a failure, a permanent failure of the
+    document, a shutdown requeue) updates no row, its content write is rolled
+    back, it is logged, and B's completion and write stand, once."""
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+    workers = _TwoWorkers(document, job, marked_documents, how_a_ends)
+    caplog.set_level(logging.INFO, logger=worker_module.logger.name)
+
+    try:
+        await workers.start_a_then_reclaim_and_start_b(hold_b=False)
+        await workers.finish_b()
+        done = await _refresh_job(job.id)
+        assert (done.state, done.attempts) == ("done", 2)
+
+        await workers.release_a_and_wait()
+    finally:
+        await workers.cancel_whatever_is_left()
+
+    settled = await _refresh_job(job.id)
+    assert (settled.state, settled.attempts) == ("done", 2)
+    assert settled.finished_at == done.finished_at and settled.last_error is None
+    assert settled.run_after is None
+    assert (await _refresh_document(document.id)).status == "processing"  # never failed by A
+    assert await _marked_filenames(marked_documents) == [f"{marked_documents}-b"]
+    stale = [r for r in caplog.records if r.levelno == logging.WARNING and str(job.id) in r.getMessage()]
+    assert len(stale) == 1 and "dropped" in stale[0].getMessage()
+    completions = [r for r in caplog.records if r.getMessage() == f"completed job {job.id}"]
+    assert len(completions) == 1
+    assert workers.posted == ["b"]  # a stale worker's side effects never ran
+
+
+@pytest.mark.parametrize("how_a_ends", _A_ENDINGS)
+async def test_a_stale_worker_while_the_new_claim_runs_leaves_that_claim_alone(
+    real_documents: Callable, marked_documents: str, how_a_ends: str
+) -> None:
+    """The attempt number is what tells B's claim from A's: the job is
+    'processing' both times, so a compare-and-set on state alone would let A's
+    late failure requeue B's job, or its late completion finish it."""
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+    workers = _TwoWorkers(document, job, marked_documents, how_a_ends)
+
+    try:
+        await workers.start_a_then_reclaim_and_start_b(hold_b=True)
+        await workers.release_a_and_wait()
+
+        mid = await _refresh_job(job.id)
+        assert (mid.state, mid.attempts) == ("processing", 2)
+        assert mid.finished_at is None and mid.last_error is None and mid.run_after is None
+        assert (await _refresh_document(document.id)).status == "processing"
+
+        await workers.finish_b()
+    finally:
+        await workers.cancel_whatever_is_left()
+
+    settled = await _refresh_job(job.id)
+    assert (settled.state, settled.attempts) == ("done", 2)
+    assert await _marked_filenames(marked_documents) == [f"{marked_documents}-b"]
+    assert workers.posted == ["b"]
+
+
+async def test_a_stale_completion_is_dropped_without_touching_the_job(
+    real_documents: Callable, marked_documents: str
+) -> None:
+    """complete_job and fail_job on their own: a job that is not processing at
+    the claimed attempt is left as it is, and the session's flushed writes are
+    rolled back."""
+    document = await real_documents()
+    job = await _make_job(document.id, state="processing", attempts=2, started_at=datetime.now(UTC))
+
+    async with _default_organization() as session:
+        session.add(_written_row(marked_documents, "late"))
+        await session.flush()
+        assert await complete_job(session, job.id, attempts=1) == "stale"
+    async with _default_organization() as session:
+        session.add(_written_row(marked_documents, "late"))
+        await session.flush()
+        assert await fail_job(session, job.id, 1, ExtractionError("late")) == "stale"
+    async with _default_organization() as session:
+        assert await complete_job(session, uuid.uuid4(), attempts=1) == "stale"
+
+    unchanged = await _refresh_job(job.id)
+    assert (unchanged.state, unchanged.attempts, unchanged.last_error) == ("processing", 2, None)
+    assert await _marked_filenames(marked_documents) == []
+
+
+async def test_the_claimed_attempt_settles_its_own_claim(
+    real_documents: Callable, marked_documents: str
+) -> None:
+    document = await real_documents()
+    job = await _make_job(document.id, state="processing", attempts=2, started_at=datetime.now(UTC))
+
+    async with _default_organization() as session:
+        session.add(_written_row(marked_documents, "on-time"))
+        await session.flush()
+        assert await complete_job(session, job.id, attempts=2) == "done"
+
+    settled = await _refresh_job(job.id)
+    assert settled.state == "done" and settled.finished_at is not None
+    assert await _marked_filenames(marked_documents) == [f"{marked_documents}-on-time"]
+
+
+async def test_a_job_settled_twice_is_settled_once(real_documents: Callable) -> None:
+    """A second settling of the same claim (the first already committed) is a
+    no-op, not an overwrite: a job failed for good is not reopened by a stray
+    late completion."""
+    document = await real_documents()
+    job = await _make_job(document.id, state="processing", attempts=MAX_ATTEMPTS)
+
+    async with _default_organization() as session:
+        assert await fail_job(session, job.id, MAX_ATTEMPTS, ExtractionError("out")) == "failed"
+    async with _default_organization() as session:
+        assert await complete_job(session, job.id, MAX_ATTEMPTS) == "stale"
+
+    assert (await _refresh_job(job.id)).state == "failed"
+
+
+# --- the reclaim lease -------------------------------------------------------
+
+
+async def test_reclaim_only_resets_jobs_that_are_processing(real_documents: Callable) -> None:
+    """The sweep is one UPDATE with 'processing' and the lease in its WHERE,
+    not a select followed by a write per job: a job that finished (or was
+    requeued) since would otherwise be reset and run twice."""
+    document = await real_documents()
+    old = datetime.now(UTC) - timedelta(hours=1)
+    done = await _make_job(document.id, state="done", attempts=1, started_at=old)
+    failed = await _make_job(document.id, state="failed", attempts=3, started_at=old)
+    abandoned = await _make_job(document.id, state="processing", attempts=1, started_at=old)
+
+    async with queue_session(async_session_maker) as session:
+        assert await reclaim_orphaned_jobs(session, older_than=timedelta(minutes=30)) >= 1
+
+    assert (await _refresh_job(done.id)).state == "done"
+    assert (await _refresh_job(failed.id)).state == "failed"
+    reclaimed = await _refresh_job(abandoned.id)
+    assert (reclaimed.state, reclaimed.attempts) == ("pending", 1)
+
+
+@pytest.fixture
+def stubbed_startup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """worker.main() against the real database up to its startup sweep, with
+    everything after it (the model check, the embedder, the loop) replaced."""
+
+    async def nothing(*args, **kwargs) -> None:
+        return None
+
+    def with_settings(**overrides) -> None:
+        settings = Settings(
+            worker_heartbeat_file=str(tmp_path / "heartbeat"), worker_poll_interval=0.01, **overrides
+        )
+        monkeypatch.setattr(worker_module, "get_settings", lambda: settings)
+
+    monkeypatch.setattr(worker_module, "name_process", lambda name: None)
+    monkeypatch.setattr(worker_module, "verify_tenant_isolation", nothing)
+    monkeypatch.setattr(worker_module, "check_model_provider", lambda settings: None)
+    monkeypatch.setattr(worker_module, "warm_up_embedder", lambda: None)
+    monkeypatch.setattr(worker_module, "run_worker", nothing)
+    monkeypatch.setattr(worker_module, "shutdown_tracing", lambda: None)
+    monkeypatch.setattr(worker_module, "engine", SimpleNamespace(dispose=nothing))
+
+    async def start() -> None:
+        try:
+            await asyncio.wait_for(worker_module.main(), timeout=10)
+        finally:
+            # main() installs a SIGTERM handler on the suite's one event loop.
+            asyncio.get_running_loop().remove_signal_handler(signal.SIGTERM)
+
+    return with_settings, start
+
+
+async def test_a_starting_worker_with_a_lease_leaves_another_workers_job_alone(
+    real_documents: Callable, stubbed_startup
+) -> None:
+    with_settings, start = stubbed_startup
+    with_settings(worker_reclaim_after_seconds=600)
+    document = await real_documents()
+    now = datetime.now(UTC)
+    live = await _make_job(document.id, state="processing", attempts=1, started_at=now - timedelta(seconds=30))
+    abandoned = await _make_job(document.id, state="processing", attempts=1, started_at=now - timedelta(hours=1))
+
+    await start()
+
+    assert (await _refresh_job(live.id)).state == "processing"
+    assert (await _refresh_job(abandoned.id)).state == "pending"
+
+
+async def test_a_starting_worker_without_a_lease_reclaims_every_processing_job(
+    real_documents: Callable, stubbed_startup
+) -> None:
+    """WORKER_RECLAIM_AFTER_SECONDS=0, the single-worker dev setting: unchanged."""
+    with_settings, start = stubbed_startup
+    with_settings()
+    assert worker_module._reclaim_lease() is None
+    document = await real_documents()
+    just_started = await _make_job(
+        document.id, state="processing", attempts=1, started_at=datetime.now(UTC) - timedelta(seconds=5)
+    )
+
+    await start()
+
+    assert (await _refresh_job(just_started.id)).state == "pending"
+
+
+async def test_the_work_after_completion_runs_once_the_job_is_done(real_documents: Callable) -> None:
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+    ran: list[str] = []
+
+    async def handler(session, job):
+        job_id = job.id
+
+        def after_done() -> None:
+            ran.append(f"ran for {job_id}")
+
+        return after_done
+
+    await run_once(handler, document_id=document.id)
+
+    assert ran == [f"ran for {job.id}"]
+    assert (await _refresh_job(job.id)).state == "done"
+
+
+async def test_a_failing_after_done_callback_does_not_undo_the_job(
+    real_documents: Callable, caplog: pytest.LogCaptureFixture
+) -> None:
+    document = await real_documents()
+    job = await _make_job(document.id, state="pending")
+
+    async def handler(session, job):
+        def after_done() -> None:
+            raise RuntimeError("langfuse is down")
+
+        return after_done
+
+    assert await run_once(handler, document_id=document.id) is True
+
+    assert (await _refresh_job(job.id)).state == "done"
+    assert any("the work after its completion failed" in r.getMessage() for r in caplog.records)
+
+
+# --- the attempts cap at reclaim ---------------------------------------------
+
+
+async def _committed_judge_job(**job_fields) -> tuple[Job, AskRun]:
+    async with _default_organization() as session:
+        run = AskRun(
+            question="q", status="answered", answer="a", citations=[], tool_calls=[], evidence="e",
+            steps=1, model="m", prompt_version="agent_v1", judge_sampled=True,
+        )
+        session.add(run)
+        await session.flush()
+        job = Job(ask_run_id=run.id, kind="judge", **job_fields)
+        session.add(job)
+        await session.commit()
+        return job, run
+
+
+@pytest_asyncio.fixture
+async def judge_runs() -> AsyncGenerator[list[uuid.UUID]]:
+    run_ids: list[uuid.UUID] = []
+    yield run_ids
+    async with _default_organization() as session:
+        for run_id in run_ids:
+            await session.execute(delete(Job).where(Job.ask_run_id == run_id))
+            await session.execute(delete(AskRun).where(AskRun.id == run_id))
+        await session.commit()
+
+
+async def test_reclaim_fails_a_job_that_used_up_its_attempts_and_its_subjects(
+    real_documents: Callable, judge_runs: list[uuid.UUID], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A job that kills its worker, or outlasts the lease, every time would
+    otherwise be reclaimed and billed forever."""
+    document = await real_documents(status="processing")
+    old = datetime.now(UTC) - timedelta(hours=1)
+    spent = await _make_job(document.id, state="processing", attempts=MAX_ATTEMPTS, started_at=old)
+    below = await _make_job(document.id, state="processing", attempts=MAX_ATTEMPTS - 1, started_at=old)
+    judge, run = await _committed_judge_job(state="processing", attempts=MAX_ATTEMPTS + 2, started_at=old)
+    judge_runs.append(run.id)
+    caplog.set_level(logging.INFO, logger=worker_module.logger.name)
+
+    async with queue_session(async_session_maker) as session:
+        assert await reclaim_orphaned_jobs(session, older_than=timedelta(minutes=30)) >= 3
+
+    failed = await _refresh_job(spent.id)
+    assert failed.state == "failed" and failed.finished_at is not None and failed.attempts == MAX_ATTEMPTS
+    assert failed.last_error is not None and f"reclaimed after {MAX_ATTEMPTS} attempts" in failed.last_error
+    assert "WORKER_RECLAIM_AFTER_SECONDS" in failed.last_error
+    assert (await _refresh_document(document.id)).status == "failed"
+    requeued = await _refresh_job(below.id)
+    assert (requeued.state, requeued.attempts, requeued.last_error, requeued.finished_at) == (
+        "pending", MAX_ATTEMPTS - 1, None, None,
+    )
+    judged = await _refresh_job(judge.id)
+    assert judged.state == "failed" and f"reclaimed after {MAX_ATTEMPTS + 2} attempts" in judged.last_error
+    async with _default_organization() as session:
+        graded = await session.get(AskRun, run.id)
+    assert graded.judged_at is not None and graded.judge_grounded is None
+    assert graded.judge_error.startswith("grading failed: reclaimed after")
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    for failed_job in (spent, judge):
+        assert sum(str(failed_job.id) in message for message in warnings) == 1
+    assert not any(str(below.id) in message for message in warnings)
+
+    # The claim query never offers the failed job again.
+    async with queue_session(async_session_maker) as session:
+        offered = (await session.execute(pending_job_stmt(datetime.now(UTC), document.id))).scalars().all()
+    assert {job.id for job in offered} == {below.id}
+
+
+async def test_reclaim_leaves_a_live_job_at_the_cap_alone_under_a_lease(real_documents: Callable) -> None:
+    document = await real_documents(status="processing")
+    live = await _make_job(
+        document.id, state="processing", attempts=MAX_ATTEMPTS, started_at=datetime.now(UTC) - timedelta(seconds=30)
+    )
+
+    async with queue_session(async_session_maker) as session:
+        await reclaim_orphaned_jobs(session, older_than=timedelta(minutes=30))
+
+    assert (await _refresh_job(live.id)).state == "processing"
+    assert (await _refresh_document(document.id)).status == "processing"
+
+
+async def test_a_starting_worker_without_a_lease_applies_the_same_cap(
+    real_documents: Callable, stubbed_startup
+) -> None:
+    with_settings, start = stubbed_startup
+    with_settings()
+    document = await real_documents(status="processing")
+    spent = await _make_job(document.id, state="processing", attempts=MAX_ATTEMPTS, started_at=datetime.now(UTC))
+    below = await _make_job(document.id, state="processing", attempts=1, started_at=datetime.now(UTC))
+
+    await start()
+
+    assert (await _refresh_job(spent.id)).state == "failed"
+    assert (await _refresh_job(below.id)).state == "pending"
+    assert (await _refresh_document(document.id)).status == "failed"
 
 
 # --- job kinds (extract vs index) -------------------------------------------

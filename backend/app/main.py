@@ -17,7 +17,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.auth import passwords
 from app.auth.principal import current_principal
 from app.config import get_settings
-from app.db import async_session_maker, engine, verify_tenant_isolation
+from app.db import async_session_maker, engine, name_process, verify_tenant_isolation
 from app.extraction import check_model_provider
 from app.mcp_server.auth import ApiKeyVerifier, principal_from_request_context
 from app.mcp_server.http import McpHttpEndpoint
@@ -148,6 +148,8 @@ startup_logger = logging.getLogger("uvicorn.error")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # First, so even the isolation check's connection is attributable.
+    name_process("doc-pilot-api")
     # Before anything serves: a role that skips row-level security must stop
     # the API here, not turn the database layer off silently.
     await verify_tenant_isolation(engine)

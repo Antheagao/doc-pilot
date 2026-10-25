@@ -26,6 +26,7 @@ import random
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -149,12 +150,16 @@ def judge_question(question: str, turns: list[Turn]) -> str:
     )
 
 
-async def process_judge_job(session: AsyncSession, job: Job) -> None:
+async def process_judge_job(session: AsyncSession, job: Job) -> Callable[[], None] | None:
     """Worker handler for a 'judge' job: grade the stored answer and write
     the verdict onto its AskRun. Idempotent -- a run that already has a
     verdict (a re-delivered job) is left alone. A refusal or unreadable
     verdict is stored as judge_error rather than retried: the same input
-    would get the same output. API errors raise and retry like any job."""
+    would get the same output. API errors raise and retry like any job.
+
+    Returns the Langfuse score to post once the verdict has committed (None
+    when there is nothing to post), for the worker to call after the job
+    settles as done."""
     run = await session.get(AskRun, job.ask_run_id)
     if run is None:
         raise NonRetryableExtractionError(f"ask run {job.ask_run_id} not found")
@@ -189,4 +194,6 @@ async def process_judge_job(session: AsyncSession, job: Job) -> None:
     run.judge_error = verdict.error
     run.judged_at = datetime.now(UTC)
     await session.flush()
-    score_judgment(run)
+    # Posted by the worker once this verdict has committed with its job, never
+    # from a worker whose job was reclaimed meanwhile (app/worker.py AfterDone).
+    return partial(score_judgment, run)

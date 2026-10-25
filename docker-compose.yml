@@ -73,6 +73,12 @@ services:
       # runtime role, not the owner: the API refuses to start as a role
       # that skips row-level security (app/db.py verify_tenant_isolation).
       DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot
+      # This process's connection pool (app/db.py); the defaults are
+      # SQLAlchemy's own. Postgres allows 100 connections across every
+      # process, and each holds up to DB_POOL_SIZE + DB_MAX_OVERFLOW.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
       # Must match worker's UPLOAD_DIR -- routers/documents.py persists
       # absolute storage_path strings that the worker and the file
       # endpoint later re-open, so both containers have to resolve the
@@ -125,12 +131,19 @@ services:
     restart: unless-stopped
 
   worker:
-    # Exactly one replica -- never `docker compose up --scale worker=2`.
-    # reclaim_orphaned_jobs() runs once at worker startup (app/worker.py)
-    # and resets any 'processing' job back to 'pending', assuming any
-    # such row is a leftover from a previous run of this same process.
-    # A second concurrent worker would have that sweep steal its
-    # in-flight job.
+    # One replica here, because WORKER_RECLAIM_AFTER_SECONDS is left at 0:
+    # with no lease, reclaim_orphaned_jobs() at worker startup (app/worker.py)
+    # resets every 'processing' job to 'pending', assuming each is a leftover
+    # of the previous run of this same process, so a second concurrent worker
+    # would have that sweep steal its in-flight job.
+    # Scaling is safe once WORKER_RECLAIM_AFTER_SECONDS is set to more than
+    # the slowest job takes, including a pdf_max_pages PDF at real model
+    # latencies (nothing renews the lease while a job runs): only jobs
+    # processing longer than that are reclaimed, and a job reclaimed from a
+    # live worker is settled by compare-and-set, so the first worker's late
+    # completion is dropped. A job claimed MAX_ATTEMPTS times without
+    # settling as done is failed at reclaim instead of requeued again.
+    # Then `docker compose up --scale worker=N` is safe.
     build: ./backend
     image: doc-pilot-backend
     command: python -m app.worker
@@ -140,6 +153,16 @@ services:
     environment:
       # The runtime role: see the api service.
       DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot
+      # This process's connection pool (app/db.py); the defaults are
+      # SQLAlchemy's own. Postgres allows 100 connections across every
+      # process, and each holds up to DB_POOL_SIZE + DB_MAX_OVERFLOW.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
+      # 0 (one worker, the default): the startup sweep reclaims every
+      # 'processing' job. A lease in seconds (see the comment above) lets
+      # several workers run; app/worker.py reclaim_orphaned_jobs.
+      WORKER_RECLAIM_AFTER_SECONDS: ${WORKER_RECLAIM_AFTER_SECONDS:-0}
       # Must match api's UPLOAD_DIR -- see the comment there.
       UPLOAD_DIR: /data/uploads
       # Read by the healthcheck below as well as by the worker.

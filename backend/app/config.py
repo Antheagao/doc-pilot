@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     # it. Unset means database_url, which is only right while that is the
     # owner (a bare `alembic upgrade head` on a fresh checkout).
     migration_database_url: str | None = None
+    # The connection pool of this process's one engine (app/db.py). The
+    # defaults are SQLAlchemy's own, so setting nothing changes nothing; they
+    # are settings so a load test can size the API and the workers apart and
+    # record what it ran with. Postgres allows max_connections (100 in the
+    # compose image) across every process: each can hold up to
+    # DB_POOL_SIZE + DB_MAX_OVERFLOW. A wait for a free connection longer than
+    # DB_POOL_TIMEOUT_SECONDS raises. The floors refuse SQLAlchemy's "unlimited"
+    # spellings (a pool size of 0, an overflow of -1).
+    db_pool_size: int = Field(default=5, ge=1)
+    db_max_overflow: int = Field(default=10, ge=0)
+    db_pool_timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
     # Browser origins allowed to call the API (CORS) -- the frontend's.
     # A JSON list in the environment: CORS_ORIGINS='["https://..."]'. An
     # origin is never a wildcard (_explicit_cors_origins).
@@ -76,13 +87,20 @@ class Settings(BaseSettings):
     worker_heartbeat_file: str = Field(
         default_factory=lambda: str(Path(tempfile.gettempdir()) / "doc-pilot-worker-heartbeat")
     )
-    # Reclaiming orphaned jobs (app/worker.py). 0, the default, suits one
-    # long-lived worker (docker compose): every 'processing' job is
-    # reclaimed once, at startup. A platform that overlaps the old and new
-    # worker during a deploy (Cloud Run) sets a lease instead: only jobs
-    # that have been processing longer than this many seconds are
-    # reclaimed, at startup and then every minute -- so the new worker
-    # never steals a job the old one is still finishing.
+    # Reclaiming orphaned jobs (app/worker.py). 0, the default, suits exactly
+    # one worker (docker compose, one container): every 'processing' job is
+    # reclaimed once, at startup, on the assumption that it is a leftover of
+    # the previous run of that worker. More than one live worker (a scaled
+    # `worker` service, a deploy that overlaps the old and new worker on Cloud
+    # Run) needs a lease instead: only jobs that have been processing longer
+    # than this many seconds are reclaimed, at startup and then every minute,
+    # so a starting worker never steals a job another is still working on.
+    # Set it longer than the slowest job, including a pdf_max_pages PDF at real
+    # model latencies: nothing renews the lease while a job runs, so a job over
+    # it is handed to a second worker while the first is still running, which
+    # bills the model call twice (the first worker's late completion is
+    # refused, never applied). A job claimed MAX_ATTEMPTS times without
+    # settling as done is failed at reclaim instead of requeued again.
     worker_reclaim_after_seconds: float = Field(default=0, ge=0)
     # Model used for document extraction (app/extraction.py). Defaults to
     # the current Sonnet id -- see PRICING_PER_MTOK in that module for the

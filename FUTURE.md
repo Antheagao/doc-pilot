@@ -108,6 +108,8 @@ What remains is the workflow a company would recognize, all demoable on one mach
 - The extract_v3 tax-line rule takes a base only from the tax line itself; a base printed on its own labeled line ("Taxable amount $454.48" above "State tax 6.5% $29.54") is read as null, though the engine would accept it (B11 prep review, 2026-10-16).
 - An amount paid larger than the total is checkable even when no amount due is printed; the mutation eval misses 029's `amount_paid` misreads for lack of that check (found in the B7 review, 2026-10-15).
 
+- The worker's reclaim lease is a fixed `WORKER_RECLAIM_AFTER_SECONDS` measured from `started_at`, so it must exceed the slowest job; a `jobs.lease_renewed_at` column touched by the worker's heartbeat for the job in hand would let the lease be short and still never reclaim a live worker's job (found in the L2 review, 2026-10-25).
+
 ## Decisions needed from Anthony
 
 - **Live eval budget** for Batch B (v2 schema re-run, roughly $0.50 to $1.00 at past rates), Batch C (model-box provider eval), and Batch F (classifier eval).

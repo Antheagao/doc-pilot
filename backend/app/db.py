@@ -11,13 +11,41 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.auth.principal import Principal, current_principal
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.models import IDENTITY_TABLES, Base
 from app.tenancy import SessionFactory, bind_tenant, tenant_session
 
 settings = get_settings()
 
-engine = create_async_engine(settings.database_url)
+# What this process tells Postgres it is, so pg_stat_activity can say which
+# connections belong to the API, a worker, or an MCP server. The dict is the
+# engine's connect_args["server_settings"] itself, read at each new connection,
+# so name_process renames a process before its first connection (the engine
+# connects lazily) without rebuilding the engine. "doc-pilot" is what a script
+# or a test shows.
+_server_settings: dict[str, str] = {"application_name": "doc-pilot"}
+
+
+def build_engine(settings: Settings, server_settings: dict[str, str]) -> AsyncEngine:
+    """The one engine of a process: the pool sized by the DB_POOL_* settings
+    and `server_settings` (asyncpg's) sent on each connection."""
+    return create_async_engine(
+        settings.database_url,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout_seconds,
+        connect_args={"server_settings": server_settings},
+    )
+
+
+def name_process(application_name: str) -> None:
+    """Name this process in pg_stat_activity (`doc-pilot-api`, `doc-pilot-worker`,
+    `doc-pilot-mcp`). Each entry point calls it first, like configure_tracing:
+    only connections opened afterwards carry the name."""
+    _server_settings["application_name"] = application_name
+
+
+engine = build_engine(settings, _server_settings)
 
 async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
 

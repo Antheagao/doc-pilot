@@ -82,6 +82,8 @@ os.environ["MIGRATION_DATABASE_URL"] = OWNER_DATABASE_URL.render_as_string(hide_
 
 from tenant_rows import populate
 
+from app import main as app_main
+from app import worker as worker_module
 from app.auth.principal import (
     Principal,
     current_principal,
@@ -97,6 +99,7 @@ from app.db import (
 )
 from app.db_roles import ProvisioningError, ensure_runtime_role
 from app.main import app
+from app.mcp_server import __main__ as mcp_main
 from app.models import (
     DEFAULT_ORGANIZATION_ID,
     MEMBERSHIP_ROLE_OWNER,
@@ -209,6 +212,16 @@ async def _row_level_security_binds_the_suite() -> None:
     row-level security binds. The suite must never run with the second tenancy
     layer silently off."""
     await verify_tenant_isolation(engine)
+
+
+@pytest.fixture(autouse=True)
+def _the_suites_engine_keeps_its_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API's lifespan, worker.main and the MCP server's serve() rename the
+    process's connections (app.db.name_process); a test that runs one must not
+    rename the suite's shared engine for every test after it. The tests of the
+    naming itself (tests/test_db_engine.py) patch their own spies."""
+    for module in (app_main, worker_module, mcp_main):
+        monkeypatch.setattr(module, "name_process", lambda name: None)
 
 
 @pytest.fixture
