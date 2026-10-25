@@ -8,7 +8,9 @@ document no run scored replays its label); no model call is made. Normally run i
 It only ever touches the demo database (docpilot_demo), as the default
 organization. An empty database
 is seeded as is; a non-empty one is refused unless --reset, which replaces
-every content row and upload (accounts, sessions, and API keys are kept).
+every content row and upload and deletes the organization's sessions and API
+keys (accounts are kept). Either way it makes the demo user, an owner of the
+default organization, and prints its sign-in (public by design).
 """
 
 import argparse
@@ -24,10 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.db import async_session_maker, engine
 from app.demo_seed import (
+    DEMO_USER_EMAIL,
+    DEMO_USER_PASSWORD,
     ensure_demo_database,
     remove_stale_uploads,
     reset_demo_data,
     seed_demo_data,
+    upsert_demo_user,
 )
 from app.models import DEFAULT_ORGANIZATION_ID, Document
 from app.tenancy import tenant_session
@@ -46,6 +51,7 @@ async def run(session: AsyncSession, settings: Settings, reset: bool) -> int:
         )
         return 1
     summary = await seed_demo_data(session, settings)
+    await upsert_demo_user(session)
     # One transaction for the old rows going and the new ones arriving. The
     # old upload files go only after it commits (the seed rewrites the files
     # it needs in place, under the same names), so a failed seed leaves the
@@ -60,6 +66,7 @@ async def run(session: AsyncSession, settings: Settings, reset: bool) -> int:
         f"{summary.label_fallbacks} label fallbacks, "
         f"{summary.label_replays} label replays"
     )
+    print(f"Demo sign-in: {DEMO_USER_EMAIL} / {DEMO_USER_PASSWORD}")
     return 0
 
 

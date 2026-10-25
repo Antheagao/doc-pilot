@@ -43,6 +43,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://docpilot_runtime:docpilot_runtime@db:5432/docpilot_demo
       # The browser calls the API from the demo frontend's origin.
       CORS_ORIGINS: '["http://localhost:3100"]'
+      # Cookies ignore ports, so the dev API (8000) and this one share the
+      # cookie jar of localhost: a name of its own keeps the two sign-ins from
+      # overwriting each other.
+      SESSION_COOKIE_NAME: docpilot_demo_session
       # Hard cap on live demo spend (/ask, chat), independent of the dev
       # stack's budget; see app/budget.py.
       DAILY_BUDGET_USD: ${DEMO_DAILY_BUDGET_USD:-1.50}

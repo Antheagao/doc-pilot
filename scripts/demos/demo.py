@@ -11,7 +11,9 @@ Run from anywhere with the backend venv (stdlib only, so no install step):
 
 `record` and `check` need the `demo` extra (`pip install -e ".[dev,demo]"` in
 backend/, then `python -m playwright install chromium`) and ffmpeg on PATH;
-`record` also needs the demo stack up and seeded.
+`record` also needs the demo stack up and seeded; it signs in as the demo user
+(the seed prints the sign-in), and so do the checks of the API's documents and
+spend, so a stack seeded before auth needs `seed --reset` once.
 
 Every docker call goes through compose() below, which pins the compose
 project to PROJECT. The project name is a constant, never an argument, so
@@ -25,6 +27,7 @@ Recording is split across modules: scenarios.py (what to do), harness.py
 from __future__ import annotations
 
 import argparse
+import http.cookiejar
 import json
 import os
 import shutil
@@ -44,6 +47,10 @@ COMPOSE_FILES = ("docker-compose.yml", "docker-compose.demo.yml")
 PROJECT_LABEL = "com.docker.compose.project"
 API_URL = "http://localhost:8100"
 FRONTEND_URL = "http://localhost:3100"
+# The demo's sign-in, public by design. Repeated from backend/app/demo_seed.py
+# (this module cannot import the backend); test_demo.py compares the two.
+DEMO_USER_EMAIL = "demo@doc-pilot.local"
+DEMO_USER_PASSWORD = "docpilot-demo!"
 FRONTEND_WAIT_SECONDS = 60
 # The most a set of live takes may spend: the demo overlay's default for
 # DAILY_BUDGET_USD. A stack running with more is refused, not trusted.
@@ -269,13 +276,59 @@ def seed(args: argparse.Namespace) -> int:
     return compose(*seed_command(args.reset))
 
 
-def http_get(url: str) -> bytes | None:
-    """The body of a GET that answers 200, or None when it does not."""
+def http_get(url: str, opener: urllib.request.OpenerDirector | None = None) -> bytes | None:
+    """The body of a GET that answers 200, or None when it does not. With an
+    `opener` (authenticated_opener) the request carries its cookies."""
+    open_url = opener.open if opener is not None else urllib.request.urlopen
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        with open_url(url, timeout=5) as response:
             return response.read() if response.status == 200 else None
     except OSError:  # URLError is an OSError
         return None
+
+
+SIGN_IN_HINTS = {
+    401: "the demo user does not exist or has another password: run `demo.py seed --reset`",
+    403: "the API's CORS_ORIGINS does not list the frontend's origin",
+    429: "too many sign-in attempts: wait a minute",
+}
+
+
+def sign_in_opener() -> urllib.request.OpenerDirector:
+    """An opener that signed in to the demo API as the demo user and keeps the
+    session cookie in a CookieJar. The login is a cookie-authenticated write,
+    so it names the frontend's origin like the browser does; the API refuses
+    one that is not in its CORS_ORIGINS."""
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    )
+    request = urllib.request.Request(
+        f"{API_URL}/auth/login",
+        data=json.dumps({"email": DEMO_USER_EMAIL, "password": DEMO_USER_PASSWORD}).encode(),
+        headers={"Content-Type": "application/json", "Origin": FRONTEND_URL},
+        method="POST",
+    )
+    try:
+        with opener.open(request, timeout=10):
+            pass
+    except urllib.error.HTTPError as exc:
+        hint = SIGN_IN_HINTS.get(exc.code, "see the API's log")
+        raise CliError(f"signing in to {API_URL} as the demo user failed (HTTP {exc.code}): {hint}") from exc
+    except OSError as exc:
+        raise CliError(f"could not reach {API_URL}/auth/login: {exc}") from exc
+    return opener
+
+
+_opener: urllib.request.OpenerDirector | None = None
+
+
+def authenticated_opener() -> urllib.request.OpenerDirector:
+    """The signed-in opener, made on first use and kept for the run: a session
+    lasts 12 hours, and the API allows five sign-ins a minute per account."""
+    global _opener
+    if _opener is None:
+        _opener = sign_in_opener()
+    return _opener
 
 
 def readiness_problems(
@@ -297,7 +350,7 @@ def readiness_problems(
 
 def ensure_stack_ready() -> None:
     api_ok = http_get(f"{API_URL}/healthz") is not None
-    documents = http_get(f"{API_URL}/documents") if api_ok else None
+    documents = http_get(f"{API_URL}/documents", authenticated_opener()) if api_ok else None
     document_count = len(json.loads(documents)) if documents else 0
     frontend_ok = http_get(FRONTEND_URL) is not None
     problems = readiness_problems(api_ok, frontend_ok, document_count)
@@ -324,7 +377,7 @@ def api_has_key() -> bool:
 def budget_state() -> tuple[float | None, float]:
     """(daily budget, spent today) in USD from the demo API's /stats; the
     budget is None when the cap is off."""
-    body = http_get(f"{API_URL}/stats")
+    body = http_get(f"{API_URL}/stats", authenticated_opener())
     if body is None:
         raise CliError(f"could not read {API_URL}/stats")
     budget = json.loads(body)["budget"]
@@ -405,7 +458,13 @@ def record(args: argparse.Namespace) -> int:
         try:
             from harness import recording
 
-            with recording(slug, FRONTEND_URL, OUT_DIR) as rec:
+            with recording(
+                slug,
+                FRONTEND_URL,
+                OUT_DIR,
+                email=DEMO_USER_EMAIL,
+                password=DEMO_USER_PASSWORD,
+            ) as rec:
                 SCENARIOS[slug](rec.page, rec)
         except ModuleNotFoundError as exc:
             if exc.name != "playwright":

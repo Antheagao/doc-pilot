@@ -24,6 +24,14 @@ Everything destructive is bound to the demo database by name
 database lives on the same Docker host: a reset or seed against any other
 database refuses.
 
+The demo has one sign-in, DEMO_USER_EMAIL with DEMO_USER_PASSWORD, an owner of
+the default organization (upsert_demo_user). The password is public by design:
+it is committed here, printed by scripts/seed_demo.py, and read by
+scripts/demos/demo.py, and it can only ever be set on the demo database,
+because the same guards as the reset stand in front of the user's creation.
+A reset deletes the content, and the sessions and API keys of the organization
+it is bound to, never an account.
+
 Like app/evals/corpus.py, nothing here commits: the caller owns the
 transaction. Unlike corpus.py the extraction is NOT label-perfect, which is
 why the agent eval keeps using seed_labeled_corpus.
@@ -41,6 +49,7 @@ from typing import Any
 from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import accounts
 from app.budget import day_start
 from app.config import Settings, resolve_upload_dir
 from app.db import Base
@@ -50,17 +59,24 @@ from app.evals.retrieval import load_gold_corpus
 from app.extraction import build_extracted_fields
 from app.extraction_fields import SCHEMA_V2, SCHEMAS, ExtractionSchema, schema_for
 from app.models import (
+    DEFAULT_ORGANIZATION_ID,
     IDENTITY_TABLES,
+    MEMBERSHIP_ROLE_OWNER,
     REVIEW_REASON_CONFIDENCE,
+    ApiKey,
+    AuthSession,
     Document,
     DocumentPage,
     ExtractedField,
     Extraction,
+    Membership,
+    User,
 )
 from app.retrieval.embeddings import Embedder, build_embedder
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
 from app.review_routing import refresh_reconciliation
 from app.routers.documents import ALLOWED_MIME_TYPES
+from app.tenancy import TENANT_KEY
 
 RESULTS_DIR = EVALS_DIR / "results"
 REPLAY_ARTIFACT = RESULTS_DIR / "20260731T064853Z_claude-sonnet-5_extract_v1.json"
@@ -68,6 +84,13 @@ REPLAY_ARTIFACT = RESULTS_DIR / "20260731T064853Z_claude-sonnet-5_extract_v1.jso
 # What a document that no run scored shows as its model: its label, replayed.
 LABEL_REPLAY_MODEL = "gold-label"
 LABEL_REPLAY_PROMPT_VERSION = SCHEMA_V2.prompt_version
+
+# The demo's one sign-in. Public on purpose: the demo database holds only the
+# committed eval corpus and the password is printed by the seed. They are plain
+# literals because scripts/demos/demo.py, which cannot import the backend,
+# repeats them and a test compares the two by reading this file's syntax tree.
+DEMO_USER_EMAIL = "demo@doc-pilot.local"
+DEMO_USER_PASSWORD = "docpilot-demo!"
 
 # Random but fixed: changing it changes every demo document id.
 DEMO_NAMESPACE = uuid.UUID("5f0c1d6e-7a3b-4c52-9e8d-2b4f6a1c3d70")
@@ -434,29 +457,47 @@ def _unreferenced_uploads(upload_dir: Path, keep: set[Path]) -> list[Path]:
 async def _delete_rows(session: AsyncSession) -> None:
     # Row deletes, children first: unlike TRUNCATE they take only row locks,
     # so they cannot deadlock with a parallel session on the same database.
-    # Content tables only: the accounts, sessions, and keys (IDENTITY_TABLES)
-    # are not demo data, and wiping them would sign everyone out. They are ORM
-    # deletes so they are scoped to the session's organization.
+    # Content tables, then the bound organization's sessions and API keys (an
+    # old key or cookie has no business surviving a reset). The accounts,
+    # memberships, and organizations (the rest of IDENTITY_TABLES) are not demo
+    # data and are kept. The content deletes are ORM deletes, so they are scoped
+    # to the session's organization; the identity tables have no scope of their
+    # own, so the organization is named.
     classes = {mapper.local_table: mapper.class_ for mapper in Base.registry.mappers}
     for table in reversed(Base.metadata.sorted_tables):
         if table.name not in IDENTITY_TABLES:
             await session.execute(
                 delete(classes[table]).execution_options(synchronize_session=False)
             )
+    # The content deletes above refuse a session with no organization, so it
+    # is bound by here.
+    organization_id = session.info[TENANT_KEY]
+    for model in (AuthSession, ApiKey):
+        await session.execute(
+            delete(model)
+            .where(model.organization_id == organization_id)
+            .execution_options(synchronize_session=False)
+        )
 
 
 async def _wipe(session: AsyncSession, upload_dir: Path) -> None:
-    """Delete every content row and every upload file, with no identity checks
-    (reset_demo_data and remove_stale_uploads are the guarded entry points)."""
+    """Delete every content row, the bound organization's sessions and API keys,
+    and every upload file, with no identity checks (reset_demo_data and
+    remove_stale_uploads are the guarded entry points)."""
     stale = _unreferenced_uploads(upload_dir, set())
     await _delete_rows(session)
     for path in stale:
         path.unlink()
 
 
+def _require_demo_env() -> None:
+    if os.environ.get(DEMO_ENV_VAR) != "1":
+        raise RuntimeError(f"refusing to touch this database: {DEMO_ENV_VAR}=1 is not set")
+
+
 async def reset_demo_data(session: AsyncSession, settings: Settings) -> None:
-    """Delete every content row (never an account, session, or API key), in the
-    caller's transaction. Refuses unless the
+    """Delete every content row, and the bound organization's sessions and API
+    keys (never an account), in the caller's transaction. Refuses unless the
     session is bound to the demo database and DOCPILOT_DEMO=1 (only the demo
     seed service sets it), and unless the upload directory holds nothing but
     uploads.
@@ -466,10 +507,41 @@ async def reset_demo_data(session: AsyncSession, settings: Settings) -> None:
     the old database and its images intact together.
     """
     await ensure_demo_database(session)
-    if os.environ.get(DEMO_ENV_VAR) != "1":
-        raise RuntimeError("refusing to reset this database")
+    _require_demo_env()
     _unreferenced_uploads(resolve_upload_dir(settings), set())
     await _delete_rows(session)
+
+
+async def upsert_demo_user(session: AsyncSession) -> User:
+    """Make DEMO_USER_EMAIL an enabled owner of the default organization who
+    signs in with DEMO_USER_PASSWORD, in the caller's transaction. A user that
+    exists keeps its row and has its password reset (which ends its sessions),
+    its disabled mark cleared, and its role set to owner. Refuses on any
+    database but the demo one, like the reset: the password is public, so no
+    other database may ever hold an account with it."""
+    await ensure_demo_database(session)
+    _require_demo_env()
+    try:
+        user = await accounts.get_user(session, DEMO_USER_EMAIL)
+    except accounts.AccountError:
+        user = await accounts.create_user(
+            session, email=DEMO_USER_EMAIL, password=DEMO_USER_PASSWORD
+        )
+    else:
+        user.disabled_at = None
+        await accounts.set_password(session, user, DEMO_USER_PASSWORD)
+    membership = await session.get(Membership, (DEFAULT_ORGANIZATION_ID, user.id))
+    if membership is None:
+        await accounts.add_membership(
+            session,
+            organization_id=DEFAULT_ORGANIZATION_ID,
+            user_id=user.id,
+            role=MEMBERSHIP_ROLE_OWNER,
+        )
+    else:
+        membership.role = MEMBERSHIP_ROLE_OWNER
+        await session.flush()
+    return user
 
 
 def remove_stale_uploads(settings: Settings, summary: SeedSummary) -> None:

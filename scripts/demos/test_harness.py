@@ -5,6 +5,7 @@ Playwright is never imported (run: python -m pytest ../scripts/demos -q).
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import harness
@@ -193,3 +194,90 @@ def test_scroll_to_wheels_the_element_to_the_top_margin(tmp_path: Path) -> None:
     assert sum(dy for _, dy in page.moves) == 500 - harness.TOP_MARGIN_PX
     with pytest.raises(RuntimeError, match="no bounding box"):
         rec.scroll_to(FakeLocator(None))  # type: ignore[arg-type]
+
+
+class FakeField:
+    def __init__(self, calls: list[tuple], name: str) -> None:
+        self.calls = calls
+        self.name = name
+
+    def fill(self, value: str) -> None:
+        self.calls.append(("fill", self.name, value))
+
+    def press(self, key: str) -> None:
+        self.calls.append(("press", self.name, key))
+
+
+class FakeBanner:
+    def __init__(self, text: str | None) -> None:
+        self.text = text
+
+    def count(self) -> int:
+        return 0 if self.text is None else 1
+
+    def inner_text(self) -> str:
+        assert self.text is not None
+        return self.text
+
+
+class SignInPage:
+    """The login page: records what the harness does, and either lands on the
+    home page or times out with `banner` showing."""
+
+    def __init__(self, banner: str | None = None) -> None:
+        self.calls: list[tuple] = []
+        self.banner = banner
+
+    def goto(self, url: str) -> None:
+        self.calls.append(("goto", url))
+
+    def get_by_label(self, label: str, exact: bool = False) -> FakeField:
+        assert exact
+        return FakeField(self.calls, label)
+
+    def wait_for_url(self, url: str, timeout: float) -> None:
+        self.calls.append(("wait_for_url", url, timeout))
+        if self.banner is not None:
+            raise TimeoutError("page.wait_for_url")
+
+    def wait_for_load_state(self, state: str) -> None:
+        self.calls.append(("wait_for_load_state", state))
+
+    def locator(self, selector: str) -> FakeBanner:
+        assert selector == "#login-error .error-banner"
+        return FakeBanner(self.banner)
+
+
+def test_sign_in_goes_through_the_login_page_and_waits_for_home() -> None:
+    page = SignInPage()
+    harness.sign_in(page, "http://x:3100", "me@example.com", "pw")  # type: ignore[arg-type]
+    assert page.calls == [
+        ("goto", "http://x:3100/login"),
+        ("fill", "Email", "me@example.com"),
+        ("fill", "Password", "pw"),
+        ("press", "Password", "Enter"),
+        ("wait_for_url", "http://x:3100/", harness.SIGN_IN_TIMEOUT_MS),
+        ("wait_for_load_state", "networkidle"),
+    ]
+
+
+def test_a_refused_sign_in_says_why_instead_of_timing_out_on_the_address() -> None:
+    page = SignInPage(banner="The email or password is incorrect.")
+    with pytest.raises(RuntimeError, match="me@example.com failed: The email or password is incorrect"):
+        harness.sign_in(page, "http://x:3100", "me@example.com", "pw")  # type: ignore[arg-type]
+    assert ("wait_for_load_state", "networkidle") not in page.calls
+
+
+def test_a_sign_in_with_no_banner_reports_no_answer() -> None:
+    class Silent(SignInPage):
+        def wait_for_url(self, url: str, timeout: float) -> None:
+            raise TimeoutError("page.wait_for_url")
+
+    with pytest.raises(RuntimeError, match="no answer from the API"):
+        harness.sign_in(Silent(), "http://x", "a@b.c", "pw")  # type: ignore[arg-type]
+
+
+def test_a_recording_cannot_start_without_credentials() -> None:
+    parameters = inspect.signature(harness.recording).parameters
+    assert parameters["email"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["password"].default is inspect.Parameter.empty

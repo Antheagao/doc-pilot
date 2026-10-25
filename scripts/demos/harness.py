@@ -11,6 +11,9 @@ below), because a headless recording has no real cursor. Time compression
 is never hidden: `with rec.fast_forward(4):` speeds that stretch up in the
 encode and shows an "4x" chip on the page while it is active.
 
+Every recording starts signed in as the demo user: sign_in() goes through the
+login page before the screencast starts, so no frame shows it.
+
 The recording is the page.screencast frame stream, saved as JPEG files
 (quality 100) with their timestamps, not Playwright's WebM: that video is
 VP8 encoded in real time, and its encoder noise on every text edge makes
@@ -53,6 +56,8 @@ SCROLL_STEP_PX = 24  # per wheel tick of Recording.scroll
 SCROLL_TICK_MS = 16
 END_HOLD = 1.5  # seconds on the final state before the video ends
 TOP_MARGIN_PX = 80  # where scroll_to and open(start_at=) leave an element
+
+SIGN_IN_TIMEOUT_MS = 20_000
 
 # Seconds added to the measured first-paint time: a frame needs a moment
 # to reach the screen.
@@ -153,6 +158,29 @@ def new_context(browser: Browser) -> BrowserContext:
     )
     context.add_init_script(OVERLAY_SCRIPT)
     return context
+
+
+def sign_in(page: Page, frontend_url: str, email: str, password: str) -> None:
+    """Sign in through the frontend's login page and wait for the home page it
+    returns to. The browser context keeps the API's session cookie, so every
+    page a scenario opens afterwards is signed in. A refusal raises with the
+    page's own message instead of timing out on the address.
+
+    Enter submits (no mouse move, so the recording overlay never draws a
+    cursor), and only the form's Suspense fallback exists before hydration, so
+    filling the fields waits for the page to be ready to handle the submit."""
+    page.goto(f"{frontend_url}/login")
+    page.get_by_label("Email", exact=True).fill(email)
+    password_field = page.get_by_label("Password", exact=True)
+    password_field.fill(password)
+    password_field.press("Enter")
+    try:
+        page.wait_for_url(f"{frontend_url}/", timeout=SIGN_IN_TIMEOUT_MS)
+    except Exception as exc:
+        banner = page.locator("#login-error .error-banner")
+        reason = banner.inner_text() if banner.count() else "no answer from the API"
+        raise RuntimeError(f"signing in as {email} failed: {reason}") from exc
+    page.wait_for_load_state("networkidle")
 
 
 class Recording:
@@ -345,10 +373,12 @@ class Recording:
 
 
 @contextmanager
-def recording(slug: str, base_url: str, out_dir: Path = OUT_DIR) -> Iterator[Recording]:
-    """Launch Chromium and record the `with` body. On exit the frames are in
-    <out_dir>/<slug>.frames/ with their list in frames.txt, and the sidecar
-    is <out_dir>/<slug>.json."""
+def recording(
+    slug: str, base_url: str, out_dir: Path = OUT_DIR, *, email: str, password: str
+) -> Iterator[Recording]:
+    """Launch Chromium, sign in, and record the `with` body. On exit the frames
+    are in <out_dir>/<slug>.frames/ with their list in frames.txt, and the
+    sidecar is <out_dir>/<slug>.json."""
     from playwright.sync_api import sync_playwright
 
     frames_dir = out_dir / f"{slug}.frames"
@@ -360,6 +390,8 @@ def recording(slug: str, base_url: str, out_dir: Path = OUT_DIR) -> Iterator[Rec
             context = new_context(browser)
             try:
                 page = context.new_page()
+                # Before the screencast starts, so no frame shows the form.
+                sign_in(page, base_url, email, password)
                 rec = Recording(page, slug, base_url, frames_dir)
                 page.screencast.start(
                     on_frame=rec.capture, quality=FRAME_QUALITY, size=VIEWPORT

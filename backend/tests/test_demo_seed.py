@@ -17,14 +17,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
+from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import demo_seed
-from app.auth import accounts, api_keys, sessions
+from app.auth import accounts, api_keys, passwords, sessions
 from app.budget import day_start, spent_today_usd
 from app.config import BACKEND_DIR, Settings
 from app.demo_seed import (
+    DEMO_USER_EMAIL,
+    DEMO_USER_PASSWORD,
     HISTORY_DAYS,
     LABEL_REPLAY_MODEL,
     REPLAY_ARTIFACT,
@@ -37,6 +40,7 @@ from app.demo_seed import (
     remove_stale_uploads,
     reset_demo_data,
     seed_demo_data,
+    upsert_demo_user,
 )
 from app.evals.checks import label_tool_input
 from app.evals.dataset import load_cases
@@ -44,6 +48,8 @@ from app.extraction_fields import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3
 from app.models import (
     DEFAULT_ORGANIZATION_ID,
     IDENTITY_TABLES,
+    MEMBERSHIP_ROLE_MEMBER,
+    MEMBERSHIP_ROLE_OWNER,
     ApiKey,
     AuthSession,
     Document,
@@ -433,40 +439,167 @@ async def test_reset_deletes_rows_and_leaves_the_files_for_after_the_commit(
 
 
 @pytest.mark.usefixtures("demo_database")
-async def test_reset_and_wipe_delete_content_and_never_an_identity_row(
-    db_session: AsyncSession, settings: Settings, seeded: SeedSummary, tmp_path
+async def test_reset_and_wipe_delete_content_sessions_and_keys_and_never_an_account(
+    db_session: AsyncSession, settings: Settings, seeded: SeedSummary, tmp_path, second_organization: Organization
 ) -> None:
     user = await accounts.create_user(db_session, email="ada@example.com", password="correct horse battery")
-    membership = await accounts.add_membership(
-        db_session, organization_id=DEFAULT_ORGANIZATION_ID, user_id=user.id, role="owner"
-    )
-    token = await sessions.create_session(
-        db_session, user_id=user.id, organization_id=membership.organization_id, ttl=timedelta(hours=1)
-    )
-    _, api_key_token = await api_keys.create_api_key(
-        db_session, organization_id=DEFAULT_ORGANIZATION_ID, name="demo"
-    )
+    for organization_id in (DEFAULT_ORGANIZATION_ID, second_organization.id):
+        await accounts.add_membership(
+            db_session, organization_id=organization_id, user_id=user.id, role="owner"
+        )
+    tokens, keys = {}, {}
+    for organization_id in (DEFAULT_ORGANIZATION_ID, second_organization.id):
+        tokens[organization_id] = await sessions.create_session(
+            db_session, user_id=user.id, organization_id=organization_id, ttl=timedelta(hours=1)
+        )
+        _, keys[organization_id] = await api_keys.create_api_key(
+            db_session, organization_id=organization_id, name="demo"
+        )
 
-    async def identity_rows() -> list[int]:
+    async def account_rows() -> list[int]:
         counts = []
-        for model in (Organization, User, Membership, AuthSession, ApiKey):
+        for model in (Organization, User, Membership):
             assert model.__tablename__ in IDENTITY_TABLES
             counts.append((await db_session.execute(select(func.count()).select_from(model))).scalar_one())
         return counts
 
-    before = await identity_rows()
-    assert all(count >= 1 for count in before)
+    async def other_organizations_credentials() -> list[int]:
+        return [
+            (
+                await db_session.execute(
+                    select(func.count())
+                    .select_from(model)
+                    .where(model.organization_id != DEFAULT_ORGANIZATION_ID)
+                )
+            ).scalar_one()
+            for model in (AuthSession, ApiKey)
+        ]
+
+    accounts_before = await account_rows()
+    others_before = await other_organizations_credentials()
+    assert all(count >= 1 for count in accounts_before + others_before)
+
+    async def credentials_gone(token: str, key: str) -> bool:
+        return (
+            await sessions.lookup_session(db_session, token) is None
+            and await api_keys.find_active_api_key(db_session, key) is None
+        )
+
+    async def second_credentials_kept() -> bool:
+        return (
+            await sessions.lookup_session(db_session, tokens[second_organization.id]) is not None
+            and await api_keys.find_active_api_key(db_session, keys[second_organization.id]) is not None
+        )
 
     await reset_demo_data(db_session, settings)
     assert await _count_seeded(db_session, seeded) == 0
-    assert await identity_rows() == before
+    assert await account_rows() == accounts_before
+    assert await credentials_gone(tokens[DEFAULT_ORGANIZATION_ID], keys[DEFAULT_ORGANIZATION_ID])
+    assert await other_organizations_credentials() == others_before
+    assert await second_credentials_kept()
+    assert await db_session.get(Organization, DEFAULT_ORGANIZATION_ID) is not None
 
+    # _wipe deletes the same rows: put the default organization's credentials back first.
+    token = await sessions.create_session(
+        db_session, user_id=user.id, organization_id=DEFAULT_ORGANIZATION_ID, ttl=timedelta(hours=1)
+    )
+    _, key = await api_keys.create_api_key(db_session, organization_id=DEFAULT_ORGANIZATION_ID, name="again")
     await seed_demo_data(db_session, settings, HashingEmbedder(), now=NOW)
     await _wipe(db_session, tmp_path)
-    assert await identity_rows() == before
-    assert await db_session.get(Organization, DEFAULT_ORGANIZATION_ID) is not None
-    assert await sessions.lookup_session(db_session, token) is not None
-    assert await api_keys.find_active_api_key(db_session, api_key_token) is not None
+    assert await account_rows() == accounts_before
+    assert await credentials_gone(token, key)
+    assert await second_credentials_kept()
+
+
+def test_the_demo_password_is_public_and_fourteen_characters_the_api_accepts() -> None:
+    assert len(DEMO_USER_PASSWORD) == 14
+    passwords.check_password_length(DEMO_USER_PASSWORD)
+    assert accounts.canonical_email(DEMO_USER_EMAIL) == DEMO_USER_EMAIL == "demo@doc-pilot.local"
+
+
+async def _sign_in(client: AsyncClient, email: str, password: str):
+    return await client.post(
+        "/auth/login",
+        json={"email": email, "password": password},
+        headers={"Origin": "http://localhost:3000"},
+    )
+
+
+@pytest.mark.usefixtures("demo_database")
+async def test_the_demo_user_exists_owns_the_default_organization_and_signs_in(
+    db_session: AsyncSession, anon_client: AsyncClient
+) -> None:
+    user = await upsert_demo_user(db_session)
+
+    membership = await db_session.get(Membership, (DEFAULT_ORGANIZATION_ID, user.id))
+    assert membership is not None and membership.role == MEMBERSHIP_ROLE_OWNER
+    assert user.email == DEMO_USER_EMAIL and user.disabled_at is None
+
+    response = await _sign_in(anon_client, DEMO_USER_EMAIL, DEMO_USER_PASSWORD)
+    assert response.status_code == 200
+    assert response.json()["organization"]["role"] == MEMBERSHIP_ROLE_OWNER
+    assert (await anon_client.get("/documents")).status_code == 200
+    assert (await _sign_in(anon_client, DEMO_USER_EMAIL, "not the password")).status_code == 401
+
+
+@pytest.mark.usefixtures("demo_database")
+async def test_upserting_again_resets_a_changed_demo_user_and_ends_its_sessions(
+    db_session: AsyncSession, anon_client: AsyncClient, second_organization: Organization
+) -> None:
+    user = await upsert_demo_user(db_session)
+    user_id, second_id = user.id, second_organization.id
+    await accounts.set_password(db_session, user, "a password someone chose")
+    user.disabled_at = datetime.now(UTC)
+    membership = await db_session.get(Membership, (DEFAULT_ORGANIZATION_ID, user_id))
+    membership.role = MEMBERSHIP_ROLE_MEMBER
+    await accounts.add_membership(
+        db_session, organization_id=second_id, user_id=user_id, role=MEMBERSHIP_ROLE_MEMBER
+    )
+    token = await sessions.create_session(
+        db_session, user_id=user_id, organization_id=DEFAULT_ORGANIZATION_ID, ttl=timedelta(hours=1)
+    )
+    await db_session.flush()
+    assert (await _sign_in(anon_client, DEMO_USER_EMAIL, DEMO_USER_PASSWORD)).status_code == 401
+
+    again = await upsert_demo_user(db_session)
+
+    assert again.id == user_id
+    assert (
+        await db_session.execute(select(func.count()).select_from(User).where(User.email == DEMO_USER_EMAIL))
+    ).scalar_one() == 1
+    assert again.disabled_at is None
+    assert await sessions.lookup_session(db_session, token) is None
+    assert (await _sign_in(anon_client, DEMO_USER_EMAIL, DEMO_USER_PASSWORD)).status_code == 200
+    db_session.expire_all()
+    assert (await db_session.get(Membership, (DEFAULT_ORGANIZATION_ID, user_id))).role == MEMBERSHIP_ROLE_OWNER
+    # Only the default organization's role is the demo's to set.
+    other = await db_session.get(Membership, (second_id, user_id))
+    assert other.role == MEMBERSHIP_ROLE_MEMBER
+
+
+async def test_the_demo_user_is_only_ever_made_on_the_demo_database(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def demo_users() -> int:
+        stmt = select(func.count()).select_from(User).where(User.email == DEMO_USER_EMAIL)
+        return (await db_session.execute(stmt)).scalar_one()
+
+    before = await demo_users()
+    # The env var alone is not enough: this is docpilot_test, not the demo database.
+    monkeypatch.setenv("DOCPILOT_DEMO", "1")
+    with pytest.raises(RuntimeError, match="docpilot_test"):
+        await upsert_demo_user(db_session)
+
+    # Right database, but the env var is missing or not "1".
+    monkeypatch.setattr(demo_seed, "DEMO_DATABASE_NAME", "docpilot_test")
+    for value in (None, "0"):
+        if value is None:
+            monkeypatch.delenv("DOCPILOT_DEMO", raising=False)
+        else:
+            monkeypatch.setenv("DOCPILOT_DEMO", value)
+        with pytest.raises(RuntimeError, match="refusing"):
+            await upsert_demo_user(db_session)
+    assert await demo_users() == before
 
 
 @pytest.mark.usefixtures("demo_database")
@@ -545,8 +678,16 @@ async def test_cli_refuses_a_non_empty_database_without_reset_and_replaces_it_wi
     assert "Seeded 32 documents, 58 fields pending review (3 staged)" in out
     assert "replayed cost $0.5258" in out
     assert "0 label fallbacks, 0 label replays" in out
+    assert f"Demo sign-in: {DEMO_USER_EMAIL} / {DEMO_USER_PASSWORD}" in out
     assert (await db_session.execute(select(func.count()).select_from(Document))).scalar_one() == 32
     assert len(list(tmp_path.iterdir())) == 32
+    user = await accounts.get_user(db_session, DEMO_USER_EMAIL)
+    assert (await db_session.get(Membership, (DEFAULT_ORGANIZATION_ID, user.id))).role == MEMBERSHIP_ROLE_OWNER
+
+    # Resetting again keeps the one user and still prints the sign-in.
+    assert await cli.run(db_session, settings, reset=True) == 0
+    assert "Demo sign-in:" in capsys.readouterr().out
+    assert (await accounts.get_user(db_session, DEMO_USER_EMAIL)).id == user.id
 
 
 async def test_seed_reconciles_every_extraction_and_only_the_staged_misreads_fail(
