@@ -11,6 +11,8 @@ Run from anywhere with the backend venv (stdlib only, so no install step):
     backend/.venv/bin/python scripts/load/load.py run --profile zero --scale 1 --label L [--quick]
     backend/.venv/bin/python scripts/load/load.py smoke
     backend/.venv/bin/python scripts/load/load.py validate FILE [--publishable]
+    backend/.venv/bin/python scripts/load/load.py report --update-readme
+    backend/.venv/bin/python scripts/load/load.py report --from DIR [--out DIR]
 
 The stack runs the production image against a scripted model (no model API is
 ever called) in its own compose project, with its own database `docpilot_load`
@@ -65,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import artifact
 import phases
+import report
 import samplers
 import workload
 from compose_project import (
@@ -75,6 +78,7 @@ from compose_project import (
     declared_volume_names,
 )
 from phases import PhaseError
+from report import ReportError
 
 PROJECT = "doc-pilot-load"
 COMPOSE_FILES = ("docker-compose.yml", "docker-compose.load.yml")
@@ -1126,6 +1130,10 @@ def validate_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def report_command(args: argparse.Namespace) -> int:
+    return report.report_command(update_readme=args.update_readme, source=args.source, out=args.out)
+
+
 # --- the command line --------------------------------------------------------
 
 
@@ -1205,6 +1213,26 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--publishable", action="store_true", help="also refuse a dirty tree, an invalid phase, a quick run")
     validate_parser.set_defaults(run=validate_command)
 
+    report_parser = commands.add_parser(
+        "report",
+        help="render the README Performance tables and charts from the load artifacts",
+    )
+    which = report_parser.add_mutually_exclusive_group(required=True)
+    which.add_argument(
+        "--update-readme",
+        action="store_true",
+        help=f"rewrite the PERF_TABLE region of README.md and {repo_path(report.CHART_DIR)} from "
+        f"{repo_path(RESULTS_DIR)}; refuses an artifact that is not publishable",
+    )
+    which.add_argument(
+        "--from",
+        dest="source",
+        metavar="DIR",
+        help="development: render the artifacts in DIR (dry runs included) to a scratch directory; never the README",
+    )
+    report_parser.add_argument("--out", help="with --from: the scratch directory (default a new temporary one)")
+    report_parser.set_defaults(run=report_command)
+
     return parser
 
 
@@ -1216,7 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
     args.argv = list(sys.argv[1:] if argv is None else argv)
     try:
         return args.run(args)
-    except (CliError, PhaseError) as exc:
+    except (CliError, PhaseError, ReportError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
