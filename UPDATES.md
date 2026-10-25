@@ -25,6 +25,15 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-25 (macOS: Batch M, the MCP server, M1-M4; M5 waits for approval)
+- Batch M added from item 3 of the portfolio queue (`project-dossier/PROJECT-QUEUE.md`), planned by the planner against the installed `mcp` 2.3.0 (FastMCP is gone in 2.x; a stateless 2026-07-28 protocol era sits beside the 2025-11-25 handshake).
+- M1 (`4758851`): one tool-execution path for `/ask` and MCP, and card numbers masked in page text as the tools read it. Two review rounds rewrote the shared `pii.mask_card_numbers`: it had sent a card in full whenever an expiry, auth code, or amount sat beside it, and masked one date range in ten; committed data is byte-identical under the old and new rules.
+- M2 (`a8bc97e`): the stdio server over the low-level SDK `Server`, arguments validated in code, results fenced as untrusted data with a per-call code, capped, and never a model call.
+- M3 (`081868c`): Streamable HTTP at `/mcp` on the API, loopback Host only, any Origin refused, POST only, rate limited in its own bucket.
+- M4: README section and overlays.
+- The Mac dev stack was two weeks old with an empty database behind the migrations; it was backed up, rebuilt, and migrated to head. Claude Code connected to both transports (`claude mcp list`, added in a scratch directory and removed after).
+- Waiting on Anthony: M5, the demo GIF of Claude Code answering through the tools (uses his Claude subscription and needs `brew install vhs`); B11b (paid) and B12 as before.
+
 ### 2026-10-15 (macOS: batch-loop through Batch B's zero-spend tasks; stopped at the first paid run)
 - Batch B expanded by the planner into twelve tasks (`edbd2b5`), every one implemented by a coder and passed through a deep review before its commit, with no Co-Authored-By trailers:
   - B1 schema registry, v1 byte-identical (`edbd2b5`).

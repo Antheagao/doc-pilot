@@ -18,14 +18,18 @@ Load the global `api-design` guide for the rules; this file holds what exists he
 | `ask.py` | `POST /ask`, `POST /ask/stream`, `GET /ask/runs`, `GET /ask/runs/{id}`, `POST /ask/runs/{id}/feedback` |
 | `stats.py`, `monitoring.py` | `GET /stats`, `GET /monitoring/evals`, `GET /monitoring/daily` |
 
-`GET /healthz` returns `{"status": "ok"}`; there is no auth, so no route returns `401` or `403`.
+`GET /healthz` returns `{"status": "ok"}`; there is no auth, so no route returns `401`, and the only `403` is `/mcp` refusing an Origin header.
+
+`/mcp` and `/mcp/` are plain Starlette `Route`s appended in `main.py` (an `McpHttpEndpoint`, not routers), so neither is in `/openapi.json`; a `Mount` would answer every request with a `307` that MCP clients do not follow on a POST.
+They take `POST` only, speak JSON-RPC (MCP's Streamable HTTP) in stateless JSON mode, and answer `421` for a Host other than loopback, `403` for any Origin, `405` with `Allow: POST` for any other method, `413` for a body over 64 KiB, `400` for a non-JSON content type, `429` from the `mcp` rate-limit bucket, and `503` outside the API's lifespan.
+Their own errors are the API's `{"detail": ...}` body, except the SDK's JSON-RPC errors for a malformed message.
 
 ## Status codes today
 
 - `201` for the upload; `400` for `action: "correct"` without `corrected_value`; `404` for missing rows; `409` for `Field already reviewed` and for chat on a document that is not `extracted`.
 - `413` `File too large` (middleware and `_read_limited`); `415` for an unlisted type or mismatched magic bytes; `422` from FastAPI validation, with `detail` as a list.
 - `422` with `detail` as one sentence from `POST /review/fields/{id}/resolve` when a correction is not valid for the field (`MoneyError` text from `records.normalize_correction`: too many decimal places for the currency, not a plain number, a line item or tax line without exactly its keys, a tax rate outside 0 to 100 or with more than 6 decimal places, a `payment_card_last4` that is not exactly four digits, a `payment_method` that is not text or holds a card-number-like digit run, a bad currency code); the field stays pending.
-- `429` from `budget.enforce_daily_budget` and `ratelimit.enforce_rate_limit`, both with `Retry-After`.
+- `429` from `budget.enforce_daily_budget` and `ratelimit.enforce_rate_limit`, both with `Retry-After`; `/mcp` calls `enforce_rate_limit` itself and returns the same body.
 - `502` (`model request rejected`) and `503` (`model unavailable`, with `Retry-After` when known) from `ask.model_error`; `503` when `ANTHROPIC_API_KEY` is unset.
 - Streams are `text/event-stream` frames `event: <type>` (`model_call`, `tool_start`, `tool_call`, `answer`, or `error` with `status` and `detail`); `parseSseFrames` in `frontend/src/lib/api.ts` reads them.
 

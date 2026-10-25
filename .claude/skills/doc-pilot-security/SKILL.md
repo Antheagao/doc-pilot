@@ -38,6 +38,11 @@ The auth, session, cookie, and CSRF sections of the global guide have nothing to
 - Evidence is model output too: `_coerce_evidence` keeps `{page, quote}` only when the page is an integer from 1 to 10,000 and the quote is non-empty text of at most 200 characters, and stores `null` otherwise; the quote is displayed and compared (`app/quotes.py`) but never executed or trusted as the value.
 - Model output is untrusted input: `_coerce_leaf` and `_schema_violations` (`extraction.py`) assume `tool_use.input` is adversarial, and the frontend renders values as React text with no `dangerouslySetInnerHTML`.
 - Agent citations come from `search_result` blocks (`agent/tools.py`), so cited text is copied from stored pages (with card numbers masked, above), not written by the model.
+- MCP (`app/mcp_server/`, README "MCP server"): the same read-only tools as `/ask` for any MCP client, with no model call and no spend.
+  Document text reaches the client's model, so a result opens with a fixed untrusted-data notice and holds every document-derived string (page text, extracted fields, and the filename in a title) between `BEGIN DOCUMENT DATA <code>` and `END DOCUMENT DATA <code>` lines; the code is `secrets.token_hex(8)` per call and is replaced if it appears in the data.
+  Arguments are checked against the tool's input schema in code (the SDK's low-level server does not) and strings over 500 characters are refused; a result is cut at `MCP_MAX_RESULT_CHARS` with `truncated` set; card numbers in page text are masked (above).
+  `/mcp` is stateless and POST-only, serves only loopback Host values (`421` otherwise) and no Origin (`403`, the frontend included), checks both before the `mcp` rate-limit bucket, and refuses a body over 64 KiB; it has no authentication, so its threat model is `/search`'s.
+  Deferred until auth exists: API keys or bearer tokens, a document scope and rate-limit bucket per key (`ToolContext.document_ids` is the seam), non-loopback hosts and TLS, browser origins, an audit log of tool calls, and MCP resources.
 - Spans and Langfuse never carry prompts, documents, questions, or answers (`telemetry.py`, `langfuse_link.py`).
 - Secrets: the Anthropic key lives in gitignored `backend/.env`, mirrored to the gitignored root `.env` for compose; `docker compose config` prints it, so never paste that output.
 
@@ -48,3 +53,4 @@ The auth, session, cookie, and CSRF sections of the global guide have nothing to
 - Backend dependencies are unpinned ranges in `pyproject.toml` with no lockfile, and CI runs neither `pip-audit` nor `npm audit`.
 - Uploads have no quota or cleanup, and nothing deletes a document's file, pages, and chunks (Batch G4).
 - Some error `detail` strings echo upstream exception text (`model_error` in `routers/ask.py`).
+- `/mcp` is as open as `/search` to anything on the machine that can reach loopback (another local user or process); the Host and Origin checks stop a browser tab and DNS rebinding, not a local program.

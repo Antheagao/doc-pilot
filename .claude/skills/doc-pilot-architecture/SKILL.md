@@ -17,8 +17,10 @@ Load the global `design-principles` guide for the rules; this file holds what ex
 - `index` (`retrieval/index_job.process_index_job`), enqueued by the extract job in its own transaction: `transcription.py` (one page per call), `retrieval/chunking.py`, an `Embedder`, then pgvector plus full-text hybrid search fused by RRF (`retrieval/search.py`).
 - `judge` (`evals/online.process_judge_job`): grades a sampled `AskRun` for groundedness (`ASK_JUDGE_SAMPLE_RATE`).
 - `/ask` (`routers/ask.py`, `agent/loop.py`, `agent/tools.py`): a manual tool-use loop over `search_documents`, `query_extractions`, and `get_page`, capped by `agent_max_steps` and `agent_max_cost_usd`; every answer is stored as an `AskRun`.
+- MCP (`app/mcp_server/`): `build_server` puts the same three tools behind `agent/tools.execute_tool` for any MCP client, and calls no model.
+  Stdio is `python -m app.mcp_server` (database from `backend/.env`); Streamable HTTP is `McpHttpEndpoint`, stateless with JSON responses, routed at `/mcp` and `/mcp/` on the API and run inside `main.lifespan`, sharing the API's embedder and in-memory limiter (`mcp` bucket).
 - Per-document chat (`routers/chat.py`) reuses `run_agent` with a `ChatScope`; its turns are `AskRun` rows with `document_id` and `conversation_id`.
-- Spend guards: `budget.enforce_daily_budget` (`DAILY_BUDGET_USD`) and `ratelimit.limit_ask` / `limit_upload` (in memory, one API process).
+- Spend guards: `budget.enforce_daily_budget` (`DAILY_BUDGET_USD`) and `ratelimit.limit_ask` / `limit_upload` (in memory, one API process); `/mcp` spends nothing and has only its rate limit (`ratelimit.enforce_rate_limit`).
 - Evals: logic in `backend/app/evals/`, CLIs in `evals/run*.py`, committed artifacts in `evals/results/`, read by `GET /stats` and `GET /monitoring/*`.
 - `app/evals/checks.py` replays stored answers and labels through `build_extracted_fields`, `reconcile`, and `route` (no database): `caught_by_checks` per run at render time, and the mutation eval behind `evals/run_checks.py`; `harvest.py` refuses a label that fails the checks.
 - Telemetry: OpenTelemetry in `app/telemetry.py`, off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set; `jobs.traceparent` carries a document's trace across the queue; Langfuse (`app/langfuse_link.py`) is off unless its keys are set.
@@ -39,5 +41,6 @@ Load the global `design-principles` guide for the rules; this file holds what ex
 - Every setting is a field on `Settings` in `backend/app/config.py` (pydantic-settings, reads `backend/.env`), bounded with `Field(ge=...)` where it matters, and read through `get_settings()`, which tests override.
 - Read straight from `os.environ` instead: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` (`telemetry.py`) and `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` (`langfuse_link.py`).
 - A new variable also goes into `docker-compose.yml` for each service that reads it (`api`, `worker`), and into `docker-compose.demo.yml` when the demo must pin it.
+- `MCP_RATE_LIMIT_PER_MINUTE` (default 120, `0` is off) is passed to the `api` service in `docker-compose.yml`; `MCP_MAX_RESULT_CHARS` (default 24,000, 2,000 to 200,000) is not, so the containers use the default and the stdio server reads `backend/.env`.
 - `EXTRACTION_PROMPT_VERSION` (default `extract_v1`) is checked against `SCHEMAS` when settings load, and the worker service in `docker-compose.yml` passes it through; the demo overlay inherits it.
 - Known gap: `backend/.env.example` lists only `ANTHROPIC_API_KEY`, `DATABASE_URL`, `EXTRACTION_MODEL`, `REVIEW_THRESHOLD`, and `EXTRACTION_PROMPT_VERSION`.
