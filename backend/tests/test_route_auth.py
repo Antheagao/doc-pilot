@@ -29,9 +29,11 @@ PUBLIC = {
     "/docs/oauth2-redirect": "the Swagger UI page",
     "/redoc": "the ReDoc page",
 }
-# Not yet behind a credential: /mcp has its own Host, Origin, and rate-limit
-# checks and gets bearer API keys in the API key task, not cookie sign-in.
-AWAITING_API_KEYS = {"/mcp", "/mcp/"}
+# Authenticated by a bearer API key of their own, after the Host, Origin, and
+# method checks and not by the cookie (app/mcp_server/http.py): they answer 503
+# outside the app's lifespan and 405 to anything but POST, so the walk below
+# cannot ask them; the tests at the end do, inside the lifespan.
+MCP = {"/mcp", "/mcp/"}
 
 PATH_PARAMETER = re.compile(r"\{[^}]+\}")
 COOKIE = "docpilot_session"
@@ -63,7 +65,7 @@ def _template_paths() -> set[str]:
 
 
 def _guarded() -> list[tuple[str, str]]:
-    exempt = set(PUBLIC) | AWAITING_API_KEYS  # none has a path parameter
+    exempt = set(PUBLIC) | MCP  # none has a path parameter
     return [(method, path) for method, path in _walk() if path not in exempt]
 
 
@@ -77,7 +79,7 @@ def test_the_walk_finds_the_routes() -> None:
 def test_every_listed_exception_is_a_real_route() -> None:
     """A route renamed or removed must leave the lists too, or they would
     quietly exempt whatever takes its place."""
-    assert (set(PUBLIC) | AWAITING_API_KEYS) <= _template_paths()
+    assert (set(PUBLIC) | MCP) <= _template_paths()
 
 
 @pytest.mark.parametrize(("method", "path"), _guarded(), ids=lambda value: str(value)[:48])
@@ -91,7 +93,7 @@ async def test_a_route_with_no_credentials_answers_401(
 
 
 @pytest.mark.parametrize(("method", "path"), _guarded(), ids=lambda value: str(value)[:48])
-async def test_a_bearer_token_alone_is_a_401_until_api_keys_exist(
+async def test_an_unknown_bearer_key_is_a_401_on_every_route(
     anon_client: AsyncClient, method: str, path: str
 ) -> None:
     response = await anon_client.request(
@@ -190,3 +192,26 @@ async def test_responses_are_private_and_not_stored_unless_the_route_says_otherw
     # The health check and the docs describe no one's data.
     for path in ("/healthz", "/openapi.json", "/docs"):
         assert "cache-control" not in (await anon_client.get(path)).headers, path
+
+
+@pytest.mark.parametrize("path", sorted(MCP))
+async def test_mcp_answers_401_with_a_challenge_to_a_post_with_no_key(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    import httpx
+
+    from app import main as main_module
+
+    monkeypatch.setattr(main_module, "warm_up_embedder", lambda: None)
+    headers = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+    ) as client:
+        bare = await client.post(path, json={}, headers=headers)
+        # A session cookie is not an MCP credential.
+        cookie = await client.post(path, json={}, headers={**headers, "cookie": "docpilot_session=x"})
+
+    for response in (bare, cookie):
+        assert response.status_code == 401
+        assert response.json() == {"detail": "not authenticated"}
+        assert response.headers["www-authenticate"] == 'Bearer realm="doc-pilot"'

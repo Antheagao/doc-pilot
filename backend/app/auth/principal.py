@@ -6,9 +6,11 @@ that touches data cannot run unauthenticated or unscoped. It answers 401 with
 one generic body for every way a credential can fail (missing, unknown,
 expired, a disabled user, a removed membership), so a response never says which.
 
-- An `Authorization: Bearer` header is a 401 for now: API keys arrive with the
-  API key batch task, and ignoring the header would let a request that meant to
-  authenticate as a key fall through to a cookie it did not choose.
+- An `Authorization: Bearer dpk_...` header is an API key (app/auth/api_keys.py).
+  It decides alone: a bad key is a 401 even when a good cookie came with it, so
+  a request that meant to authenticate as a key never falls through to a cookie
+  it did not choose. A key is exempt from the Origin rule below and may call
+  every tenant route, but not those that manage keys or sessions (`session_only`).
 - A session cookie is looked up by the SHA-256 digest of its token
   (app/auth/tokens.py) in one joined read. The lookup only reads: the expiry is
   absolute, there is no sliding renewal, and an expired row found on the way is
@@ -33,6 +35,7 @@ from datetime import UTC, datetime
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import delete, select
 
+from app.auth import api_keys
 from app.auth.tokens import digest
 from app.config import Settings, get_settings
 from app.models import MEMBERSHIP_ROLE_MEMBER, AuthSession, Membership, User
@@ -45,18 +48,23 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 @dataclass(frozen=True)
 class Principal:
     """The caller: the organization whose data it may see, and who is asking.
-    `user_id` is None for a caller that is an organization rather than a person
-    (the MCP server until API keys name one)."""
+    `user_id` is None for a caller that is an API key rather than a person."""
 
     organization_id: uuid.UUID
     user_id: uuid.UUID | None = None
     role: str = MEMBERSHIP_ROLE_MEMBER
+    # Set when the caller is an API key (a bearer request): the organization's
+    # credential, not a person. It can call the tenant routes, never the ones
+    # that manage keys or sessions.
+    api_key_id: uuid.UUID | None = None
 
     @property
     def rate_key(self) -> str:
         """What the per-minute limits (app/ratelimit.py) count this caller as:
         a signed-in person is one client wherever the request comes from, which
         a client address could not say behind Docker's bridge network."""
+        if self.api_key_id is not None:
+            return f"key:{self.api_key_id}"
         if self.user_id is None:
             return f"org:{self.organization_id}"
         return f"user:{self.user_id}"
@@ -96,8 +104,16 @@ async def current_principal(
     """The principal of the current request (a FastAPI dependency). Raises 401
     for any credential that does not resolve, and 403 for a cookie-authenticated
     write from an Origin that is not allowed."""
-    if request.headers.get("authorization", "").partition(" ")[0].lower() == "bearer":
-        raise unauthenticated()
+    scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() == "bearer":
+        # An API key stands alone: never combined with, or falling back to, a
+        # cookie. No Origin check: CSRF is a cookie problem, and a page cannot
+        # make a browser attach this header. A malformed token costs no query.
+        async with identity_sessions() as db:
+            key = await api_keys.authenticate_api_key(db, bearer)
+        if key is None:
+            raise unauthenticated()
+        return Principal(organization_id=key.organization_id, api_key_id=key.id)
     token = request.cookies.get(settings.session_cookie_name)
     if not token:
         raise unauthenticated()
@@ -135,3 +151,16 @@ async def current_principal(
     if found.disabled_at is not None:
         raise unauthenticated()
     return Principal(organization_id=found.organization_id, user_id=found.user_id, role=found.role)
+
+
+def session_only(message: str):
+    """A dependency for the routes that manage keys or sessions: the principal,
+    unless it is an API key, which answers 403 with `message`. An organization's
+    credential must not be able to mint more credentials or switch a session."""
+
+    async def dependency(principal: Principal = Depends(current_principal)) -> Principal:
+        if principal.api_key_id is not None:
+            raise HTTPException(status_code=403, detail=message)
+        return principal
+
+    return dependency

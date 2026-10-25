@@ -52,7 +52,7 @@ from app.agent.tools import (
 from app.auth.principal import Principal
 from app.config import Settings
 from app.extraction_fields import PROMPTS_DIR
-from app.models import DEFAULT_ORGANIZATION_ID
+from app.mcp_server.auth import InvalidApiKey
 from app.retrieval.embeddings import Embedder
 from app.schemas import McpSource, McpToolOutput
 
@@ -99,12 +99,6 @@ OUTPUT_SCHEMA = McpToolOutput.model_json_schema()
 # A session for one organization, and who is calling.
 TenantSessionFactory = Callable[[UUID], AbstractAsyncContextManager[AsyncSession]]
 PrincipalResolver = Callable[[ServerRequestContext], Awaitable[Principal]]
-
-
-async def default_principal(ctx: ServerRequestContext) -> Principal:
-    """Every call is the default organization until API keys name one (the
-    API's own routes need a sign-in; /mcp has none yet)."""
-    return Principal(organization_id=DEFAULT_ORGANIZATION_ID)
 
 
 def tool_list() -> list[types.Tool]:
@@ -300,12 +294,15 @@ def build_server(
         name = params.name
         if name not in validators:
             raise MCPError(types.INVALID_PARAMS, f"unknown tool {_short(repr(name), 100)}")
+        try:
+            principal = await resolve_principal(ctx)
+        except InvalidApiKey:
+            return _error_result("Error: the API key is missing, unknown, or revoked")
         arguments = params.arguments or {}
         problem = _argument_problem(validators[name], arguments)
         if problem is not None:
             return _error_result(f"Error: {problem}")
         call_id = "" if ctx.request_id is None else str(ctx.request_id)
-        principal = await resolve_principal(ctx)
         async with tenant_session_factory(principal.organization_id) as session:
             tool_context = ToolContext(session=session, embedder=embedder, document_ids=document_ids)
             outcome = await execute_tool(tool_context, name, arguments, call_id)

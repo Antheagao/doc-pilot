@@ -17,10 +17,21 @@ from app.auth import passwords
 from app.auth.principal import current_principal
 from app.config import get_settings
 from app.db import async_session_maker, engine, verify_tenant_isolation
+from app.mcp_server.auth import ApiKeyVerifier, principal_from_request_context
 from app.mcp_server.http import McpHttpEndpoint
-from app.mcp_server.server import build_server, default_principal
+from app.mcp_server.server import build_server
 from app.retrieval.embeddings import get_embedder, warm_up_embedder
-from app.routers import ask, auth, chat, documents, monitoring, review, search, stats
+from app.routers import (
+    api_keys,
+    ask,
+    auth,
+    chat,
+    documents,
+    monitoring,
+    review,
+    search,
+    stats,
+)
 from app.routers.documents import MAX_UPLOAD_SIZE
 from app.telemetry import configure_tracing, instrument_api, otlp_enabled
 from app.tenancy import tenant_session
@@ -114,15 +125,17 @@ class SecurityHeadersMiddleware:
 
 # The MCP server over Streamable HTTP at /mcp (app/mcp_server/). It shares this
 # process's embedder (get_embedder() is lazy and cached), rate limiter and
-# tracing; its session manager runs inside the lifespan below.
+# tracing; its session manager runs inside the lifespan below. It authenticates
+# an API key itself (a bearer key, not the cookie the routers use).
 mcp_endpoint = McpHttpEndpoint(
     build_server(
         tenant_session_factory=partial(tenant_session, async_session_maker),
-        resolve_principal=default_principal,
+        resolve_principal=principal_from_request_context,
         embedder=get_embedder(),
         settings=get_settings(),
     ),
     get_settings(),
+    ApiKeyVerifier(async_session_maker),
 )
 
 
@@ -194,6 +207,7 @@ app.add_middleware(MaxBodySizeMiddleware, max_body_size=MAX_UPLOAD_SIZE)
 # need none, and the two other /auth routes ask for it themselves.
 authenticated = [Depends(current_principal)]
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(api_keys.router, prefix="/api-keys", tags=["api-keys"], dependencies=authenticated)
 app.include_router(documents.router, prefix="/documents", tags=["documents"], dependencies=authenticated)
 app.include_router(chat.router, prefix="/documents", tags=["chat"], dependencies=authenticated)
 app.include_router(review.router, prefix="/review", tags=["review"], dependencies=authenticated)

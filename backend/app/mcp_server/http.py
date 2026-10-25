@@ -18,14 +18,21 @@ A request is checked in this order, cheapest and most hostile first:
 3. The method. Only POST is served: a stateless server has no session to end
    and no server-to-client stream to open, and the SDK's handshake-era GET
    would hold a connection open indefinitely, so anything else is a 405.
-4. The rate limit (every JSON-RPC message is a POST): the "mcp" bucket of
-   app/ratelimit.py, refused with the API's own 429 body and Retry-After.
-5. The SDK, which refuses a body over MAX_REQUEST_BODY_BYTES with a 413 before
+4. The API key: `Authorization: Bearer dpk_...`, checked by `ApiKeyVerifier`
+   (app/mcp_server/auth.py), refused with the API's own 401 body and
+   `WWW-Authenticate: Bearer realm="doc-pilot"`. Every request is checked, so a
+   key revoked mid-session stops working at its next call. The result goes on
+   the ASGI scope as the SDK's `AuthenticatedUser`.
+5. The rate limit (every JSON-RPC message is a POST): the "mcp" bucket of
+   app/ratelimit.py keyed by API key, refused with the API's own 429 body and
+   Retry-After. After the key check, so a request with no valid key spends
+   nobody's allowance.
+6. The SDK, which refuses a body over MAX_REQUEST_BODY_BYTES with a 413 before
    parsing it.
 
-There is no authentication: /mcp has the threat model of /search (a local,
-single-user app), and the loopback-only checks above are what keep a browser
-tab or another machine from reaching it.
+The Host and Origin checks stay in front of the key: they keep a browser tab or
+another machine from reaching an endpoint a key opens, which is still
+loopback-only and has no TLS. The key picks the organization the tools read.
 """
 
 from collections.abc import AsyncIterator
@@ -33,16 +40,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import HTTPException
 from mcp.server import Server
+from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import (
     TransportSecurityMiddleware,
     TransportSecuritySettings,
 )
+from starlette.authentication import AuthCredentials
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
 from app.config import Settings
+from app.mcp_server.auth import ApiKeyVerifier
 from app.ratelimit import enforce_rate_limit
 
 # Only these Host values (any port) are served, and no Origin is: a browser
@@ -60,9 +71,10 @@ RATE_LIMIT_BUCKET = "mcp"
 class McpHttpEndpoint:
     """An ASGI app for the /mcp route; `run()` is its lifespan."""
 
-    def __init__(self, server: Server, settings: Settings) -> None:
+    def __init__(self, server: Server, settings: Settings, verifier: ApiKeyVerifier) -> None:
         self._server = server
         self._settings = settings
+        self._verifier = verifier
         self._security = TransportSecurityMiddleware(LOOPBACK_SECURITY)
         self._manager: StreamableHTTPSessionManager | None = None
 
@@ -101,12 +113,31 @@ class McpHttpEndpoint:
             )
             await response(scope, receive, send)
             return
+        scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
+        access_token = await self._verifier.verify_token(bearer) if scheme.lower() == "bearer" else None
+        if access_token is None:
+            response = JSONResponse(
+                {"detail": "not authenticated"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer realm="doc-pilot"'},
+            )
+            await response(scope, receive, send)
+            return
+        scope["user"] = AuthenticatedUser(access_token)
+        scope["auth"] = AuthCredentials(access_token.scopes)
         try:
-            enforce_rate_limit(request, RATE_LIMIT_BUCKET, self._settings.mcp_rate_limit_per_minute)
+            enforce_rate_limit(
+                request,
+                RATE_LIMIT_BUCKET,
+                self._settings.mcp_rate_limit_per_minute,
+                key=access_token.client_id,
+                per="API key",
+            )
         except HTTPException as refusal:
             response = JSONResponse(
                 {"detail": refusal.detail}, status_code=refusal.status_code, headers=refusal.headers
             )
             await response(scope, receive, send)
             return
-        await manager.handle_request(scope, receive, send)
+        # The middleware makes the user the SDK's own get_access_token() sees.
+        await AuthContextMiddleware(manager.handle_request)(scope, receive, send)

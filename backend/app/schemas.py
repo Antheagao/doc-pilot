@@ -577,3 +577,32 @@ class MeOut(BaseModel):
     email: str
     organization: OrganizationOut
     organizations: list[OrganizationOut]
+
+
+class ApiKeyOut(BaseModel):
+    """An API key as listed: its prefix identifies it, and nothing here can be
+    used to authenticate (the secret is shown once, at creation)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class ApiKeyList(BaseModel):
+    api_keys: list[ApiKeyOut]
+
+
+class ApiKeyCreated(BaseModel):
+    """The 201 body of POST /api-keys: the only place the secret ever appears."""
+
+    api_key: ApiKeyOut
+    secret: str

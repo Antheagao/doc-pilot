@@ -27,9 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import accounts, passwords, sessions
 from app.auth.principal import (
     Principal,
-    current_principal,
     get_identity_session_factory,
     require_allowed_origin,
+    session_only,
     unauthenticated,
 )
 from app.config import Settings, get_settings
@@ -40,6 +40,8 @@ from app.tenancy import SessionFactory
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+manage_sessions = session_only("an API key cannot manage sessions")
 
 BAD_CREDENTIALS = "email or password is incorrect"
 
@@ -167,7 +169,7 @@ async def logout(
 @router.get("/me", response_model=MeOut)
 async def me(
     response: Response,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(manage_sessions),
     identity_sessions: SessionFactory = Depends(get_identity_session_factory),
 ) -> MeOut:
     async with identity_sessions() as db:
@@ -182,7 +184,7 @@ async def switch_organization(
     body: SwitchOrganizationRequest,
     request: Request,
     response: Response,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(manage_sessions),
     settings: Settings = Depends(get_settings),
     identity_sessions: SessionFactory = Depends(get_identity_session_factory),
 ) -> MeOut:

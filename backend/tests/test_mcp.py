@@ -11,13 +11,16 @@ import sys
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
+import anyio.to_thread
 import httpx
 import httpx2
 import pytest
 import pytest_asyncio
 from mcp import Client, MCPError, StdioServerParameters, types
 from mcp.client.streamable_http import streamable_http_client
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_agent import DOCS, EMBEDDER
 from test_ratelimit import FakeClock
@@ -26,21 +29,25 @@ from app import extraction as extraction_module
 from app import main as main_module
 from app import ratelimit
 from app.agent.tools import TOOL_DEFINITIONS, TOOL_HANDLERS
+from app.auth import api_keys
+from app.auth.principal import Principal
+from app.auth.tokens import mint_api_key
 from app.config import BACKEND_DIR, Settings
+from app.db import async_session_maker
 from app.evals.corpus import seed_labeled_corpus
 from app.evals.dataset import load_cases
 from app.evals.retrieval import load_gold_corpus
 from app.main import app
 from app.mcp_server import server as server_module
+from app.mcp_server.auth import ApiKeyVerifier, principal_from_request_context
 from app.mcp_server.http import MAX_REQUEST_BODY_BYTES, McpHttpEndpoint
 from app.mcp_server.server import (
     INSTRUCTIONS,
     NOTICE,
     OUTPUT_SCHEMA,
     build_server,
-    default_principal,
 )
-from app.models import Document
+from app.models import DEFAULT_ORGANIZATION_ID, ApiKey, Document
 from app.ratelimit import WINDOW_SECONDS, SlidingWindowLimiter
 from app.retrieval.indexing import ChunkingConfig, PageText, index_document_pages
 from app.tenancy import bind_tenant
@@ -86,7 +93,18 @@ async def _add_poisoned_document(db_session: AsyncSession) -> uuid.UUID:
     return document.id
 
 
-def _server(db_session: AsyncSession, document_ids: list[uuid.UUID] | None = None, **settings):
+async def default_principal(ctx) -> Principal:
+    """For the in-memory client, which has no request and so no key: the default
+    organization."""
+    return Principal(organization_id=DEFAULT_ORGANIZATION_ID)
+
+
+def _server(
+    db_session: AsyncSession,
+    document_ids: list[uuid.UUID] | None = None,
+    resolve_principal=default_principal,
+    **settings,
+):
     @asynccontextmanager
     async def shared_session(organization_id: uuid.UUID) -> AsyncGenerator[AsyncSession]:
         # The session a call gets is bound to the organization it asked for.
@@ -95,7 +113,7 @@ def _server(db_session: AsyncSession, document_ids: list[uuid.UUID] | None = Non
 
     return build_server(
         tenant_session_factory=shared_session,
-        resolve_principal=default_principal,
+        resolve_principal=resolve_principal,
         embedder=EMBEDDER,
         settings=Settings(**settings),
         document_ids=document_ids,
@@ -540,22 +558,114 @@ async def test_a_tool_call_is_a_span_under_the_sdks_call_span_with_no_content(
 # --- stdio ------------------------------------------------------------------
 
 
-async def test_the_stdio_entry_point_serves_the_tools() -> None:
-    parameters = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "app.mcp_server"],
-        cwd=str(BACKEND_DIR),
-        env={**os.environ, "EMBEDDING_BACKEND": "hashing", "ANTHROPIC_API_KEY": ""},
-    )
-    async with Client(parameters, mode="legacy") as client:
-        tools = (await client.list_tools()).tools
-        result = await client.call_tool(
-            "get_page", {"document_id": str(uuid.uuid4()), "page_number": 1}
+@asynccontextmanager
+async def _committed_key(*, revoked: bool = False) -> AsyncGenerator[tuple[uuid.UUID, str]]:
+    """A key of the default organization that a subprocess can see (the test's
+    own transaction is invisible to it), deleted again afterwards."""
+    async with async_session_maker() as session:
+        key, token = await api_keys.create_api_key(
+            session, organization_id=DEFAULT_ORGANIZATION_ID, name="stdio test"
         )
+        if revoked:
+            key.revoked_at = datetime.now(UTC)
+        await session.commit()
+        key_id = key.id
+    try:
+        yield key_id, token
+    finally:
+        async with async_session_maker() as session:
+            await session.execute(delete(ApiKey).where(ApiKey.id == key_id))
+            await session.commit()
+
+
+def _stdio_env(key: str | None) -> dict[str, str]:
+    return {
+        **os.environ,
+        "EMBEDDING_BACKEND": "hashing",
+        "ANTHROPIC_API_KEY": "",
+        "DOCPILOT_API_KEY": key or "",
+    }
+
+
+async def test_the_stdio_entry_point_serves_the_tools_for_a_valid_key() -> None:
+    async with _committed_key() as (_, token):
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "app.mcp_server"],
+            cwd=str(BACKEND_DIR),
+            env=_stdio_env(token),
+        )
+        async with Client(parameters, mode="legacy") as client:
+            tools = (await client.list_tools()).tools
+            result = await client.call_tool(
+                "get_page", {"document_id": str(uuid.uuid4()), "page_number": 1}
+            )
 
     assert [tool.name for tool in tools] == [definition["name"] for definition in TOOL_DEFINITIONS]
     assert result.is_error is True and "no indexed pages" in _text(result)
 
+
+async def test_a_stdio_key_revoked_while_connected_fails_at_its_next_call() -> None:
+    async with _committed_key() as (key_id, token):
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "app.mcp_server"],
+            cwd=str(BACKEND_DIR),
+            env=_stdio_env(token),
+        )
+        async with Client(parameters, mode="legacy") as client:
+            arguments = {"document_id": str(uuid.uuid4()), "page_number": 1}
+            before = await client.call_tool("get_page", arguments)
+            async with async_session_maker() as session:
+                await session.execute(
+                    update(ApiKey).where(ApiKey.id == key_id).values(revoked_at=datetime.now(UTC))
+                )
+                await session.commit()
+            after = await client.call_tool("get_page", arguments)
+
+    assert "no indexed pages" in _text(before)
+    assert after.is_error is True and "API key" in _text(after) and "no indexed pages" not in _text(after)
+    assert token not in _text(after)
+
+
+def _run_stdio_server(key: str | None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "app.mcp_server"],
+        cwd=BACKEND_DIR,
+        env=_stdio_env(key),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+
+def test_stdio_without_a_key_exits_2_with_the_reason_on_stderr_and_nothing_on_stdout() -> None:
+    done = _run_stdio_server(None)
+
+    assert done.returncode == 2
+    assert done.stdout == ""
+    assert "DOCPILOT_API_KEY is not set" in done.stderr
+
+
+async def test_stdio_with_a_revoked_key_exits_2() -> None:
+    async with _committed_key(revoked=True) as (_, token):
+        done = await anyio.to_thread.run_sync(_run_stdio_server, token)
+
+    assert done.returncode == 2
+    assert done.stdout == ""
+    assert "not an active API key" in done.stderr
+    assert token not in done.stderr
+
+
+async def test_stdio_with_an_unknown_key_exits_2() -> None:
+    unknown = mint_api_key().token
+    done = await anyio.to_thread.run_sync(_run_stdio_server, unknown)
+
+    assert done.returncode == 2
+    assert "not an active API key" in done.stderr
+    assert unknown not in done.stderr
 
 
 # --- Streamable HTTP at /mcp ------------------------------------------------
@@ -575,15 +685,45 @@ INITIALIZE = {
 MODERN = {"mcp-protocol-version": "2026-07-28"}
 
 
+def _identity_sessions(db_session: AsyncSession):
+    """Identity sessions on the test's transaction, as the `client` fixtures hand
+    them to the routes."""
+
+    @asynccontextmanager
+    async def shared() -> AsyncGenerator[AsyncSession]:
+        yield db_session
+
+    return shared
+
+
+async def _key(db_session: AsyncSession, organization_id: uuid.UUID = DEFAULT_ORGANIZATION_ID) -> str:
+    """A new API key of the organization, returned as its token."""
+    _, token = await api_keys.create_api_key(db_session, organization_id=organization_id, name="test")
+    return token
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"authorization": f"Bearer {token}"}
+
+
 @asynccontextmanager
 async def _http(
-    db_session: AsyncSession, **settings
+    db_session: AsyncSession, token: str | None = None, *, authorized: bool = True, **settings
 ) -> AsyncGenerator[tuple[McpHttpEndpoint, httpx.AsyncClient]]:
-    """The endpoint running in process, and a client posting to it as 127.0.0.1."""
-    endpoint = McpHttpEndpoint(_server(db_session), Settings(**settings))
+    """The endpoint running in process, and a client posting to it as 127.0.0.1
+    with an API key of the default organization (`token`, or a new one) unless
+    `authorized` is False."""
+    if authorized and token is None:
+        token = await _key(db_session)
+    endpoint = McpHttpEndpoint(
+        _server(db_session, resolve_principal=principal_from_request_context, **settings),
+        Settings(**settings),
+        ApiKeyVerifier(_identity_sessions(db_session)),
+    )
     async with endpoint.run():
         transport = httpx.ASGITransport(app=endpoint)
-        async with httpx.AsyncClient(transport=transport, base_url=BASE_URL) as client:
+        headers = _bearer(token) if authorized and token else {}
+        async with httpx.AsyncClient(transport=transport, base_url=BASE_URL, headers=headers) as client:
             yield endpoint, client
 
 
@@ -595,10 +735,10 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
     return fake
 
 
-async def _tool_names(app_under_test, mode: str) -> list[str]:
+async def _tool_names(app_under_test, mode: str, token: str) -> list[str]:
     """tools/list through the SDK's own HTTP client, in process."""
     http_client = httpx2.AsyncClient(
-        transport=httpx2.ASGITransport(app=app_under_test), base_url=BASE_URL
+        transport=httpx2.ASGITransport(app=app_under_test), base_url=BASE_URL, headers=_bearer(token)
     )
     async with Client(streamable_http_client(f"{BASE_URL}/mcp", http_client=http_client), mode=mode) as client:
         return [tool.name for tool in (await client.list_tools()).tools]
@@ -616,8 +756,9 @@ async def test_initialize_over_http_is_served(db_session: AsyncSession, clock: F
 async def test_tools_list_over_http_in_both_eras(
     db_session: AsyncSession, clock: FakeClock, mode: str
 ) -> None:
-    async with _http(db_session) as (endpoint, _):
-        names = await _tool_names(endpoint, mode)
+    token = await _key(db_session)
+    async with _http(db_session, token) as (endpoint, _):
+        names = await _tool_names(endpoint, mode, token)
 
     assert names == [definition["name"] for definition in TOOL_DEFINITIONS]
 
@@ -685,9 +826,12 @@ async def test_a_post_that_is_not_json_is_refused(db_session: AsyncSession, cloc
 
 
 async def test_the_route_is_down_outside_the_lifespan(db_session: AsyncSession, clock: FakeClock) -> None:
-    endpoint = McpHttpEndpoint(_server(db_session), Settings())
+    endpoint = McpHttpEndpoint(
+        _server(db_session), Settings(), ApiKeyVerifier(_identity_sessions(db_session))
+    )
+    token = await _key(db_session)
     transport = httpx.ASGITransport(app=endpoint)
-    async with httpx.AsyncClient(transport=transport, base_url=BASE_URL) as client:
+    async with httpx.AsyncClient(transport=transport, base_url=BASE_URL, headers=_bearer(token)) as client:
         down = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
         async with endpoint.run():
             up = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
@@ -756,30 +900,42 @@ def test_the_mcp_rate_limit_setting_is_bounded() -> None:
 # --- on the real app --------------------------------------------------------
 
 
+@pytest_asyncio.fixture
+async def real_app_key(db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A key of the default organization for the real app's /mcp, whose
+    verifier is pointed at the test's transaction (the real one reads committed
+    rows only)."""
+    monkeypatch.setattr(
+        main_module.mcp_endpoint, "_verifier", ApiKeyVerifier(_identity_sessions(db_session))
+    )
+    return await _key(db_session)
+
+
 async def test_the_apps_lifespan_serves_mcp_each_time_it_starts(
-    monkeypatch: pytest.MonkeyPatch, clock: FakeClock, mode: str
+    monkeypatch: pytest.MonkeyPatch, clock: FakeClock, mode: str, real_app_key: str
 ) -> None:
     monkeypatch.setattr(main_module, "warm_up_embedder", lambda: None)
     expected = [definition["name"] for definition in TOOL_DEFINITIONS]
 
     for _ in range(2):
         async with app.router.lifespan_context(app):
-            assert await _tool_names(app, mode) == expected
+            assert await _tool_names(app, mode, real_app_key) == expected
     # After the last shutdown the route is down again.
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE_URL) as client:
         assert (await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)).status_code == 503
 
 
 async def test_mcp_is_a_route_not_a_redirect_and_stays_out_of_openapi(
-    monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+    monkeypatch: pytest.MonkeyPatch, clock: FakeClock, real_app_key: str
 ) -> None:
     monkeypatch.setattr(main_module, "warm_up_embedder", lambda: None)
     transport = httpx.ASGITransport(app=app)
     async with app.router.lifespan_context(app), httpx.AsyncClient(
         transport=transport, base_url=BASE_URL
     ) as client:
-        posted = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS, follow_redirects=False)
-        slashed = await client.post("/mcp/", json=INITIALIZE, headers=JSON_HEADERS, follow_redirects=False)
+        headers = {**JSON_HEADERS, **_bearer(real_app_key)}
+        posted = await client.post("/mcp", json=INITIALIZE, headers=headers, follow_redirects=False)
+        slashed = await client.post("/mcp/", json=INITIALIZE, headers=headers, follow_redirects=False)
         schema = (await client.get("/openapi.json")).json()
         healthy = await client.get("/healthz")
 
@@ -791,11 +947,11 @@ async def test_mcp_is_a_route_not_a_redirect_and_stays_out_of_openapi(
 
 @pytest.mark.parametrize("origin", ["http://evil.example", "http://localhost:3000"])
 async def test_the_apps_credentialed_cors_does_not_change_mcps_403_for_any_origin(
-    monkeypatch: pytest.MonkeyPatch, clock: FakeClock, origin: str
+    monkeypatch: pytest.MonkeyPatch, clock: FakeClock, origin: str, real_app_key: str
 ) -> None:
     """The frontend's origin is allowed credentialed CORS on the API (main.py),
-    and /mcp still refuses it, on the real app and with a real session cookie
-    on the request."""
+    and /mcp still refuses it, on the real app, with a session cookie and even a
+    valid key on the request."""
     monkeypatch.setattr(main_module, "warm_up_embedder", lambda: None)
     async with app.router.lifespan_context(app), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url=BASE_URL
@@ -803,9 +959,184 @@ async def test_the_apps_credentialed_cors_does_not_change_mcps_403_for_any_origi
         refused = await client.post(
             "/mcp",
             json=INITIALIZE,
-            headers={**JSON_HEADERS, "origin": origin, "cookie": "docpilot_session=anything"},
+            headers={
+                **JSON_HEADERS,
+                **_bearer(real_app_key),
+                "origin": origin,
+                "cookie": "docpilot_session=anything",
+            },
         )
-        served = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+        served = await client.post("/mcp", json=INITIALIZE, headers={**JSON_HEADERS, **_bearer(real_app_key)})
 
     assert refused.status_code == 403
     assert served.status_code == 200
+
+
+# --- API keys over HTTP -----------------------------------------------------
+
+UNAUTHENTICATED = {"detail": "not authenticated"}
+CHALLENGE = 'Bearer realm="doc-pilot"'
+
+
+async def _unknown_key() -> str:
+    return mint_api_key().token
+
+
+@pytest.mark.parametrize("extra", [{}, MODERN], ids=["handshake", "modern"])
+@pytest.mark.parametrize(
+    "case", ["no header", "wrong scheme", "empty bearer", "malformed", "unknown", "revoked"]
+)
+async def test_a_request_without_a_valid_key_is_a_401_with_a_challenge_before_the_rate_limiter(
+    db_session: AsyncSession, clock: FakeClock, case: str, extra: dict
+) -> None:
+    revoked_key, revoked_token = await api_keys.create_api_key(
+        db_session, organization_id=DEFAULT_ORGANIZATION_ID, name="revoked"
+    )
+    await api_keys.revoke_api_key(
+        db_session, organization_id=DEFAULT_ORGANIZATION_ID, key_id=revoked_key.id
+    )
+    authorization = {
+        "no header": None,
+        "wrong scheme": "Basic dXNlcjpwdw==",
+        "empty bearer": "Bearer ",
+        "malformed": "Bearer dpk_not-a-key",
+        "unknown": f"Bearer {await _unknown_key()}",
+        "revoked": f"Bearer {revoked_token}",
+    }[case]
+    headers = {**JSON_HEADERS, **extra, **({"authorization": authorization} if authorization else {})}
+
+    async with _http(db_session, authorized=False, mcp_rate_limit_per_minute=1) as (_, client):
+        refused = [await client.post("/mcp", json=INITIALIZE, headers=headers) for _ in range(3)]
+        # None of those spent anyone's allowance of one: a valid key still gets in.
+        token = await _key(db_session)
+        served = await client.post("/mcp", json=INITIALIZE, headers={**JSON_HEADERS, **_bearer(token)})
+
+    for response in refused:
+        assert response.status_code == 401
+        assert response.json() == UNAUTHENTICATED
+        assert response.headers["www-authenticate"] == CHALLENGE
+    assert served.status_code == 200
+
+
+async def test_a_key_revoked_mid_session_fails_at_its_next_call(
+    db_session: AsyncSession, clock: FakeClock, mode: str
+) -> None:
+    key, token = await api_keys.create_api_key(
+        db_session, organization_id=DEFAULT_ORGANIZATION_ID, name="short-lived"
+    )
+    async with _http(db_session, token) as (endpoint, client):
+        assert await _tool_names(endpoint, mode, token)
+        before = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+        await api_keys.revoke_api_key(db_session, organization_id=DEFAULT_ORGANIZATION_ID, key_id=key.id)
+        after = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+
+    assert (before.status_code, after.status_code) == (200, 401)
+
+
+async def test_the_sdk_sees_the_authenticated_key_and_the_secret_is_not_in_it(
+    db_session: AsyncSession, clock: FakeClock, mode: str
+) -> None:
+    from mcp.server.auth.middleware.auth_context import get_access_token
+
+    key, token = await api_keys.create_api_key(
+        db_session, organization_id=DEFAULT_ORGANIZATION_ID, name="seen"
+    )
+    seen: list = []
+
+    async def resolver(ctx) -> Principal:
+        seen.append((get_access_token(), principal_from_request_context))
+        return await principal_from_request_context(ctx)
+
+    endpoint = McpHttpEndpoint(
+        _server(db_session, resolve_principal=resolver),
+        Settings(),
+        ApiKeyVerifier(_identity_sessions(db_session)),
+    )
+    async with endpoint.run():
+        http_client = httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=endpoint), base_url=BASE_URL, headers=_bearer(token)
+        )
+        async with Client(streamable_http_client(f"{BASE_URL}/mcp", http_client=http_client), mode=mode) as client:
+            await client.call_tool("get_page", {"document_id": str(uuid.uuid4()), "page_number": 1})
+
+    (access, _) = seen[0]
+    assert access.client_id == f"api-key:{key.id}"
+    assert access.subject == str(DEFAULT_ORGANIZATION_ID)
+    assert access.scopes == ["mcp:tools"]
+    assert token not in access.model_dump_json() and token not in repr(access)
+
+
+async def test_each_key_has_its_own_rate_limit_bucket(db_session: AsyncSession, clock: FakeClock) -> None:
+    first = await _key(db_session)
+    second = await _key(db_session)
+    async with _http(db_session, first, mcp_rate_limit_per_minute=2) as (_, client):
+        codes = [
+            (await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)).status_code
+            for _ in range(3)
+        ]
+        other = await client.post("/mcp", json=INITIALIZE, headers={**JSON_HEADERS, **_bearer(second)})
+        clock.now += WINDOW_SECONDS
+        later = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+
+    assert codes == [200, 200, 429]
+    assert other.status_code == 200
+    assert later.status_code == 200
+
+
+async def _add_page(db_session: AsyncSession, text: str) -> uuid.UUID:
+    document = Document(
+        filename=f"{text}.png", mime_type="image/png", storage_path="/tmp/t", status="extracted"
+    )
+    db_session.add(document)
+    await db_session.flush()
+    await index_document_pages(
+        db_session,
+        document.id,
+        [PageText(1, f"{text} receipt total 10.00", "gold")],
+        EMBEDDER,
+        ChunkingConfig(0, 0, False),
+    )
+    return document.id
+
+
+async def test_a_key_of_one_organization_sees_only_that_organization_through_all_three_tools(
+    db_session: AsyncSession,
+    second_organization,
+    ids: dict[str, uuid.UUID],
+    clock: FakeClock,
+    mode: str,
+) -> None:
+    """`ids` is the labeled corpus of the default organization (A). B has one
+    document of its own. Each key reads its own organization's and no other's
+    through query_extractions, search_documents and get_page."""
+    await bind_tenant(db_session, second_organization.id)
+    theirs = await _add_page(db_session, "zebrabar")
+    await bind_tenant(db_session, DEFAULT_ORGANIZATION_ID)
+    key_a = await _key(db_session)
+    key_b = await _key(db_session, second_organization.id)
+    a_page = str(ids["018-dense-office-outfitters"])
+
+    async def call(token: str, name: str, arguments: dict) -> types.CallToolResult:
+        http_client = httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=endpoint), base_url=BASE_URL, headers=_bearer(token)
+        )
+        async with Client(streamable_http_client(f"{BASE_URL}/mcp", http_client=http_client), mode=mode) as client:
+            return await client.call_tool(name, arguments)
+
+    async with _http(db_session, key_a) as (endpoint, _):
+        a_records = await call(key_a, "query_extractions", {})
+        a_search = await call(key_a, "search_documents", {"query": "LED Desk Lamp zebrabar"})
+        a_get = await call(key_a, "get_page", {"document_id": a_page, "page_number": 1})
+        b_records = await call(key_b, "query_extractions", {})
+        b_search = await call(key_b, "search_documents", {"query": "LED Desk Lamp zebrabar"})
+        b_get_a = await call(key_b, "get_page", {"document_id": a_page, "page_number": 1})
+        b_get_own = await call(key_b, "get_page", {"document_id": str(theirs), "page_number": 1})
+
+    mine = {str(document_id) for document_id in ids.values()}
+    assert _documents(a_records) and _documents(a_records) <= mine
+    assert _documents(a_search) and _documents(a_search) <= mine
+    assert a_get.is_error is False
+    assert _documents(b_records) == set()
+    assert _documents(b_search) == {str(theirs)}
+    assert b_get_a.is_error is True and a_page not in json.dumps(b_get_a.structured_content or {})
+    assert b_get_own.is_error is False

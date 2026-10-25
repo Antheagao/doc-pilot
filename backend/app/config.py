@@ -2,7 +2,7 @@ import tempfile
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.extraction_fields import schema_for
@@ -197,6 +197,12 @@ class Settings(BaseSettings):
     # it, a loop hammering the database does not. The tools never call a model,
     # so this guards the database and embedder, not spend.
     mcp_rate_limit_per_minute: int = Field(default=120, ge=0)
+    # The API key the stdio server (`python -m app.mcp_server`) acts as: it
+    # names the organization whose documents the tools read, is verified at
+    # startup and again on every tool call, and is required. Read from
+    # DOCPILOT_API_KEY, the name an MCP client's `env` block sets; a SecretStr,
+    # so it prints as ********.
+    mcp_stdio_api_key: SecretStr | None = Field(default=None, validation_alias="DOCPILOT_API_KEY")
 
     # --- Sign-in (app/auth/) ----------------------------------------------
     # The browser session cookie's name. The demo stack sets its own: cookies
