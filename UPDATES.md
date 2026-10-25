@@ -32,7 +32,7 @@ Update this file at the end of every session: move items between sections, appen
 - M3 (`081868c`): Streamable HTTP at `/mcp` on the API, loopback Host only, any Origin refused, POST only, rate limited in its own bucket.
 - M4: README section and overlays.
 - The Mac dev stack was two weeks old with an empty database behind the migrations; it was backed up, rebuilt, and migrated to head. Claude Code connected to both transports (`claude mcp list`, added in a scratch directory and removed after).
-- Waiting on Anthony: M5, the demo GIF of Claude Code answering through the tools (uses his Claude subscription and needs `brew install vhs`); B11b (paid) and B12 as before.
+- Waiting on Anthony: M5, the demo GIF of Claude Code answering through the tools (uses Anthony's Claude subscription and needs `brew install vhs`); B11b (paid) and B12 as before.
 
 ### 2026-10-15 (macOS: batch-loop through Batch B's zero-spend tasks; stopped at the first paid run)
 - Batch B expanded by the planner into twelve tasks (`edbd2b5`), every one implemented by a coder and passed through a deep review before its commit, with no Co-Authored-By trailers:
