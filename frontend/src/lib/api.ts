@@ -180,50 +180,116 @@ export interface DocumentDetail {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  // Seconds from a Retry-After header (a 429), or null when it sent none.
+  retryAfterSeconds: number | null;
+  constructor(status: number, message: string, retryAfterSeconds: number | null = null) {
     super(message);
     this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
     this.name = "ApiError";
   }
 }
 
-async function handle<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      if (typeof body.detail === "string") {
-        // The common FastAPI HTTPException shape.
-        detail = body.detail;
-      } else if (body.detail !== undefined) {
-        // Validation errors (422) send `detail` as an array of objects
-        // ({loc, msg, type}); stringify rather than let it render as
-        // "[object Object]".
-        detail = JSON.stringify(body.detail);
-      }
-    } catch {
-      // response body wasn't JSON; fall back to statusText
-    }
-    throw new ApiError(res.status, detail);
+const LOGIN_PATH = "/login";
+
+/** Where to go after sign-in. `next` comes from the address bar, so it is
+ * untrusted: only a path on this site is accepted, and anything else is the
+ * home page. A path is "/" then anything, but not "//" or "/\" (both mean
+ * another host to a browser), and no control character (a browser drops a tab
+ * or newline inside a URL, so "/<tab>/evil.example" would become
+ * "//evil.example"). The URL parser has the last word: the result must resolve
+ * to this origin, and it never returns to the sign-in page itself. */
+export function safeNextPath(next: string | null | undefined): string {
+  if (typeof next !== "string" || !next.startsWith("/")) return "/";
+  if (next.startsWith("//") || next.startsWith("/\\")) return "/";
+  for (let i = 0; i < next.length; i += 1) {
+    const code = next.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return "/";
   }
+  const base = "http://same-origin.invalid";
+  let resolved: URL;
+  try {
+    resolved = new URL(next, base);
+  } catch {
+    return "/";
+  }
+  if (resolved.origin !== base || resolved.pathname === LOGIN_PATH) return "/";
+  return next;
+}
+
+let redirectingToLogin = false;
+
+/** Send the browser to the sign-in page, remembering where it was. Once per
+ * page load (a page fires several requests at once), and never from the
+ * sign-in page itself, where a 401 is an answer to show, not a reason to
+ * leave. A full navigation, so no signed-in state survives in memory. */
+function redirectToLogin(): void {
+  if (typeof window === "undefined" || redirectingToLogin) return;
+  const { pathname, search } = window.location;
+  if (pathname === LOGIN_PATH) return;
+  redirectingToLogin = true;
+  // A page restored from the back/forward cache keeps this flag; reset it.
+  window.addEventListener("pageshow", () => (redirectingToLogin = false), { once: true });
+  window.location.assign(`${LOGIN_PATH}?next=${encodeURIComponent(pathname + search)}`);
+}
+
+/** Every call to the API goes through here: the session cookie rides along
+ * (the API is another origin), nothing is cached, and a 401 sends the
+ * browser to the sign-in page. `path` starts with "/". */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(`${API_URL}${path}`, {
+    ...init,
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (res.status === 401) redirectToLogin();
+  return res;
+}
+
+function retryAfterSeconds(res: Response): number | null {
+  const seconds = Number(res.headers.get("Retry-After"));
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : null;
+}
+
+async function toApiError(res: Response): Promise<ApiError> {
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    if (typeof body.detail === "string") {
+      // The common FastAPI HTTPException shape.
+      detail = body.detail;
+    } else if (body.detail !== undefined) {
+      // Validation errors (422) send `detail` as an array of objects
+      // ({loc, msg, type}); stringify rather than let it render as
+      // "[object Object]".
+      detail = JSON.stringify(body.detail);
+    }
+  } catch {
+    // response body wasn't JSON; fall back to statusText
+  }
+  return new ApiError(res.status, detail, retryAfterSeconds(res));
+}
+
+async function handle<T>(res: Response): Promise<T> {
+  if (!res.ok) throw await toApiError(res);
   return res.json() as Promise<T>;
+}
+
+/** For a 204: nothing to parse. */
+async function handleNoContent(res: Response): Promise<void> {
+  if (!res.ok) throw await toApiError(res);
 }
 
 export async function listDocuments(
   limit = 50,
   offset = 0
 ): Promise<DocumentListItem[]> {
-  const res = await fetch(
-    `${API_URL}/documents?limit=${limit}&offset=${offset}`,
-    { cache: "no-store" }
-  );
+  const res = await apiFetch(`/documents?limit=${limit}&offset=${offset}`);
   return handle<DocumentListItem[]>(res);
 }
 
 export async function getDocument(id: string): Promise<DocumentDetail> {
-  const res = await fetch(`${API_URL}/documents/${encodeURIComponent(id)}`, {
-    cache: "no-store",
-  });
+  const res = await apiFetch(`/documents/${encodeURIComponent(id)}`);
   return handle<DocumentDetail>(res);
 }
 
@@ -257,17 +323,12 @@ export async function getReviewQueue(
   limit = 50,
   offset = 0
 ): Promise<ReviewQueueItem[]> {
-  const res = await fetch(
-    `${API_URL}/review/queue?limit=${limit}&offset=${offset}`,
-    { cache: "no-store" }
-  );
+  const res = await apiFetch(`/review/queue?limit=${limit}&offset=${offset}`);
   return handle<ReviewQueueItem[]>(res);
 }
 
 export async function getReviewQueueCount(): Promise<number> {
-  const res = await fetch(`${API_URL}/review/queue/count`, {
-    cache: "no-store",
-  });
+  const res = await apiFetch("/review/queue/count");
   const body = await handle<{ pending: number }>(res);
   return body.pending;
 }
@@ -282,14 +343,11 @@ export async function resolveReviewField(
     | { action: "approve" }
     | { action: "correct"; corrected_value: unknown }
 ): Promise<ExtractedField> {
-  const res = await fetch(
-    `${API_URL}/review/fields/${encodeURIComponent(fieldId)}/resolve`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(resolution),
-    }
-  );
+  const res = await apiFetch(`/review/fields/${encodeURIComponent(fieldId)}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(resolution),
+  });
   const field = await handle<ExtractedField>(res);
   if (typeof window !== "undefined") window.dispatchEvent(new Event(REVIEW_QUEUE_CHANGED));
   return field;
@@ -370,14 +428,14 @@ export interface StatsAsk {
 }
 
 export async function getStats(): Promise<Stats> {
-  const res = await fetch(`${API_URL}/stats`, { cache: "no-store" });
+  const res = await apiFetch("/stats");
   return handle<Stats>(res);
 }
 
 export async function uploadDocument(file: File): Promise<DocumentCreateResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  const res = await fetch(`${API_URL}/documents`, {
+  const res = await apiFetch("/documents", {
     method: "POST",
     body: formData,
   });
@@ -417,7 +475,7 @@ export async function searchDocuments(
   k = 8
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, mode, k: String(k) });
-  const res = await fetch(`${API_URL}/search?${params}`, { cache: "no-store" });
+  const res = await apiFetch(`/search?${params}`);
   return handle<SearchResponse>(res);
 }
 
@@ -506,7 +564,7 @@ export interface AskRunSummary {
 }
 
 export async function askQuestion(question: string): Promise<AskResponse> {
-  const res = await fetch(`${API_URL}/ask`, {
+  const res = await apiFetch("/ask", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
@@ -553,15 +611,15 @@ export async function askQuestionStream(
   question: string,
   onEvent: (event: AskEvent) => void
 ): Promise<void> {
-  await streamAgentRun(`${API_URL}/ask/stream`, { question }, onEvent);
+  await streamAgentRun("/ask/stream", { question }, onEvent);
 }
 
 async function streamAgentRun(
-  url: string,
+  path: string,
   body: Record<string, unknown>,
   onEvent: (event: AskEvent) => void
 ): Promise<void> {
-  const res = await fetch(url, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -593,17 +651,17 @@ export class StreamInterruptedError extends Error {
 
 export async function listAskRuns(limit = 10): Promise<AskRunSummary[]> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const res = await fetch(`${API_URL}/ask/runs?${params}`, { cache: "no-store" });
+  const res = await apiFetch(`/ask/runs?${params}`);
   return handle<AskRunSummary[]>(res);
 }
 
 export async function getAskRun(id: string): Promise<AskResponse> {
-  const res = await fetch(`${API_URL}/ask/runs/${encodeURIComponent(id)}`, { cache: "no-store" });
+  const res = await apiFetch(`/ask/runs/${encodeURIComponent(id)}`);
   return handle<AskResponse>(res);
 }
 
 export async function sendAskFeedback(id: string, rating: Feedback): Promise<AskResponse> {
-  const res = await fetch(`${API_URL}/ask/runs/${encodeURIComponent(id)}/feedback`, {
+  const res = await apiFetch(`/ask/runs/${encodeURIComponent(id)}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rating }),
@@ -631,7 +689,7 @@ export async function chatStream(
   onEvent: (event: AskEvent) => void
 ): Promise<void> {
   await streamAgentRun(
-    `${API_URL}/documents/${encodeURIComponent(documentId)}/chat/stream`,
+    `/documents/${encodeURIComponent(documentId)}/chat/stream`,
     { question, conversation_id: conversationId },
     onEvent
   );
@@ -642,9 +700,8 @@ export async function listConversations(
   limit = 20
 ): Promise<ConversationSummary[]> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const res = await fetch(
-    `${API_URL}/documents/${encodeURIComponent(documentId)}/chat/conversations?${params}`,
-    { cache: "no-store" }
+  const res = await apiFetch(
+    `/documents/${encodeURIComponent(documentId)}/chat/conversations?${params}`
   );
   return handle<ConversationSummary[]>(res);
 }
@@ -653,9 +710,8 @@ export async function getConversation(
   documentId: string,
   conversationId: string
 ): Promise<AskResponse[]> {
-  const res = await fetch(
-    `${API_URL}/documents/${encodeURIComponent(documentId)}/chat/conversations/${encodeURIComponent(conversationId)}`,
-    { cache: "no-store" }
+  const res = await apiFetch(
+    `/documents/${encodeURIComponent(documentId)}/chat/conversations/${encodeURIComponent(conversationId)}`
   );
   return handle<AskResponse[]>(res);
 }
@@ -685,7 +741,7 @@ export interface EvalRun {
 export type EvalHistory = Record<EvalSuite, EvalRun[]>;
 
 export async function getEvalHistory(): Promise<EvalHistory> {
-  const res = await fetch(`${API_URL}/monitoring/evals`, { cache: "no-store" });
+  const res = await apiFetch("/monitoring/evals");
   return handle<EvalHistory>(res);
 }
 
@@ -714,6 +770,105 @@ export interface DailyPoint {
 
 export async function getDailyMetrics(days: number): Promise<DailyPoint[]> {
   const params = new URLSearchParams({ days: String(days) });
-  const res = await fetch(`${API_URL}/monitoring/daily?${params}`, { cache: "no-store" });
+  const res = await apiFetch(`/monitoring/daily?${params}`);
   return handle<DailyPoint[]>(res);
+}
+
+// ---- Sign-in and API keys: /auth/*, /api-keys ---------------------------------
+
+// The same limits as the API (backend/app/schemas.py), so a form can stop what
+// the server would refuse. The server stays the source of truth.
+export const EMAIL_MAX_LENGTH = 254;
+export const PASSWORD_MIN_LENGTH = 12;
+export const PASSWORD_MAX_LENGTH = 128;
+export const API_KEY_NAME_MAX_LENGTH = 100;
+
+export type MembershipRole = "owner" | "member";
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  // The signed-in user's role in it.
+  role: MembershipRole;
+}
+
+// Who is signed in: `organization` is the one this session works in, and
+// `organizations` every one they could switch to.
+export interface Me {
+  id: string;
+  email: string;
+  organization: Organization;
+  organizations: Organization[];
+}
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  // `dpk_<prefix>` identifies a key; nothing listed here can authenticate.
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  // A revoked key stays listed, for the record.
+  revoked_at: string | null;
+}
+
+// The 201 of POST /api-keys: the only response that ever holds the secret.
+export interface CreatedApiKey {
+  api_key: ApiKey;
+  secret: string;
+}
+
+/** Sign in. A wrong email or password is an ApiError 401, which stays on the
+ * sign-in page; too many tries is a 429 with `retryAfterSeconds`. */
+export async function login(email: string, password: string): Promise<Me> {
+  const res = await apiFetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  return handle<Me>(res);
+}
+
+export async function logout(): Promise<void> {
+  const res = await apiFetch("/auth/logout", { method: "POST" });
+  await handleNoContent(res);
+}
+
+export async function getMe(): Promise<Me> {
+  const res = await apiFetch("/auth/me");
+  return handle<Me>(res);
+}
+
+/** Work in another of the user's organizations; the session's cookie is
+ * replaced. Every page's data differs afterwards, so the caller reloads. */
+export async function switchOrganization(organizationId: string): Promise<Me> {
+  const res = await apiFetch("/auth/organization", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ organization_id: organizationId }),
+  });
+  return handle<Me>(res);
+}
+
+export async function listApiKeys(): Promise<ApiKey[]> {
+  const res = await apiFetch("/api-keys");
+  const body = await handle<{ api_keys: ApiKey[] }>(res);
+  return body.api_keys;
+}
+
+/** Owners only (403 for a member). The secret is in this response and nowhere
+ * else: the caller shows it once and lets it go. */
+export async function createApiKey(name: string): Promise<CreatedApiKey> {
+  const res = await apiFetch("/api-keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  return handle<CreatedApiKey>(res);
+}
+
+export async function revokeApiKey(id: string): Promise<void> {
+  const res = await apiFetch(`/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await handleNoContent(res);
 }

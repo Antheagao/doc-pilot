@@ -13,8 +13,8 @@
   --accent-contrast: #ffffff;
 
   --status-uploaded: #52525b;
-  --status-processing: #b45309;
-  --status-extracted: #15803d;
+  --status-processing: #92400e;
+  --status-extracted: #166534;
   --status-failed: #b91c1c;
   --status-refused: #7c2d12;
 
@@ -123,7 +123,6 @@ textarea:focus-visible,
   z-index: 10;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 1rem;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
@@ -318,7 +317,8 @@ textarea:focus-visible,
   background: currentColor;
 }
 
-.status-chip--uploaded {
+.status-chip--uploaded,
+.status-chip--revoked {
   background: color-mix(in srgb, var(--status-uploaded) 14%, transparent);
   color: var(--status-uploaded);
 }
@@ -810,6 +810,7 @@ textarea:focus-visible,
   display: flex;
   align-items: center;
   gap: 1.25rem;
+  margin-left: auto;
 }
 
 .nav-link {
@@ -822,10 +823,12 @@ textarea:focus-visible,
   color: var(--accent);
 }
 
-/* Phone widths: keep the brand and all four links on one header row. */
+/* Phone widths: the brand and the account control share the first header row
+   and the four links take the second, so nothing is squeezed. */
 @media (max-width: 480px) {
   .site-header {
-    gap: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
     padding: 0.85rem 1rem;
   }
 
@@ -834,11 +837,20 @@ textarea:focus-visible,
   }
 
   .site-nav {
-    gap: 0.7rem;
+    order: 3;
+    flex: 1 0 100%;
+    margin-left: 0;
+    gap: 1rem;
   }
 
-  .nav-link {
-    font-size: 0.8rem;
+  .nav-link,
+  .review-nav-link {
+    font-size: 0.85rem;
+  }
+
+  .account-menu,
+  .account-placeholder {
+    margin-left: auto;
   }
 }
 
@@ -2154,5 +2166,539 @@ ul.review-evidence {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.03em;
+  }
+}
+
+/* ---- Account menu (header) ---- */
+
+.account-menu {
+  position: relative;
+}
+
+/* Holds the control's place while /auth/me loads, so the nav does not jump. */
+.account-placeholder {
+  display: block;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.account-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  padding: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.account-trigger:hover,
+.account-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+
+.account-trigger:focus-visible {
+  border-radius: 999px;
+}
+
+.account-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+/* The email is the button's name at every width; below 720px it is only
+   visually hidden, so the control is the initial alone. */
+.account-trigger-label {
+  max-width: 16rem;
+  padding-right: 0.6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 719px) {
+  .account-trigger-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    clip: rect(0, 0, 0, 0);
+  }
+}
+
+.account-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: max-content;
+  min-width: 15rem;
+  max-width: min(21rem, calc(100vw - 2rem));
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card), 0 8px 24px rgb(0 0 0 / 0.14);
+}
+
+.account-panel[hidden] {
+  display: none;
+}
+
+.account-identity {
+  padding: 0.4rem 0.6rem 0.6rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-email {
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.account-org {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.account-role {
+  padding: 0 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.account-switcher {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.25rem 0.6rem 0.6rem;
+}
+
+.account-switcher-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.account-switcher-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-switcher label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.account-item {
+  display: block;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+.account-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.account-error {
+  padding: 0.25rem 0.6rem;
+  color: var(--status-failed);
+  font-size: 0.82rem;
+}
+
+/* ---- Sign-in page ---- */
+
+.auth-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  padding: 2rem 1rem;
+}
+
+.auth-brand {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 24rem;
+  /* The signed-out card's height once hydrated (measured at 360 and 1440), so
+     the Suspense fallback of the prerendered page holds the same space. */
+  min-height: 19.55rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.auth-hint {
+  margin: 0.25rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.form-field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+/* 16px inputs: a phone does not zoom the page when one takes focus. */
+.auth-form .review-input,
+.key-create .review-input {
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+}
+
+.auth-form .error-banner {
+  margin: 0;
+}
+
+/* The empty live region would add a second flex gap; take it back. */
+.auth-form [role="alert"]:empty {
+  margin-top: -0.9rem;
+}
+
+.auth-submit {
+  padding: 0.6rem 0.9rem;
+  font-size: 0.95rem;
+}
+
+/* ---- API keys ---- */
+
+.btn-danger {
+  border-color: var(--status-failed);
+  color: var(--status-failed);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-failed) 10%, transparent);
+}
+
+.key-create {
+  align-items: flex-end;
+}
+
+.key-create .btn {
+  min-height: 2.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 480px) {
+  .key-create .btn {
+    width: 100%;
+  }
+}
+
+.key-create-field {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+/* Focus lands here after a revoke (the button it was on is gone); the status
+   line beside it says what happened. Programmatic focus after a keyboard
+   action shows the standard ring. */
+.section-heading[tabindex="-1"] {
+  width: fit-content;
+}
+
+.section-heading[tabindex="-1"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+.key-status-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.key-status-note:not(:empty) {
+  margin-bottom: 0.5rem;
+}
+
+.key-note {
+  margin: 1rem 0 0;
+  padding: 0.65rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.key-secret {
+  margin: 1rem 0;
+  border-color: var(--accent);
+}
+
+.key-secret-title {
+  font-size: 1rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.key-secret-warning {
+  display: inline-block;
+  margin: 0.4rem 0 0.75rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--confidence-low-border);
+  border-radius: var(--radius-control);
+  background: var(--confidence-low-bg);
+  color: var(--confidence-low-fg);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.key-secret-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.key-secret-row .btn {
+  min-height: 2.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.95rem;
+}
+
+.key-secret-input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  min-height: 2.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.key-secret-status {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* The live region stays mounted, but takes no room until it has text. */
+.key-secret-status:empty {
+  margin-top: 0;
+}
+
+.key-create .review-input:disabled {
+  opacity: 0.55;
+}
+
+.key-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+  font-size: 0.88rem;
+}
+
+.key-col-name { width: 17%; }
+.key-col-key { width: 15%; }
+.key-col-created { width: 17%; }
+.key-col-used { width: 17%; }
+.key-col-status { width: 9%; }
+.key-col-actions { width: 25%; }
+.key-col-name.member { width: 26%; }
+.key-col-key.member { width: 22%; }
+.key-col-created.member { width: 21%; }
+.key-col-used.member { width: 17%; }
+.key-col-status.member { width: 14%; }
+
+.key-table th,
+.key-table td {
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.key-table tbody tr:last-child > * {
+  border-bottom: none;
+}
+
+.key-table thead th {
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.key-table .key-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.key-prefix {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.key-table td:nth-child(3),
+.key-table td:nth-child(4) {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.key-revoked .key-name,
+.key-revoked .key-prefix {
+  color: var(--muted);
+}
+
+.key-table .key-actions {
+  text-align: right;
+}
+
+.key-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem 0.5rem;
+}
+
+.key-confirm-text {
+  flex: 1 1 100%;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Phones: each key becomes a card of labelled lines, so no column is squeezed. */
+@media (max-width: 900px) {
+  .key-table,
+  .key-table tbody,
+  .key-table tr,
+  .key-table td,
+  .key-table th[scope="row"] {
+    display: block;
+  }
+
+  .key-table colgroup {
+    display: none;
+  }
+
+  .key-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .key-table tr {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .key-table tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .key-table th,
+  .key-table td {
+    padding: 0.15rem 0;
+    border-bottom: none;
+  }
+
+  .key-table .key-name {
+    margin-bottom: 0.25rem;
+    font-size: 0.95rem;
+  }
+
+  .key-table td[data-label] {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .key-table td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 5.5rem;
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .key-table .key-actions {
+    margin-top: 0.5rem;
+    text-align: left;
+  }
+
+  .key-confirm {
+    justify-content: flex-start;
   }
 }
