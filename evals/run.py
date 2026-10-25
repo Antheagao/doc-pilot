@@ -16,7 +16,6 @@ import argparse
 import asyncio
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -172,23 +171,6 @@ def _print_evidence(coverage: dict) -> None:
     )
 
 
-def _mock_out_dir(out: str | None) -> Path:
-    """Where a --mock run writes: a new temporary directory by default, and
-    never evals/results or anything under it, where the README tables and the
-    other eval loaders (judge, retrieval) would pick the mock run up as if it
-    were a measurement."""
-    if out is None:
-        return Path(tempfile.mkdtemp(prefix="doc-pilot-mock-eval-"))
-    out_dir = Path(out).resolve()
-    if out_dir == RESULTS_DIR.resolve() or RESULTS_DIR.resolve() in out_dir.parents:
-        print(
-            f"error: --mock never writes under {RESULTS_DIR}; give another --out or none",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    return out_dir
-
-
 def _update_readme(results_dir: Path | None) -> None:
     from app.evals.report import (
         load_results,
@@ -218,6 +200,17 @@ def main() -> None:
         )
         sys.exit(1)
 
+    from app.config import get_settings
+
+    scripted = get_settings().model_provider == "scripted"
+    if scripted and args.update_readme:
+        print(
+            "error: MODEL_PROVIDER=scripted runs are never reported: drop --update-readme "
+            "(the README tables are built from evals/results, which holds only real runs)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     out_dir = Path(args.out) if args.out else None
 
     if args.report_only:
@@ -229,8 +222,8 @@ def main() -> None:
             _update_readme(out_dir)
         sys.exit(0)
 
-    from app.config import get_settings
     from app.evals.dataset import load_cases
+    from app.evals.report import scratch_out_dir
     from app.evals.runner import (
         build_mock_extract_fn,
         run_eval,
@@ -244,8 +237,17 @@ def main() -> None:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
-    if args.mock:
-        out_dir = _mock_out_dir(args.out)
+    # A scripted run, like a --mock one, measures nothing real, so neither may
+    # write where the README tables, the dashboard and the other loaders read.
+    unreported = args.mock or scripted
+    if unreported:
+        try:
+            out_dir = scratch_out_dir(
+                args.out, source="--mock" if args.mock else "MODEL_PROVIDER=scripted"
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(2)
 
     if args.model:
         os.environ["EXTRACTION_MODEL"] = args.model
@@ -274,8 +276,8 @@ def main() -> None:
 
     out_path = write_result(result, out_dir)
     print(f"\nwrote {out_path}")
-    if args.mock and args.out is None:
-        print("(a temporary directory: the mock artifact is not reported anywhere)")
+    if unreported and args.out is None:
+        print("(a temporary directory: the artifact is not reported anywhere)")
 
     if args.update_readme:
         # Reload from ALL artifacts in out_dir, not just this run's

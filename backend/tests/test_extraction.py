@@ -2624,7 +2624,8 @@ async def test_an_uncached_extraction_stores_zero_cache_tokens(
 
 
 # The published cache-read price as a multiple of the input price (claude-api
-# skill): 0.1x for most models, 0.05x for Claude Opus 5.5.
+# skill): 0.1x for most models, 0.05x for Claude Opus 5.5, and 0 for the scripted
+# stand-in, which costs nothing at all.
 _CACHE_READ_MULTIPLIERS = {
     "claude-sonnet-5": 0.10,
     "claude-opus-5": 0.10,
@@ -2632,6 +2633,7 @@ _CACHE_READ_MULTIPLIERS = {
     "claude-opus-5-5": 0.05,
     "claude-sonnet-5-5": 0.10,
     "claude-opus-4-8": 0.10,
+    "scripted": 0,
 }
 
 

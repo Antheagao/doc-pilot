@@ -10,6 +10,7 @@ dependencies = [
     "alembic",
     "asyncpg",
     "anthropic",
+    "httpx2>=2.13,<3",  # the SDK's HTTP stack; app/scripted_model.py builds the 400 the SDK would raise
     "pydantic-settings",
     "python-multipart",
     "pypdf",

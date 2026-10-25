@@ -32,14 +32,14 @@ import uuid
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import anthropic
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from app.config import Settings, get_settings
+from app.config import SCRIPTED_MODEL, Settings, get_settings
 from app.extraction_fields import (
     ARRAY_CELLS,
     EVIDENCE_QUOTE_MAX_CHARS,
@@ -58,6 +58,9 @@ from app.models import (
 from app.pdf import count_pdf_pages, split_pdf_pages
 from app.pii import digits_of, mask_card_numbers, mask_digit_runs
 from app.telemetry import current_traceparent, model_call_span, record_model_response
+
+if TYPE_CHECKING:
+    from app.scripted_model import ScriptedModelClient
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,11 @@ PRICING_PER_MTOK: dict[str, ModelPrice] = {
     "claude-opus-5-5": ModelPrice(4.00, 20.00, 0.05),
     "claude-sonnet-5-5": ModelPrice(2.00, 10.00, 0.10),
     "claude-opus-4-8": ModelPrice(5.00, 25.00, 0.10),
+    # The scripted stand-in (app/scripted_model.py, MODEL_PROVIDER=scripted)
+    # answers from committed data and costs nothing: the real pricing code runs
+    # on its token counts and comes out 0, so a stored row's cost is computed,
+    # not hard-coded, and the daily budget never sees a cent from it.
+    SCRIPTED_MODEL: ModelPrice(0, 0, 0),
 }
 
 # 5-minute prompt-cache writes bill at 1.25x the input price, for every model
@@ -212,10 +220,26 @@ class ExtractionResult:
     cache_read_input_tokens: int = 0
 
 
-def _build_client(settings: Settings) -> anthropic.AsyncAnthropic:
+def check_model_provider(settings: Settings) -> None:
+    """At the startup of the API and the worker: a scripted process loads its
+    corpus now and refuses to start without it (RuntimeError), instead of
+    failing the first job that reaches a model call. A no-op for the real
+    provider."""
+    if settings.model_provider == "scripted":
+        from app.scripted_model import require_corpus
+
+        require_corpus()
+
+
+def _build_client(settings: Settings) -> "anthropic.AsyncAnthropic | ScriptedModelClient":
     """Factored out so tests can monkeypatch just the client construction
     and inject a fake with a mocked `.messages.create` -- no network, no
     need to stub the whole extract_document call.
+
+    MODEL_PROVIDER=scripted returns the scripted stand-in
+    (app/scripted_model.py), a drop-in with the same `messages.create` and
+    `beta.messages.create` that never touches the network or builds an
+    Anthropic client, so every caller below runs its real code on it.
 
     max_retries/timeout are two independent retry layers with different
     horizons, not a duplication of each other: the SDK retries transport
@@ -226,6 +250,12 @@ def _build_client(settings: Settings) -> anthropic.AsyncAnthropic:
     worker invocations, only after the SDK's own retries are exhausted
     and extract_document raises. Neither layer replaces the other.
     """
+    if settings.model_provider == "scripted":
+        # Imported here: the scripted model reads this module's pricing and the
+        # prompts of the modules that import this one.
+        from app.scripted_model import ScriptedModelClient
+
+        return ScriptedModelClient(settings)
     return anthropic.AsyncAnthropic(
         api_key=settings.anthropic_api_key,
         max_retries=settings.anthropic_max_retries,

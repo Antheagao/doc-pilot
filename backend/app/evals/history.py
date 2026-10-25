@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from app.config import SCRIPTED_MODEL
 from app.evals.agent import RESULTS_DIR as AGENT_RESULTS_DIR
 from app.evals.checks import check_metrics
 from app.evals.report import RESULTS_DIR as EXTRACTION_RESULTS_DIR
@@ -74,10 +75,14 @@ def _read_json_dir(directory: Path) -> list[tuple[Path, dict[str, Any]]]:
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("skipping unreadable eval artifact %s: %s", path, exc)
             continue
-        if isinstance(data, dict):
-            loaded.append((path, data))
-        else:
+        if not isinstance(data, dict):
             logger.warning("skipping eval artifact %s: not a JSON object", path)
+        elif data.get("model") == SCRIPTED_MODEL:
+            # A run made with no model is never a measurement (load_results
+            # skips the extraction ones the same way).
+            logger.warning("skipping eval artifact %s: a scripted run, not a measurement", path)
+        else:
+            loaded.append((path, data))
     return loaded
 
 

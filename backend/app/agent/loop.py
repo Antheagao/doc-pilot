@@ -52,6 +52,7 @@ from app.telemetry import (
     GEN_AI_REQUEST_MODEL,
     current_traceparent,
     model_call_span,
+    provider_name,
     record_model_response,
     tracer,
 )
@@ -355,7 +356,7 @@ async def answer_question(
         kind=SpanKind.INTERNAL,
         attributes={
             GEN_AI_OPERATION_NAME: "invoke_agent",
-            GEN_AI_PROVIDER_NAME: "anthropic",
+            GEN_AI_PROVIDER_NAME: provider_name(model),
             GEN_AI_AGENT_NAME: AGENT_NAME,
             GEN_AI_REQUEST_MODEL: model,
             # A document chat is a Langfuse session: its turns, together.

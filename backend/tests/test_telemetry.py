@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import extraction as extraction_module
 from app import telemetry
 from app import transcription as transcription_module
-from app.config import Settings
+from app.config import SCRIPTED_MODEL, Settings
 from app.db import async_session_maker
 from app.extraction import extract_document, process_document_job
 from app.extraction_fields import SCHEMA_V1
@@ -447,9 +447,45 @@ async def test_agent_run_is_an_invoke_agent_span_over_chat_and_tool_spans(
     assert tool.parent.span_id == agent.context.span_id
     assert tool.attributes["gen_ai.tool.call.id"] == "toolu_9"
     assert agent.attributes["gen_ai.operation.name"] == "invoke_agent"
+    assert agent.attributes["gen_ai.provider.name"] == "anthropic"
+    assert {chat.attributes["gen_ai.provider.name"] for chat in chats} == {"anthropic"}
     assert agent.attributes["docpilot.agent.status"] == "answered"
     assert agent.attributes["docpilot.agent.tool_calls"] == 1
     assert result.trace_id == format(agent.context.trace_id, "032x")
+
+
+async def test_a_scripted_model_call_and_agent_run_name_the_scripted_provider(
+    db_session: AsyncSession, spans
+) -> None:
+    from types import SimpleNamespace
+
+    from app.agent.loop import answer_question
+    from app.agent.tools import ToolContext
+
+    usage = SimpleNamespace(
+        input_tokens=900, output_tokens=120, cache_read_input_tokens=0, cache_creation_input_tokens=0
+    )
+    response = SimpleNamespace(
+        id="m1", model="scripted", content=[_Text("None found.")], stop_reason="end_turn",
+        stop_details=None, usage=usage,
+    )
+    client = SimpleNamespace(
+        beta=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=response)))
+    )
+    ctx = ToolContext(session=db_session, embedder=HashingEmbedder(), document_ids=[])
+    settings = Settings(
+        model_provider="scripted", extraction_model=SCRIPTED_MODEL,
+        transcription_model=SCRIPTED_MODEL, agent_model=SCRIPTED_MODEL,
+        judge_model=SCRIPTED_MODEL, anthropic_api_key=None,
+    )
+
+    await answer_question(ctx, "q", settings, client)
+
+    (agent,) = _named(spans, "invoke_agent doc-pilot-ask")
+    (chat,) = _named(spans, "chat scripted")
+    assert agent.attributes["gen_ai.provider.name"] == "scripted"
+    assert chat.attributes["gen_ai.provider.name"] == "scripted"
+    assert chat.attributes["gen_ai.request.model"] == "scripted"
 
 
 async def test_a_chat_turn_records_its_conversation_and_prompt(

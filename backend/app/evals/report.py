@@ -17,9 +17,11 @@ can't take down reporting for every other run in evals/results/.
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
+from app.config import SCRIPTED_MODEL
 from app.evals.checks import check_metrics, doc_routing
 from app.evals.dataset import CORE_DOC_IDS, EVALS_DIR
 from app.extraction_fields import SCHEMA_V1, SCHEMAS
@@ -135,6 +137,21 @@ _SCHEMA_V2_CAPTION = (
 )
 
 
+def scratch_out_dir(out: str | None, *, source: str) -> Path:
+    """Where a run that must never be reported writes (a --mock run, or any run
+    under MODEL_PROVIDER=scripted, whose `source` is named in the error): a new
+    temporary directory by default, and never evals/results or anything under
+    it, where the README tables, the dashboard and the other eval loaders
+    would pick it up as if it were a measurement. Raises ValueError for an
+    --out under evals/results."""
+    if out is None:
+        return Path(tempfile.mkdtemp(prefix="doc-pilot-unreported-eval-"))
+    out_dir = Path(out).resolve()
+    if out_dir == RESULTS_DIR.resolve() or RESULTS_DIR.resolve() in out_dir.parents:
+        raise ValueError(f"{source} never writes under {RESULTS_DIR}; give another --out or none")
+    return out_dir
+
+
 def load_results(results_dir: Path | None = None) -> list[dict[str, Any]]:
     """Load every *.json artifact in `results_dir` (default
     EVALS_DIR/"results"), sorted by started_at_utc.
@@ -142,7 +159,10 @@ def load_results(results_dir: Path | None = None) -> list[dict[str, Any]]:
     A file that isn't valid JSON, isn't a JSON object, or is missing one
     of _REQUIRED_KEYS is skipped with a warning printed to stderr -- one
     corrupt or half-written artifact must not prevent the rest of the
-    run history from being reported. Returns [] if `results_dir` doesn't
+    run history from being reported. So is an artifact whose model is the
+    scripted stand-in: a run made with no model is never a measurement. The
+    CLIs keep such a run out of this directory (scratch_out_dir); this is the
+    second layer. Returns [] if `results_dir` doesn't
     exist (e.g. no eval has ever been run yet).
     """
     if results_dir is None:
@@ -171,6 +191,13 @@ def load_results(results_dir: Path | None = None) -> list[dict[str, Any]]:
         if missing:
             print(
                 f"warning: skipping eval artifact {path}: missing key(s) {missing}",
+                file=sys.stderr,
+            )
+            continue
+
+        if data["model"] == SCRIPTED_MODEL:
+            print(
+                f"warning: skipping eval artifact {path}: a scripted run, not a measurement",
                 file=sys.stderr,
             )
             continue

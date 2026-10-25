@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import partial
@@ -17,6 +18,7 @@ from app.auth import passwords
 from app.auth.principal import current_principal
 from app.config import get_settings
 from app.db import async_session_maker, engine, verify_tenant_isolation
+from app.extraction import check_model_provider
 from app.mcp_server.auth import ApiKeyVerifier, principal_from_request_context
 from app.mcp_server.http import McpHttpEndpoint
 from app.mcp_server.server import build_server
@@ -139,11 +141,20 @@ mcp_endpoint = McpHttpEndpoint(
 )
 
 
+# uvicorn's own logger, because the API configures no logging of its own and an
+# INFO line from this module would never print under uvicorn's defaults.
+startup_logger = logging.getLogger("uvicorn.error")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Before anything serves: a role that skips row-level security must stop
     # the API here, not turn the database layer off silently.
     await verify_tenant_isolation(engine)
+    # Who answers model calls, so a log shows at a glance whether this API can
+    # spend (the load stack's must say scripted).
+    startup_logger.info(get_settings().model_provider_summary())
+    check_model_provider(get_settings())
     # Build the dummy hash an unknown-email sign-in verifies against, so the
     # first one does not pay for two hashes and answer visibly slower.
     await passwords.warm_up()

@@ -1,8 +1,9 @@
 import tempfile
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal, Self
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.extraction_fields import schema_for
@@ -12,12 +13,22 @@ from app.extraction_fields import schema_for
 # current working directory.
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
+# The model name every model setting carries under MODEL_PROVIDER=scripted, and
+# the key of its zero price in PRICING_PER_MTOK (app/extraction.py): a stored
+# row or a span that names it was never produced by a real model.
+SCRIPTED_MODEL = "scripted"
+
 
 class Settings(BaseSettings):
     # env_file is anchored to BACKEND_DIR (not CWD) for the same reason
     # upload_dir resolution is: it must find backend/.env regardless of
     # where the process was launched from.
-    model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", extra="ignore")
+    # hide_input_in_errors: a refused setting (MODEL_PROVIDER=scripted beside a
+    # key) must not print the settings it was refused for, which include the key
+    # and the database passwords.
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env", extra="ignore", hide_input_in_errors=True
+    )
 
     # What the application connects as: a non-owner role that row-level
     # security binds (app/db.py verify_tenant_isolation refuses any other).
@@ -32,6 +43,31 @@ class Settings(BaseSettings):
     # origin is never a wildcard (_explicit_cors_origins).
     cors_origins: list[str] = ["http://localhost:3000"]
     anthropic_api_key: str | None = None
+    # Who answers every model call (app/extraction.py _build_client). "anthropic"
+    # is the real API. "scripted" is the stand-in in app/scripted_model.py: no
+    # network, no key, cost 0, deterministic answers from the committed eval
+    # corpus -- what the load test runs against. It is
+    # opt-in and refused beside a key (_consistent_model_provider), because the
+    # root .env that compose passes in holds the real one.
+    model_provider: Literal["anthropic", "scripted"] = "anthropic"
+    # What the scripted model costs in time. "zero" answers instantly; "replay"
+    # takes extraction and transcription latency and tokens per document from
+    # the committed Sonnet and Haiku runs and the agent and judge latency from
+    # the two settings below (app/scripted_model.py).
+    scripted_model_profile: Literal["zero", "replay"] = "zero"
+    # Multiplies every replayed latency, so a long run can keep the ratios and
+    # take minutes instead of an hour. 0 answers instantly even under "replay".
+    scripted_model_latency_scale: float = Field(default=1.0, ge=0.0, allow_inf_nan=False)
+    # One agent model call and one judge call, in milliseconds, under "replay".
+    # No committed run measured either (the agent and judge evals have no live
+    # artifact), so these are labeled assumptions, not measurements.
+    scripted_agent_step_ms: int = Field(default=3000, ge=0)
+    scripted_judge_ms: int = Field(default=4000, ge=0)
+    # Lets MODEL_PROVIDER=scripted run beside a non-empty ANTHROPIC_API_KEY, for
+    # a process on the host that reads backend/.env. The scripted path never
+    # builds an Anthropic client, so the key is never used; an empty key is the
+    # default requirement because it also keeps the SDK from finding one.
+    scripted_model_allow_api_key: bool = False
     upload_dir: str = "uploads"
     worker_poll_interval: float = 1.0
     # The file the worker touches every few seconds while its event loop is
@@ -239,6 +275,51 @@ class Settings(BaseSettings):
     def _known_extraction_prompt_version(cls, value: str) -> str:
         schema_for(value)
         return value
+
+    @model_validator(mode="after")
+    def _consistent_model_provider(self) -> Self:
+        """The provider and the four model names must agree, so a scripted
+        process can never bill and a real one never asks for the stand-in.
+        The messages name settings, never the key."""
+        names = {
+            "EXTRACTION_MODEL": self.extraction_model,
+            "TRANSCRIPTION_MODEL": self.transcription_model,
+            "AGENT_MODEL": self.agent_model,
+            "JUDGE_MODEL": self.judge_model,
+        }
+        if self.model_provider == "anthropic":
+            scripted = [name for name, model in names.items() if model == SCRIPTED_MODEL]
+            if scripted:
+                raise ValueError(
+                    f"{', '.join(scripted)} is {SCRIPTED_MODEL!r}, which only "
+                    "MODEL_PROVIDER=scripted can answer"
+                )
+            return self
+        real = [name for name, model in names.items() if model != SCRIPTED_MODEL]
+        if real:
+            raise ValueError(
+                f"MODEL_PROVIDER=scripted needs {', '.join(real)} to be {SCRIPTED_MODEL!r}"
+            )
+        if self.anthropic_api_key and not self.scripted_model_allow_api_key:
+            raise ValueError(
+                "MODEL_PROVIDER=scripted refuses a non-empty ANTHROPIC_API_KEY: blank it, "
+                "or set SCRIPTED_MODEL_ALLOW_API_KEY=true if this process reads a key "
+                "it will never use"
+            )
+        return self
+
+    def model_provider_summary(self) -> str:
+        """One line for the startup log (the API's lifespan and the worker's
+        main) naming who answers model calls. It carries no key."""
+        if self.model_provider == "scripted":
+            return (
+                f"model provider: scripted (no model API calls, cost 0; profile "
+                f"{self.scripted_model_profile}, latency scale {self.scripted_model_latency_scale:g})"
+            )
+        return (
+            f"model provider: anthropic (extraction {self.extraction_model}, transcription "
+            f"{self.transcription_model}, agent {self.agent_model}, judge {self.judge_model})"
+        )
 
 
 @lru_cache

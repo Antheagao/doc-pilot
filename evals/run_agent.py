@@ -70,7 +70,7 @@ def main() -> int:
         write_agent_result,
     )
     from app.evals.dataset import load_cases
-    from app.evals.report import update_readme
+    from app.evals.report import scratch_out_dir, update_readme
     from app.evals.retrieval import load_gold_corpus
     from app.extraction import _ensure_model_priced
     from app.retrieval.embeddings import build_embedder
@@ -78,6 +78,21 @@ def main() -> int:
 
     out_dir = Path(args.out) if args.out else None
     settings = get_settings()
+    # A scripted run measures nothing real, so it never writes where the README
+    # tables and the dashboard read (evals/results), and never updates them.
+    scripted = settings.model_provider == "scripted"
+    if scripted and args.update_readme:
+        print(
+            "error: MODEL_PROVIDER=scripted runs are never reported: drop --update-readme",
+            file=sys.stderr,
+        )
+        return 2
+    if scripted and not args.report_only:
+        try:
+            out_dir = scratch_out_dir(args.out, source="MODEL_PROVIDER=scripted")
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     # The eval's agent runs are traced like production's (OTLP and/or
     # Langfuse, when configured); with Langfuse, each question's rubric
     # result is also scored on its run's trace.

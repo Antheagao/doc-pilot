@@ -93,6 +93,7 @@ from app.evals.online import process_judge_job
 from app.extraction import (
     ModelRefusalError,
     NonRetryableExtractionError,
+    check_model_provider,
     process_document_job,
 )
 from app.models import (
@@ -539,6 +540,8 @@ async def main() -> None:
     # Before the heartbeat starts, so a worker whose role skips row-level
     # security never reports healthy.
     await verify_tenant_isolation(engine)
+    logger.info(get_settings().model_provider_summary())
+    check_model_provider(get_settings())
     heartbeat = asyncio.ensure_future(
         _heartbeat_loop(Path(get_settings().worker_heartbeat_file), HEARTBEAT_INTERVAL_SECONDS)
     )

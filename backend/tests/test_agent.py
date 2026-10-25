@@ -3,7 +3,6 @@ a scripted fake client (no network)."""
 
 import uuid
 from decimal import Decimal as D
-from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -23,6 +22,7 @@ from app.agent.loop import (
     answer_question,
     call_cost_usd,
 )
+from app.agent.requests import validate_request
 from app.agent.tools import (
     SUMMARY_SOURCE,
     TOOL_DEFINITIONS,
@@ -423,34 +423,6 @@ def _tool_use(name, tool_input, tool_id="toolu_1"):
 
 def _text(text, citations=None):
     return SimpleNamespace(type="text", text=text, citations=citations)
-
-
-def validate_request(kwargs: dict) -> None:
-    """The request rules the real API enforces and a fake would not: roles
-    alternate starting with the user, and the user message after a tool_use
-    turn opens with exactly one tool_result per tool_use id, in order, each
-    with a valid body (assert_tool_result_content)."""
-    messages = kwargs["messages"]
-    assert messages and messages[0]["role"] == "user"
-    for before, after in pairwise(messages):
-        assert before["role"] != after["role"], "roles must alternate"
-    for index, message in enumerate(messages):
-        content = message["content"]
-        if message["role"] == "assistant" and not isinstance(content, str):
-            tool_ids = [b.id for b in content if getattr(b, "type", None) == "tool_use"]
-            if not tool_ids:
-                continue
-            assert index + 1 < len(messages), "a tool_use turn needs its tool_results"
-            results = messages[index + 1]["content"]
-            assert isinstance(results, list)
-            head = results[: len(tool_ids)]
-            assert [r["type"] for r in head] == ["tool_result"] * len(tool_ids)
-            assert [r["tool_use_id"] for r in head] == tool_ids
-    for message in messages:
-        if message["role"] == "user" and isinstance(message["content"], list):
-            for block in message["content"]:
-                if block.get("type") == "tool_result":
-                    assert_tool_result_content(block["content"])
 
 
 def _scripted_create(scripted: list):

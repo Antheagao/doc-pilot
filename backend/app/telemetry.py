@@ -39,6 +39,7 @@ from opentelemetry.propagate import extract, inject
 from opentelemetry.trace import Span, SpanKind
 
 from app import langfuse_link
+from app.config import SCRIPTED_MODEL
 
 TRACER_NAME = "doc-pilot"
 
@@ -182,6 +183,13 @@ def context_from_traceparent(traceparent: str | None) -> otel_context.Context:
     return extract({"traceparent": traceparent}, context=otel_context.Context())
 
 
+def provider_name(model: str) -> str:
+    """The gen_ai.provider.name of a call to `model`: the stand-in's calls
+    (MODEL_PROVIDER=scripted) say so, so a trace never shows Anthropic
+    answering when nothing was sent to it."""
+    return "scripted" if model == SCRIPTED_MODEL else "anthropic"
+
+
 @contextmanager
 def model_call_span(
     model: str,
@@ -198,7 +206,7 @@ def model_call_span(
         kind=SpanKind.CLIENT,
         attributes={
             GEN_AI_OPERATION_NAME: "chat",
-            GEN_AI_PROVIDER_NAME: "anthropic",
+            GEN_AI_PROVIDER_NAME: provider_name(model),
             GEN_AI_REQUEST_MODEL: model,
             GEN_AI_REQUEST_MAX_TOKENS: max_tokens,
             DOCPILOT_PROMPT_VERSION: prompt_version,

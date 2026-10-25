@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from app.config import SCRIPTED_MODEL
 from app.evals.dataset import CORE_DOC_IDS, EVALS_DIR, load_cases
 from app.evals.report import (
     _ACCURACY_HEADER,
@@ -18,11 +19,13 @@ from app.evals.report import (
     END_MARKER,
     LATEST_MD_PATH,
     NO_RUNS_PLACEHOLDER,
+    RESULTS_DIR,
     START_MARKER,
     core_counts,
     load_results,
     render_latest_md,
     render_tables,
+    scratch_out_dir,
     update_readme,
 )
 from app.evals.runner import build_mock_extract_fn, run_eval
@@ -506,6 +509,41 @@ class TestLoadResults:
         assert "incomplete.json" in captured.err
         assert "not-an-object.json" in captured.err
         assert "no-threshold.json" in captured.err
+
+
+    def test_a_scripted_run_is_not_a_measurement(self, tmp_path, capsys):
+        scripted = _make_artifact(model=SCRIPTED_MODEL, started_at_utc="2026-07-02T00:00:00+00:00")
+        real = _make_artifact(started_at_utc="2026-07-01T00:00:00+00:00")
+        (tmp_path / "scripted.json").write_text(json.dumps(scripted), encoding="utf-8")
+        (tmp_path / "real.json").write_text(json.dumps(real), encoding="utf-8")
+
+        loaded = load_results(tmp_path)
+
+        assert [r["model"] for r in loaded] == ["claude-sonnet-5"]
+        err = capsys.readouterr().err
+        assert "skipping eval artifact" in err
+        assert "scripted.json" in err
+        assert "real.json" not in err
+
+
+class TestScratchOutDir:
+    def test_by_default_it_is_a_new_temporary_directory(self):
+        first, second = scratch_out_dir(None, source="--mock"), scratch_out_dir(None, source="--mock")
+
+        try:
+            assert first != second
+            assert first.is_dir() and RESULTS_DIR.resolve() not in first.resolve().parents
+        finally:
+            first.rmdir()
+            second.rmdir()
+
+    @pytest.mark.parametrize("sub", ["", "agent", "judge", "../results"])
+    def test_it_refuses_the_results_directory_and_anything_under_it(self, sub):
+        with pytest.raises(ValueError, match="MODEL_PROVIDER=scripted never writes under"):
+            scratch_out_dir(str(RESULTS_DIR / sub), source="MODEL_PROVIDER=scripted")
+
+    def test_another_directory_is_used_as_given(self, tmp_path):
+        assert scratch_out_dir(str(tmp_path), source="--mock") == tmp_path.resolve()
 
 
 class TestUnknownPromptVersion:

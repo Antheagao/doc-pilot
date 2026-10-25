@@ -29,7 +29,6 @@ from app.demo_seed import (
     DEMO_USER_EMAIL,
     DEMO_USER_PASSWORD,
     HISTORY_DAYS,
-    LABEL_REPLAY_MODEL,
     REPLAY_ARTIFACT,
     RESULTS_DIR,
     STAGED_REVIEW_CASES,
@@ -44,6 +43,7 @@ from app.demo_seed import (
 )
 from app.evals.checks import label_tool_input
 from app.evals.dataset import load_cases
+from app.evals.replay import LABEL_REPLAY_MODEL
 from app.extraction_fields import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3
 from app.models import (
     DEFAULT_ORGANIZATION_ID,

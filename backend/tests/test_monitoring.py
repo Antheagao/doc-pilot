@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import SCRIPTED_MODEL
 from app.evals import history
 from app.evals.history import (
     agent_points,
@@ -91,6 +92,34 @@ def test_agent_runs_are_normalized_and_bad_artifacts_skipped(tmp_path) -> None:
     assert (point.series, point.n, point.accuracy) == ("claude-opus-5-5 (medium)", 18, 0.89)
     assert (point.mean_cost_usd, point.latency_p50_ms, point.latency_p95_ms) == (0.07, 11000, None)
     assert point.extra == {"judge_grounded": 0.83, "cites_relevant": 0.94}
+
+
+def test_a_scripted_run_is_left_out_of_every_suite(tmp_path, caplog) -> None:
+    """A run made with no model is never a measurement: its artifact is skipped
+    with a warning, whatever directory it landed in, so the dashboard's lines
+    never follow a model called scripted."""
+    committed = next(iter(sorted(history.EXTRACTION_RESULTS_DIR.glob("*.json"))))
+    extraction = json.loads(committed.read_text(encoding="utf-8"))
+    extraction_dir, agent_dir = tmp_path / "extraction", tmp_path / "agent"
+    extraction_dir.mkdir()
+    agent_dir.mkdir()
+    _write(extraction_dir / "real.json", extraction)
+    _write(extraction_dir / "scripted.json", {**extraction, "model": SCRIPTED_MODEL})
+    for model, name in ((SCRIPTED_MODEL, "scripted.json"), ("claude-opus-5-5", "real.json")):
+        _write(agent_dir / name, {
+            "model": model, "effort": "medium", "prompt_version": "agent_v1",
+            "question_set_version": "v1", "started_at_utc": "20261002T100000Z",
+            "summary": {"n": 18, "accuracy": 0.89, "mean_cost_usd": 0.0, "total_cost_usd": 0.0},
+        })
+
+    with caplog.at_level("WARNING", logger=history.logger.name):
+        (extraction_point,) = extraction_points(extraction_dir)
+        (agent_point,) = agent_points(agent_dir)
+
+    assert extraction_point.series == extraction["model"]
+    assert agent_point.series == "claude-opus-5-5 (medium)"
+    skipped = [r.getMessage() for r in caplog.records if "skipping eval artifact" in r.getMessage()]
+    assert len(skipped) == 1 and "scripted.json" in skipped[0]
 
 
 def test_the_committed_runs_load_oldest_first() -> None:

@@ -22,7 +22,7 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anthropic
 import anyio
@@ -50,23 +50,27 @@ from app.schemas import (
     AskRunSummary,
 )
 
+if TYPE_CHECKING:
+    from app.scripted_model import ScriptedModelClient
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_client: anthropic.AsyncAnthropic | None = None
+_client: "anthropic.AsyncAnthropic | ScriptedModelClient | None" = None
 
 
 def get_anthropic_client(
     settings: Settings = Depends(get_settings),
-) -> anthropic.AsyncAnthropic | None:
+) -> "anthropic.AsyncAnthropic | ScriptedModelClient | None":
     """One client for the API process: a client owns a connection pool,
     and building one per request would pay the TLS setup every time and
     leave the pools to the garbage collector. None when no API key is
-    configured (the route answers 503, after request validation). A FastAPI
-    dependency so tests can substitute a fake."""
+    configured (the route answers 503, after request validation) -- except
+    under MODEL_PROVIDER=scripted, whose client needs no key and is built
+    without one. A FastAPI dependency so tests can substitute a fake."""
     global _client
-    if not settings.anthropic_api_key:
+    if settings.model_provider == "anthropic" and not settings.anthropic_api_key:
         return None
     if _client is None:
         _client = _build_client(settings)
