@@ -2,7 +2,10 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+from app.auth.accounts import EMAIL_MAX_CHARS
+from app.auth.passwords import check_password_length
 
 
 class DocumentCreateResponse(BaseModel):
@@ -534,3 +537,43 @@ class McpToolOutput(BaseModel):
     message: str | None
     sources: list[McpSource]
     truncated: bool
+
+
+class LoginRequest(BaseModel):
+    """POST /auth/login. The password's length is checked here, before anything
+    is hashed, in the same normalized characters the hasher counts. Pydantic
+    puts the failing input in each error, so the app's 422 handler drops it for
+    this route (app/main.py); a SecretStr keeps the password out of the model's
+    repr."""
+
+    email: str = Field(min_length=1, max_length=EMAIL_MAX_CHARS)
+    password: SecretStr
+
+    @field_validator("password")
+    @classmethod
+    def _password_length(cls, value: SecretStr) -> SecretStr:
+        check_password_length(value.get_secret_value())
+        return value
+
+
+class SwitchOrganizationRequest(BaseModel):
+    organization_id: uuid.UUID
+
+
+class OrganizationOut(BaseModel):
+    """An organization the signed-in user belongs to, with their role in it."""
+
+    id: uuid.UUID
+    name: str
+    slug: str
+    role: Literal["owner", "member"]
+
+
+class MeOut(BaseModel):
+    """Who is signed in: the user, the organization the session works in, and
+    every organization they could switch to (POST /auth/organization)."""
+
+    id: uuid.UUID
+    email: str
+    organization: OrganizationOut
+    organizations: list[OrganizationOut]

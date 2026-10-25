@@ -20,6 +20,7 @@ Longer procedures live in `.claude/skills/` and `.claude/commands/`.
 ## Running it
 
 - `docker compose up -d --build` starts PostgreSQL with pgvector (host port 5434), the API (`127.0.0.1:8000`), the worker, and the frontend (`http://localhost:3000`).
+- Every route but `/healthz` needs a sign-in and there is no signup: create your user with `docker compose exec api python scripts/accounts.py create-user --email you@example.com` (it prompts for the password) and then `... add-member --organization default --email you@example.com --role owner`.
 - The demo stack is a separate compose project: `backend\.venv\Scripts\python scripts/demos/demo.py stack up` (API 8100, frontend 3100, no host port for its database).
   Never point a destructive command at the dev project `doc-pilot`; its database volume was wiped once by a careless `down -v`.
 - The Anthropic key lives in gitignored `backend/.env`, mirrored to the gitignored root `.env` for compose.

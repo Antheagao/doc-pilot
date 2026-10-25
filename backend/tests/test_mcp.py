@@ -787,3 +787,25 @@ async def test_mcp_is_a_route_not_a_redirect_and_stays_out_of_openapi(
     assert "/mcp" not in schema["paths"] and "/mcp/" not in schema["paths"]
     assert "/search" in schema["paths"]
     assert healthy.status_code == 200
+
+
+@pytest.mark.parametrize("origin", ["http://evil.example", "http://localhost:3000"])
+async def test_the_apps_credentialed_cors_does_not_change_mcps_403_for_any_origin(
+    monkeypatch: pytest.MonkeyPatch, clock: FakeClock, origin: str
+) -> None:
+    """The frontend's origin is allowed credentialed CORS on the API (main.py),
+    and /mcp still refuses it, on the real app and with a real session cookie
+    on the request."""
+    monkeypatch.setattr(main_module, "warm_up_embedder", lambda: None)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+    ) as client:
+        refused = await client.post(
+            "/mcp",
+            json=INITIALIZE,
+            headers={**JSON_HEADERS, "origin": origin, "cookie": "docpilot_session=anything"},
+        )
+        served = await client.post("/mcp", json=INITIALIZE, headers=JSON_HEADERS)
+
+    assert refused.status_code == 403
+    assert served.status_code == 200

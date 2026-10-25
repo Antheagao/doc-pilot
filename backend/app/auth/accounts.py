@@ -17,7 +17,8 @@ import re
 import unicodedata
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import cast, func, select
+from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import sessions
@@ -62,6 +63,22 @@ def clean_name(name: str, what: str) -> str:
     if not 1 <= len(name) <= NAME_MAX_CHARS or any(unicodedata.category(c)[0] == "C" for c in name):
         raise AccountError(f"{what} is 1 to {NAME_MAX_CHARS} characters long, with no control characters")
     return name
+
+
+async def folded_email(session: AsyncSession, email: str) -> str:
+    """`email` as the database compares it: normalized, then folded by the
+    database's own lower() on a citext, which is how the users.email column
+    decides two spellings are one account (Python's casefold() disagrees on a
+    few characters, such as the dotted capital I and the capital sharp S). The
+    sign-in limiter keys on it, so a spelling cannot dodge the account's bucket
+    and no spelling tells an existing account from a missing one. Text that
+    could not be stored as an email is folded in Python: no account has it, and
+    a control character would be a driver error in the query."""
+    try:
+        email = canonical_email(email)
+    except AccountError:
+        return unicodedata.normalize("NFKC", email).strip().casefold()
+    return (await session.execute(select(func.lower(cast(email, CITEXT))))).scalar_one()
 
 
 async def get_organization(session: AsyncSession, slug: str) -> Organization:

@@ -97,15 +97,26 @@ async def verify_password(password: str, password_hash: str) -> bool:
             return False
 
 
-async def verify_dummy_password(password: str) -> None:
-    """Spend the time of a real verification and discard the result: the
-    sign-in path for an email that is unknown or disabled."""
+async def _dummy_password_hash() -> str:
     global _dummy_hash
     if _dummy_hash is None:
         async with _dummy_lock:
             if _dummy_hash is None:
                 _dummy_hash = await hash_password(secrets.token_urlsafe(24))
-    await verify_password(password, _dummy_hash)
+    return _dummy_hash
+
+
+async def warm_up() -> None:
+    """Build the dummy hash now, so the first sign-in for an unknown email
+    does not pay for two hashes (making the dummy, then verifying against it)
+    and answer visibly slower than a known one. The API calls it at startup."""
+    await _dummy_password_hash()
+
+
+async def verify_dummy_password(password: str) -> None:
+    """Spend the time of a real verification and discard the result: the
+    sign-in path for an email that is unknown or disabled."""
+    await verify_password(password, await _dummy_password_hash())
 
 
 def needs_rehash(password_hash: str) -> bool:

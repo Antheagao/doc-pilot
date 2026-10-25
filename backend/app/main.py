@@ -3,7 +3,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import partial
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
@@ -11,12 +13,14 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.auth import passwords
+from app.auth.principal import current_principal
 from app.config import get_settings
 from app.db import async_session_maker, engine, verify_tenant_isolation
 from app.mcp_server.http import McpHttpEndpoint
 from app.mcp_server.server import build_server, default_principal
 from app.retrieval.embeddings import get_embedder, warm_up_embedder
-from app.routers import ask, chat, documents, monitoring, review, search, stats
+from app.routers import ask, auth, chat, documents, monitoring, review, search, stats
 from app.routers.documents import MAX_UPLOAD_SIZE
 from app.telemetry import configure_tracing, instrument_api, otlp_enabled
 from app.tenancy import tenant_session
@@ -68,14 +72,23 @@ class MaxBodySizeMiddleware:
         await self.app(scope, limited_receive, send)
 
 
+# Served as-is: the compose healthcheck's answer and the API docs describe no
+# one's data.
+CACHEABLE_PATHS = frozenset({"/healthz", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"})
+
+
 class SecurityHeadersMiddleware:
-    """Adds X-Content-Type-Options: nosniff to every response.
+    """Adds X-Content-Type-Options: nosniff to every response, and
+    Cache-Control: private, no-store to every response that does not set its
+    own (the health check and the API docs excepted).
 
     The API serves user-uploaded bytes back out via /documents/{id}/file
     with a stored Content-Type; nosniff tells browsers to honor that type
     rather than content-sniffing their own, which (combined with the
     magic-byte check at upload time) closes the stored-payload-served-
-    as-image pattern from both ends.
+    as-image pattern from both ends. Every response is for one signed-in
+    caller, so none may be stored by a shared cache or heuristically reused:
+    FileResponse sends a Last-Modified, which lets a cache decide for itself.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -86,10 +99,14 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        cacheable = scope["path"] in CACHEABLE_PATHS
+
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = message.setdefault("headers", [])
                 headers.append((b"x-content-type-options", b"nosniff"))
+                if not cacheable and not any(name.lower() == b"cache-control" for name, _ in headers):
+                    headers.append((b"cache-control", b"private, no-store"))
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
@@ -114,6 +131,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Before anything serves: a role that skips row-level security must stop
     # the API here, not turn the database layer off silently.
     await verify_tenant_isolation(engine)
+    # Build the dummy hash an unknown-email sign-in verifies against, so the
+    # first one does not pay for two hashes and answer visibly slower.
+    await passwords.warm_up()
     # Warm the embedding model in the background: /search embeds every
     # query, and the first one shouldn't pay the model load. Not awaited,
     # so the API is serving (and /healthz passing) while it loads.
@@ -135,27 +155,52 @@ app = FastAPI(
     telemetry={"tracing": False, "metrics": False, "logs": False, "auto_configure": False},
 )
 
-# No cookies or HTTP auth are used anywhere, so credentialed CORS is
-# deliberately NOT enabled -- allow_credentials would only widen the
-# blast radius of a misconfigured origin for zero functional gain.
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's 422, except that a refused sign-in never echoes the request:
+    each error carries the `input` that failed, which for a short password is the
+    password and for a missing email is the whole body with it."""
+    if request.url.path != "/auth/login":
+        return await request_validation_exception_handler(request, exc)
+    errors = [
+        {key: value for key, value in error.items() if key not in ("input", "ctx")}
+        for error in exc.errors()
+    ]
+    return JSONResponse({"detail": errors}, status_code=422)
+
+
+# Credentialed CORS: the frontend's origin may send the session cookie and
+# read the answer. The origins are explicit (a "*" is refused at load,
+# config.py) and so are the methods and headers: the frontend sends GET, POST,
+# and DELETE with a JSON content type, and Retry-After is exposed so a page can
+# say when a 429 lifts. CORS only lets a page read a response; it is the Origin
+# check on cookie-authenticated writes (auth/principal.py) that refuses a forged
+# one. /mcp is not for pages: it answers any Origin with 403 itself
+# (mcp_server/http.py), whatever these settings say.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
+    expose_headers=["Retry-After"],
 )
 
 app.add_middleware(SecurityHeadersMiddleware)
 
 app.add_middleware(MaxBodySizeMiddleware, max_body_size=MAX_UPLOAD_SIZE)
 
-app.include_router(documents.router, prefix="/documents", tags=["documents"])
-app.include_router(chat.router, prefix="/documents", tags=["chat"])
-app.include_router(review.router, prefix="/review", tags=["review"])
-app.include_router(stats.router, prefix="/stats", tags=["stats"])
-app.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
-app.include_router(search.router, prefix="/search", tags=["search"])
-app.include_router(ask.router, prefix="/ask", tags=["ask"])
+# Every router but auth needs a signed-in caller; /auth/login and /auth/logout
+# need none, and the two other /auth routes ask for it themselves.
+authenticated = [Depends(current_principal)]
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(documents.router, prefix="/documents", tags=["documents"], dependencies=authenticated)
+app.include_router(chat.router, prefix="/documents", tags=["chat"], dependencies=authenticated)
+app.include_router(review.router, prefix="/review", tags=["review"], dependencies=authenticated)
+app.include_router(stats.router, prefix="/stats", tags=["stats"], dependencies=authenticated)
+app.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"], dependencies=authenticated)
+app.include_router(search.router, prefix="/search", tags=["search"], dependencies=authenticated)
+app.include_router(ask.router, prefix="/ask", tags=["ask"], dependencies=authenticated)
 # Plain Routes, not a Mount: a mount answers 307 to every request, which MCP
 # clients do not follow on a POST. "/mcp/" is routed too, because Starlette
 # would otherwise redirect it the same way, and a pasted URL often ends in a

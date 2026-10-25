@@ -37,7 +37,7 @@ from tenant_rows import UNIT_VECTOR, populate
 
 from app import worker as worker_module
 from app.agent.tools import TOOL_HANDLERS, ToolContext, execute_tool
-from app.auth.principal import Principal, current_principal
+from app.auth.principal import Principal
 from app.db import (
     async_session_maker,
     engine,
@@ -691,10 +691,6 @@ async def test_the_organization_survives_a_tool_savepoint_that_failed_on_a_real_
 
 
 # --- the entry points --------------------------------------------------------
-
-
-async def test_the_placeholder_principal_is_the_default_organization() -> None:
-    assert await current_principal() == Principal(DEFAULT_ORGANIZATION_ID)
 
 
 async def test_get_session_hands_out_a_session_bound_to_the_principals_organization() -> None:

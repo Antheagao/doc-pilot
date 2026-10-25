@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import asyncpg
 import pytest
 import pytest_asyncio
+from fastapi import Depends
 from httpx import ASGITransport, AsyncClient
 from hypothesis import settings as hypothesis_settings
 from opentelemetry import trace
@@ -27,6 +28,16 @@ from app.config import BACKEND_DIR, Settings
 # builds its engine from get_settings() at import), hence the module-level
 # code ahead of the app imports below.
 TEST_DATABASE_NAME = "docpilot_test"
+
+# The suite must be unable to spend. backend/.env holds the real Anthropic key,
+# and Settings() reads it from that file, so a test that reaches a model route
+# without a fake would bill real calls. A variable in the environment beats the
+# env file in pydantic-settings, so an empty one makes the key absent for every
+# Settings() the suite builds (explicit Settings(anthropic_api_key=...) still
+# wins). The one opt-in is RUN_LIVE_SMOKE=1 (tests/test_live_smoke.py), which
+# needs the key from backend/.env. Before any app import: get_settings() caches.
+if os.environ.get("RUN_LIVE_SMOKE") != "1":
+    os.environ["ANTHROPIC_API_KEY"] = ""
 
 # The suite connects as a non-owner login role, so row-level security binds
 # every test the way it binds the running app. Roles are cluster-wide and the
@@ -71,6 +82,11 @@ os.environ["MIGRATION_DATABASE_URL"] = OWNER_DATABASE_URL.render_as_string(hide_
 
 from tenant_rows import populate
 
+from app.auth.principal import (
+    Principal,
+    current_principal,
+    get_identity_session_factory,
+)
 from app.config import get_settings
 from app.db import (
     TenantIsolationError,
@@ -81,7 +97,14 @@ from app.db import (
 )
 from app.db_roles import ProvisioningError, ensure_runtime_role
 from app.main import app
-from app.models import DEFAULT_ORGANIZATION_ID, Organization
+from app.models import (
+    DEFAULT_ORGANIZATION_ID,
+    MEMBERSHIP_ROLE_OWNER,
+    Membership,
+    Organization,
+    User,
+)
+from app.routers.ask import get_anthropic_client
 from app.tenancy import bind_tenant
 
 if engine.url.database != TEST_DATABASE_URL.database:
@@ -282,7 +305,54 @@ async def two_tenants(
 
 
 @pytest_asyncio.fixture
-async def client(db_session: AsyncSession, tmp_path) -> AsyncGenerator[AsyncClient]:
+async def owner(db_session: AsyncSession) -> User:
+    """A user who owns the default organization, created in the test's
+    transaction. The password hash is a placeholder that matches nothing, so no
+    test pays for a real hash it does not need; tests/test_auth.py makes real
+    accounts."""
+    user = User(email=f"owner-{uuid.uuid4().hex[:12]}@test.example", password_hash="!")
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        Membership(
+            organization_id=DEFAULT_ORGANIZATION_ID, user_id=user.id, role=MEMBERSHIP_ROLE_OWNER
+        )
+    )
+    await db_session.flush()
+    return user
+
+
+class ModelCallAttempted(AssertionError):
+    """A test reached the model without a fake."""
+
+
+class _NoModelClient:
+    """Stands in for the Anthropic client in the `client` fixtures: any use fails
+    the test. A test that needs a model overrides `get_anthropic_client` with its
+    scripted fake, which replaces this."""
+
+    def __getattr__(self, name: str):
+        raise ModelCallAttempted(
+            f"a test used the model client ({name!r}) without overriding get_anthropic_client "
+            "with a fake"
+        )
+
+
+def _guarded_anthropic_client(settings: Settings = Depends(get_settings)):
+    """Like the real dependency, None (the route's 503) while the settings hold
+    no key, and otherwise a client that refuses to be used."""
+    return _NoModelClient() if settings.anthropic_api_key else None
+
+
+@asynccontextmanager
+async def _api_client(
+    db_session: AsyncSession, tmp_path, principal: Principal | None
+) -> AsyncGenerator[AsyncClient]:
+    """The real app over ASGI with the database, settings, and identity
+    sessions handed to the test's transaction. `principal` is who every request
+    is made by; None leaves `current_principal` real, so the request must carry
+    a session cookie."""
+
     async def override_get_session() -> AsyncGenerator[AsyncSession]:
         yield db_session
 
@@ -297,6 +367,8 @@ async def client(db_session: AsyncSession, tmp_path) -> AsyncGenerator[AsyncClie
             # One limiter serves the whole test session, from one client.
             ask_rate_limit_per_minute=0,
             upload_rate_limit_per_minute=0,
+            login_rate_limit_per_minute=0,
+            login_account_rate_limit_per_minute=0,
         )
 
     @asynccontextmanager
@@ -305,13 +377,35 @@ async def client(db_session: AsyncSession, tmp_path) -> AsyncGenerator[AsyncClie
 
     app.dependency_overrides[get_session] = override_get_session
     app.dependency_overrides[get_tenant_session_factory] = lambda: shared_session
+    app.dependency_overrides[get_identity_session_factory] = lambda: shared_session
     app.dependency_overrides[get_settings] = override_get_settings
+    app.dependency_overrides[get_anthropic_client] = _guarded_anthropic_client
+    if principal is not None:
+        app.dependency_overrides[current_principal] = lambda: principal
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def client(db_session: AsyncSession, owner: User, tmp_path) -> AsyncGenerator[AsyncClient]:
+    """A client signed in as `owner`: `current_principal` is overridden, so a
+    test of a route's own behavior needs no cookie. Tests of sign-in itself use
+    `anon_client`."""
+    principal = Principal(DEFAULT_ORGANIZATION_ID, owner.id, MEMBERSHIP_ROLE_OWNER)
+    async with _api_client(db_session, tmp_path, principal) as ac:
+        yield ac
+
+
+@pytest_asyncio.fixture
+async def anon_client(db_session: AsyncSession, tmp_path) -> AsyncGenerator[AsyncClient]:
+    """A client with no override of `current_principal`: it reaches the real
+    sign-in, cookie, and Origin checks (on the test's transaction)."""
+    async with _api_client(db_session, tmp_path, None) as ac:
+        yield ac
 
 
 _EXPORTER = InMemorySpanExporter()

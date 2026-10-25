@@ -49,9 +49,10 @@ from app.agent.tools import (
     ToolContext,
     execute_tool,
 )
-from app.auth.principal import Principal, current_principal
+from app.auth.principal import Principal
 from app.config import Settings
 from app.extraction_fields import PROMPTS_DIR
+from app.models import DEFAULT_ORGANIZATION_ID
 from app.retrieval.embeddings import Embedder
 from app.schemas import McpSource, McpToolOutput
 
@@ -101,9 +102,9 @@ PrincipalResolver = Callable[[ServerRequestContext], Awaitable[Principal]]
 
 
 async def default_principal(ctx: ServerRequestContext) -> Principal:
-    """Every call is the default organization, as every request to the API is,
-    until API keys name one."""
-    return await current_principal()
+    """Every call is the default organization until API keys name one (the
+    API's own routes need a sign-in; /mcp has none yet)."""
+    return Principal(organization_id=DEFAULT_ORGANIZATION_ID)
 
 
 def tool_list() -> list[types.Tool]:

@@ -2,13 +2,16 @@
 and the billed routes that use it."""
 
 import base64
+import uuid
 
 import pytest
 from httpx import AsyncClient
 
 from app import ratelimit
+from app.auth.principal import Principal, current_principal
 from app.config import Settings, get_settings
 from app.main import app
+from app.models import DEFAULT_ORGANIZATION_ID
 from app.ratelimit import WINDOW_SECONDS, SlidingWindowLimiter
 
 TINY_PNG = base64.b64decode(
@@ -93,6 +96,33 @@ async def test_ask_routes_share_one_per_client_bucket(
     assert (await client.post("/ask", json={"question": "q"})).status_code == 503
 
 
+async def test_the_limits_count_each_principal_apart_not_each_address(
+    client: AsyncClient, fresh_limiter, tmp_path
+) -> None:
+    """Every request here comes from one address; what tells two callers apart is
+    who they signed in as (Principal.rate_key)."""
+    _limits(tmp_path, ask=1, upload=1)
+    other = Principal(DEFAULT_ORGANIZATION_ID, uuid.uuid4(), "member")
+    files = {"file": ("r.png", TINY_PNG, "image/png")}
+
+    assert (await client.post("/ask", json={"question": "q"})).status_code == 503
+    assert (await client.post("/ask", json={"question": "q"})).status_code == 429
+    assert (await client.post("/documents", files=files)).status_code == 201
+    assert (await client.post("/documents", files=files)).status_code == 429
+
+    app.dependency_overrides[current_principal] = lambda: other
+    assert (await client.post("/ask", json={"question": "q"})).status_code == 503
+    assert (await client.post("/documents", files=files)).status_code == 201
+    assert (await client.post("/ask", json={"question": "q"})).status_code == 429
+
+
+def test_a_principal_without_a_user_is_counted_as_its_organization() -> None:
+    user = Principal(DEFAULT_ORGANIZATION_ID, uuid.UUID(int=1), "member")
+
+    assert user.rate_key == f"user:{uuid.UUID(int=1)}"
+    assert Principal(DEFAULT_ORGANIZATION_ID).rate_key == f"org:{DEFAULT_ORGANIZATION_ID}"
+
+
 async def test_uploads_can_be_limited_too(client: AsyncClient, fresh_limiter, tmp_path) -> None:
     _limits(tmp_path, upload=1)
     files = {"file": ("r.png", TINY_PNG, "image/png")}
@@ -125,3 +155,4 @@ def test_limit_checks_run_on_the_event_loop() -> None:
 
     assert inspect.iscoroutinefunction(ratelimit.limit_ask)
     assert inspect.iscoroutinefunction(ratelimit.limit_upload)
+    assert inspect.iscoroutinefunction(ratelimit.limit_login)
