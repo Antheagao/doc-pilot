@@ -1001,6 +1001,17 @@ def test_the_command_is_recorded_as_given() -> None:
     assert load.command_record(["run", "--label", "x"]) == ["python", "scripts/load/load.py", "run", "--label", "x"]
 
 
+def test_an_absolute_path_inside_the_repository_is_recorded_from_its_root(tmp_path: Path) -> None:
+    results = str(load.REPO_ROOT / "scripts" / "load" / "results")
+    assert load.command_record(["run", "--out", results]) == [
+        "python", "scripts/load/load.py", "run", "--out", "scripts/load/results",
+    ]
+    assert load.command_record([f"--out={results}"])[-1] == "--out=scripts/load/results"
+    # A path outside the repository and a relative path are recorded as given.
+    assert load.command_record(["--out", str(tmp_path)])[-1] == str(tmp_path)
+    assert load.command_record(["--out", "scripts/load/results"])[-1] == "scripts/load/results"
+
+
 def test_a_key_is_scrubbed_from_output_that_may_be_shown() -> None:
     assert load.scrub(f"KeyError: {SECRET_KEY} in line 3") == "KeyError: dpk_*** in line 3"
     assert SECRET_KEY not in load.scrub(f"{SECRET_KEY}\n{OTHER_KEYS[0]}")

@@ -40,3 +40,6 @@ scripts/demos/out/
 # passwords (tenants.json) and raw samples. Never committed; the artifacts
 # under scripts/load/results/ are.
 scripts/load/out/
+# Raw per-request samples written beside a run's artifact; the artifact
+# keeps the quantiles, and the samples are too large to commit.
+scripts/load/results/samples/

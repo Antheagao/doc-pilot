@@ -1,7 +1,86 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="112" viewBox="0 0 960 112" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
 <title id="title">Load test results</title>
-<desc id="desc">No published run yet.</desc>
-<rect x="0.5" y="0.5" width="959" height="111" rx="12" fill="#ffffff" stroke="#e4e4e7"/>
-<text x="480.0" y="54.0" fill="#18181b" font-size="16" font-weight="600" text-anchor="middle">No published run yet</text>
-<text x="480.0" y="78.0" fill="#52525b" font-size="12" font-weight="400" text-anchor="middle">The charts are drawn from the artifacts committed to scripts/load/results/.</text>
+<desc id="desc">Baseline documents per second: 1 workers 0.74, 2 workers 1.38, 4 workers 2.24, 8 workers 2.67. Baseline /search p95: 2 users 90.5 ms, 4 users 152 ms, 8 users 505 ms, 16 users 1,038 ms.</desc>
+<rect x="0.5" y="0.5" width="959" height="419" rx="12" fill="#ffffff" stroke="#e4e4e7"/>
+<text x="64.0" y="28.0" fill="#18181b" font-size="16" font-weight="600" text-anchor="start">Load test: worker scaling and read latency</text>
+<text x="64.0" y="46.0" fill="#52525b" font-size="12" font-weight="400" text-anchor="start">Apple M1, Docker with 8 CPUs, scripted model</text>
+<line x1="64.0" y1="60.0" x2="86.0" y2="60.0" stroke="#2a78d6" stroke-width="2"/>
+<circle cx="75.0" cy="60.0" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<text x="94.0" y="64.0" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Baseline</text>
+<line x1="178.0" y1="60.0" x2="200.0" y2="60.0" stroke="#52525b" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="208.0" y="64.0" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Ideal linear scaling</text>
+<text x="64.0" y="96.0" fill="#18181b" font-size="14" font-weight="600" text-anchor="start">Throughput vs worker containers</text>
+<text x="64.0" y="114.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="start">replay profile, latency scale 0.1</text>
+<line x1="64.0" y1="336.0" x2="384.0" y2="336.0" stroke="#e4e4e7" stroke-width="1"/>
+<text x="56.0" y="340.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">0</text>
+<line x1="64.0" y1="265.3" x2="384.0" y2="265.3" stroke="#e4e4e7" stroke-width="1"/>
+<text x="56.0" y="269.3" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">2</text>
+<line x1="64.0" y1="194.7" x2="384.0" y2="194.7" stroke="#e4e4e7" stroke-width="1"/>
+<text x="56.0" y="198.7" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">4</text>
+<line x1="64.0" y1="124.0" x2="384.0" y2="124.0" stroke="#e4e4e7" stroke-width="1"/>
+<text x="56.0" y="128.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">6</text>
+<line x1="64.0" y1="336.0" x2="384.0" y2="336.0" stroke="#52525b" stroke-width="1"/>
+<text x="104.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">1</text>
+<text x="144.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">2</text>
+<text x="224.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">4</text>
+<text x="384.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">8</text>
+<text x="224.0" y="376.0" fill="#52525b" font-size="12" font-weight="400" text-anchor="middle">Worker containers</text>
+<text transform="translate(16.0 230.0) rotate(-90)" fill="#52525b" font-size="12" text-anchor="middle">Documents per second</text>
+<polyline points="104.0,310.0 144.0,284.0 224.0,232.1 384.0,128.1" fill="none" stroke="#52525b" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<line x1="104.0" y1="309.9" x2="104.0" y2="310.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="100.0" y1="309.9" x2="108.0" y2="309.9" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="100.0" y1="310.2" x2="108.0" y2="310.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="144.0" y1="286.7" x2="144.0" y2="287.5" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="140.0" y1="286.7" x2="148.0" y2="286.7" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="140.0" y1="287.5" x2="148.0" y2="287.5" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="224.0" y1="256.4" x2="224.0" y2="257.8" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="220.0" y1="256.4" x2="228.0" y2="256.4" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="220.0" y1="257.8" x2="228.0" y2="257.8" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="384.0" y1="239.9" x2="384.0" y2="244.9" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="380.0" y1="239.9" x2="388.0" y2="239.9" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="380.0" y1="244.9" x2="388.0" y2="244.9" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<polyline points="104.0,310.0 144.0,287.1 224.0,256.7 384.0,241.5" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="104.0" cy="310.0" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="144.0" cy="287.1" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="224.0" cy="256.7" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="384.0" cy="241.5" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<text x="394.0" y="132.1" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Ideal</text>
+<text x="394.0" y="245.5" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Baseline</text>
+<text x="534.0" y="96.0" fill="#18181b" font-size="14" font-weight="600" text-anchor="start">/search p95 latency vs concurrent users</text>
+<text x="534.0" y="114.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="start">replay profile, latency scale 0.1</text>
+<line x1="534.0" y1="336.0" x2="854.0" y2="336.0" stroke="#e4e4e7" stroke-width="1"/>
+<text x="526.0" y="340.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">10</text>
+<line x1="534.0" y1="265.3" x2="854.0" y2="265.3" stroke="#e4e4e7" stroke-width="1"/>
+<text x="526.0" y="269.3" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">100</text>
+<line x1="534.0" y1="194.7" x2="854.0" y2="194.7" stroke="#e4e4e7" stroke-width="1"/>
+<text x="526.0" y="198.7" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">1,000</text>
+<line x1="534.0" y1="124.0" x2="854.0" y2="124.0" stroke="#e4e4e7" stroke-width="1"/>
+<text x="526.0" y="128.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">10,000</text>
+<line x1="534.0" y1="336.0" x2="854.0" y2="336.0" stroke="#52525b" stroke-width="1"/>
+<text x="534.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">2</text>
+<text x="640.7" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">4</text>
+<text x="747.3" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">8</text>
+<text x="854.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">16</text>
+<text x="694.0" y="376.0" fill="#52525b" font-size="12" font-weight="400" text-anchor="middle">Concurrent users (closed loop)</text>
+<text transform="translate(486.0 230.0) rotate(-90)" fill="#52525b" font-size="12" text-anchor="middle">p95 latency (ms, log scale)</text>
+<line x1="534.0" y1="194.7" x2="854.0" y2="194.7" stroke="#52525b" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="540.0" y="210.7" fill="#52525b" font-size="11" font-weight="400" text-anchor="start">SLO 1,000 ms</text>
+<line x1="534.0" y1="266.9" x2="534.0" y2="269.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="530.0" y1="266.9" x2="538.0" y2="266.9" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="530.0" y1="269.2" x2="538.0" y2="269.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="640.7" y1="222.5" x2="640.7" y2="259.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="636.7" y1="222.5" x2="644.7" y2="222.5" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="636.7" y1="259.6" x2="644.7" y2="259.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="747.3" y1="214.9" x2="747.3" y2="216.0" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="743.3" y1="214.9" x2="751.3" y2="214.9" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="743.3" y1="216.0" x2="751.3" y2="216.0" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="854.0" y1="191.3" x2="854.0" y2="193.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="850.0" y1="191.3" x2="858.0" y2="191.3" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="850.0" y1="193.6" x2="858.0" y2="193.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<polyline points="534.0,268.4 640.7,252.4 747.3,215.6 854.0,193.5" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="534.0" cy="268.4" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="640.7" cy="252.4" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="747.3" cy="215.6" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="854.0" cy="193.5" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<text x="864.0" y="197.5" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Baseline</text>
 </svg>

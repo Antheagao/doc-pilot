@@ -863,8 +863,22 @@ def smoke_failures(
 
 def command_record(argv: list[str]) -> list[str]:
     """The exact command as recorded: python, this script's path from the
-    repository root, and the arguments as given."""
-    return ["python", str(repo_path(Path(__file__).resolve())), *argv]
+    repository root, and the arguments as given, except that an absolute path
+    inside the repository is written from the repository root. The command is
+    published in the README, and an absolute path names the machine's home
+    directory and runs nowhere else."""
+    return ["python", str(repo_path(Path(__file__).resolve())), *(_repo_relative(arg) for arg in argv)]
+
+
+def _repo_relative(arg: str) -> str:
+    """`arg` from the repository root when it is an absolute path inside it,
+    also as the value of a `--flag=PATH` argument; otherwise unchanged."""
+    flag, sep, value = arg.partition("=") if arg.startswith("--") else ("", "", arg)
+    path = Path(value)
+    if not path.is_absolute() or not path.resolve().is_relative_to(REPO_ROOT):
+        return arg
+    relative = str(path.resolve().relative_to(REPO_ROOT)) or "."
+    return f"{flag}{sep}{relative}" if sep else relative
 
 
 def refuse_results_dir(directory: Path, *, what: str) -> Path:
