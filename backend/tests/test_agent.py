@@ -14,6 +14,7 @@ from v2_samples import seed_v2
 
 from app.agent import loop as loop_module
 from app.agent import tools as tools_module
+from app.agent.extraction_query import ExtractionFilters
 from app.agent.loop import (
     AGENT_PROMPT_TEXT,
     FALLBACK_BETA,
@@ -30,7 +31,6 @@ from app.agent.tools import (
     MalformedToolResult,
     ToolContext,
     ToolError,
-    _matches,
     assert_tool_result_content,
     extraction_summary,
     get_page,
@@ -148,10 +148,10 @@ def test_a_string_total_is_counted_summed_and_matched() -> None:
 
     assert extraction_summary(records) == "2 matching document(s). Sum of totals: 488.23 USD."
 
-    assert _matches(records[0], {}, None, None, D("425.58"), None)
-    assert _matches(records[0], {}, None, None, None, D("425.58"))
-    assert not _matches(records[0], {}, None, None, D("425.59"), None)
-    assert not _matches(records[0], {}, None, None, None, D("425.57"))
+    assert ExtractionFilters(min_total=D("425.58")).matches(records[0])
+    assert ExtractionFilters(max_total=D("425.58")).matches(records[0])
+    assert not ExtractionFilters(min_total=D("425.59")).matches(records[0])
+    assert not ExtractionFilters(max_total=D("425.57")).matches(records[0])
 
 
 def test_an_unparseable_total_counts_as_missing_not_a_crash() -> None:
@@ -160,9 +160,9 @@ def test_an_unparseable_total_counts_as_missing_not_a_crash() -> None:
     assert extraction_summary(records) == (
         "4 matching document(s). Sum of totals: 425.58 USD. 3 matching document(s) have no total."
     )
-    assert not _matches(records[1], {}, None, None, D(0), None)
-    assert not _matches(records[1], {}, None, None, None, D(1000))
-    assert _matches(records[1], {}, None, None, None, None)
+    assert not ExtractionFilters(min_total=D(0)).matches(records[1])
+    assert not ExtractionFilters(max_total=D(1000)).matches(records[1])
+    assert ExtractionFilters().matches(records[1])
 
 
 def test_a_total_beyond_the_amount_bound_is_not_summed() -> None:
@@ -172,7 +172,7 @@ def test_a_total_beyond_the_amount_bound_is_not_summed() -> None:
         "3 matching document(s). Sum of totals: 1000000000000.00 USD. "
         "1 matching document(s) have no total."
     )
-    assert not _matches(records[0], {}, None, None, None, D("1E+13"))
+    assert not ExtractionFilters(max_total=D("1E+13")).matches(records[0])
 
 
 def test_sums_keep_every_digit_instead_of_rounding_to_the_decimal_context() -> None:

@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import case, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.extraction_fields import ARRAY_CELLS, SCHEMA_V1, SCHEMAS, ExtractionSchema
@@ -102,6 +103,27 @@ def field_value(field: ExtractedField) -> Any:
     return leaf_value(field.value)
 
 
+# A document's newest extraction is its current one; the id breaks a created_at
+# tie so every reader (load_records, the SQL filters of the agent's
+# query_extractions) picks the same row.
+LATEST_EXTRACTION_ORDER = (Extraction.created_at.desc(), Extraction.id.desc())
+
+
+def scalar_value_sql(field: Any) -> Any:
+    """`field_value` for a scalar field, as a JSONB expression: a reviewer's
+    correction wins over the leaf's "value". `field` is anything with the
+    columns `review_action`, `corrected_value`, and `value` (ExtractedField, an
+    alias of it, or the `.c` of a subquery over it). SQL NULL (a missing field,
+    or a correction left unset) and JSON null both stand for Python's None; a
+    stored value that is not a leaf object has no "value" key to read, so it is
+    NULL, as `leaf_value` returns None for it. Array fields have their own
+    shape (`array_rows`) and are read by the caller."""
+    return case(
+        (field.review_action == "corrected", field.corrected_value),
+        else_=field.value.op("->", return_type=JSONB)("value"),
+    )
+
+
 @dataclass
 class DocumentRecord:
     document_id: uuid.UUID
@@ -125,7 +147,7 @@ async def load_records(
     latest = (
         select(Extraction.id)
         .where(Extraction.document_id == Document.id)
-        .order_by(Extraction.created_at.desc())
+        .order_by(*LATEST_EXTRACTION_ORDER)
         .limit(1)
         .correlate(Document)
         .scalar_subquery()

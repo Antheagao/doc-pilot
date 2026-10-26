@@ -29,18 +29,22 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal, Inexact, localcontext
+from decimal import Decimal
 from typing import Any, Literal
 
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.extraction_query import (
+    ExtractionFilters,
+    MatchTotals,
+    find_matches,
+)
 from app.extraction_fields import SCHEMA_V1
 from app.langfuse_link import observation_attributes
 from app.models import Document, DocumentPage
 from app.money import (
-    MAX_AMOUNT,
     MoneyError,
     currency_precision,
     to_api_string,
@@ -48,7 +52,7 @@ from app.money import (
     to_plain_string,
 )
 from app.pii import mask_card_numbers
-from app.records import DocumentRecord, load_records, schema_for_stored
+from app.records import DocumentRecord, schema_for_stored
 from app.retrieval.embeddings import Embedder
 from app.retrieval.search import search
 from app.telemetry import (
@@ -444,17 +448,6 @@ async def get_page(ctx: ToolContext, tool_input: dict[str, Any]) -> list[dict[st
     return [_search_result(source, f"{filename}, page {page_number} (full page)", content)]
 
 
-def _decimal_or_none(value: Any) -> Decimal | None:
-    """A stored amount as a Decimal, or None when it is not a usable amount:
-    unparseable, or at or above the bound a correction may carry, so sums
-    stay inside the Decimal context's precision and never round silently."""
-    try:
-        amount = to_decimal(value)
-    except MoneyError:
-        return None
-    return amount if abs(amount) < MAX_AMOUNT else None
-
-
 def _total_bounds(tool_input: dict[str, Any]) -> tuple[Decimal | None, Decimal | None]:
     """The min_total and max_total filters as Decimals; a bad one is a tool
     error the model sees, not a crash."""
@@ -468,90 +461,54 @@ def _total_bounds(tool_input: dict[str, Any]) -> tuple[Decimal | None, Decimal |
     return bounds[0], bounds[1]
 
 
-def _matches(
-    record: DocumentRecord,
-    tool_input: dict[str, Any],
-    date_from,
-    date_to,
-    min_total: Decimal | None,
-    max_total: Decimal | None,
-) -> bool:
-    fields = record.fields
-    vendor = tool_input.get("vendor")
-    if vendor and vendor.casefold() not in str(fields.get("vendor") or "").casefold():
-        return False
-    item = tool_input.get("item")
-    if item and not any(
-        item.casefold() in str(row.get("description") or "").casefold()
-        for row in fields.get("line_items") or []
-    ):
-        return False
-    currency = tool_input.get("currency")
-    if currency and str(fields.get("currency") or "").upper() != currency.upper():
-        return False
-    if date_from or date_to:
-        try:
-            document_date = date.fromisoformat(str(fields.get("document_date")))
-        except ValueError:
-            return False
-        if (date_from and document_date < date_from) or (date_to and document_date > date_to):
-            return False
-    if min_total is None and max_total is None:
-        return True
-    # A total that is missing or unparseable cannot satisfy a bound.
-    total = _decimal_or_none(fields.get("total"))
-    if total is None:
-        return False
-    return (min_total is None or total >= min_total) and (max_total is None or total <= max_total)
+def _summary_text(totals: MatchTotals) -> str:
+    """The summary line: the count, the per-currency sums, the matches with no
+    total, and the note that only the first RECORDS_MAX are listed."""
+    parts = [f"{totals.count} matching document(s)."]
+    if totals.sums:
+        parts.append(
+            "Sum of totals: "
+            + "; ".join(
+                f"{to_api_string(amount, currency_precision(currency).minor_units)} {currency}"
+                for currency, amount in sorted(totals.sums.items())
+            )
+            + "."
+        )
+    if totals.missing_total:
+        parts.append(f"{totals.missing_total} matching document(s) have no total.")
+    if totals.count > RECORDS_MAX:
+        parts.append(f"Listing the first {RECORDS_MAX}; narrow the filters to see the rest.")
+    return " ".join(parts)
 
 
 def extraction_summary(matches: list[DocumentRecord]) -> str:
     """Counts and per-currency sums, computed here in Decimal -- the model
     is told never to add amounts itself."""
-    sums: dict[str, Decimal] = {}
-    missing_total = 0
-    # Wide enough that adding floats below MAX_AMOUNT is exact (a float can
-    # print down to 1e-308), and trapped so a sum that is not exact fails
-    # loudly instead of rounding.
-    with localcontext() as context:
-        context.prec = 400
-        context.traps[Inexact] = True
-        for record in matches:
-            total = _decimal_or_none(record.fields.get("total"))
-            if total is None:
-                missing_total += 1
-                continue
-            # Normalized, so "usd" and "USD" are one sum (as _matches treats them).
-            currency = currency_precision(record.fields.get("currency")).code or "unknown currency"
-            sums[currency] = sums.get(currency, Decimal(0)) + total
-    parts = [f"{len(matches)} matching document(s)."]
-    if sums:
-        parts.append(
-            "Sum of totals: "
-            + "; ".join(
-                f"{to_api_string(amount, currency_precision(currency).minor_units)} {currency}"
-                for currency, amount in sorted(sums.items())
-            )
-            + "."
-        )
-    if missing_total:
-        parts.append(f"{missing_total} matching document(s) have no total.")
-    if len(matches) > RECORDS_MAX:
-        parts.append(f"Listing the first {RECORDS_MAX}; narrow the filters to see the rest.")
-    return " ".join(parts)
+    totals = MatchTotals()
+    for record in matches:
+        totals.add_record(record)
+    return _summary_text(totals)
 
 
 async def query_extractions(ctx: ToolContext, tool_input: dict[str, Any]) -> list[dict[str, Any]]:
     date_from = _parse_date(tool_input.get("date_from"), "date_from")
     date_to = _parse_date(tool_input.get("date_to"), "date_to")
-    records = await load_records(ctx.session, ctx.document_ids)
     min_total, max_total = _total_bounds(tool_input)
-    matches = [
-        r for r in records if _matches(r, tool_input, date_from, date_to, min_total, max_total)
-    ]
+    filters = ExtractionFilters(
+        vendor=tool_input.get("vendor"),
+        item=tool_input.get("item"),
+        currency=tool_input.get("currency"),
+        date_from=date_from,
+        date_to=date_to,
+        min_total=min_total,
+        max_total=max_total,
+    )
+    # The filters, the count, and the sums run in SQL; only the listed records
+    # are loaded, so the work is bounded by RECORDS_MAX, not by the corpus.
+    found = await find_matches(ctx.session, filters, ctx.document_ids, RECORDS_MAX)
 
-    summary = extraction_summary(matches)
-    if not matches:
+    summary = _summary_text(found.totals)
+    if not found.totals.count:
         return [{"type": "text", "text": summary}]
     content: list[dict[str, Any]] = [
         {
@@ -562,7 +519,7 @@ async def query_extractions(ctx: ToolContext, tool_input: dict[str, Any]) -> lis
             "citations": {"enabled": True},
         }
     ]
-    for record in matches[:RECORDS_MAX]:
+    for record in found.records:
         lines = record_lines(record)
         source = Source(
             source=f"{SOURCE_SCHEME}/{record.document_id}/extraction",
