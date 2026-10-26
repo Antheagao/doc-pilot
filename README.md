@@ -928,6 +928,36 @@ python scripts/load/load.py run --profile zero --scale 1 --label after-query-ext
 
 Both runs used the same machine, Docker resources, scripted model, traffic and overrides. A change counts as evidence only when the runs are separated: every after run lies beyond every before run.
 
+#### Before and after: `onnx-threads` against `query-extractions` (run `20261026T060421Z`)
+
+After (commit `cc8cfe7`, run `20261026T194918Z`):
+
+```
+python scripts/load/load.py run --profile zero --scale 1 --label after-onnx-threads --out scripts/load/results
+```
+
+| Measure | Before (median, range) | After (median, range) | Change | Runs separated |
+| --- | --- | --- | --- | --- |
+| Documents/s at 1 worker | 6.03 (5.90 to 6.06) | 6.03 (5.96 to 6.08) | -0.0% | no |
+| Documents/s at 2 workers | 4.14 (4.07 to 4.17) | 7.38 (7.29 to 7.83) | +78.2% | yes |
+| Documents/s at 4 workers | 3.51 (3.49 to 3.53) | 9.47 (9.26 to 9.53) | +170.2% | yes |
+| Documents/s at 8 workers | 3.34 (3.30 to 3.34) | 11.3 (11.2 to 11.5) | +238.4% | yes |
+| Uploads/s at 1 user | 154 (154 to 172) | 158 (156 to 162) | +2.0% | no |
+| Uploads/s at 2 users | 227 (213 to 237) | 217 (185 to 224) | -4.4% | no |
+| Uploads/s at 4 users | 246 (228 to 249) | 226 (214 to 250) | -8.2% | no |
+| Uploads/s at 8 users | 193 (157 to 198) | 177 (172 to 185) | -8.3% | no |
+| Knee (users) | 16 | 16 | +0.0% | no |
+| GET /search p95 (ms) at 16 users | 748 (698 to 880) | 745 (724 to 760) | -0.4% | no |
+| POST /ask p95 (ms) at 16 users | 923 (912 to 1,130) | 937 (930 to 954) | +1.6% | no |
+| POST /ask/stream, answer p95 (ms) at 16 users | 1,087 (1,006 to 1,178) | 1,055 (1,032 to 1,059) | -3.0% | no |
+| GET /documents p95 (ms) at 16 users | 389 (378 to 407) | 371 (362 to 401) | -4.6% | no |
+| GET /search p95 (ms) at 32 users | 1,475 (1,436 to 1,517) | 1,489 (1,481 to 1,540) | +0.9% | no |
+| POST /ask p95 (ms) at 32 users | 1,651 (1,576 to 1,796) | 1,571 (1,522 to 1,605) | -4.9% | no |
+| POST /ask/stream, answer p95 (ms) at 32 users | 2,109 (2,052 to 2,176) | 2,152 (2,033 to 2,178) | +2.0% | no |
+| GET /documents p95 (ms) at 32 users | 1,110 (1,039 to 1,271) | 1,105 (1,101 to 1,138) | -0.5% | no |
+
+Both runs used the same machine, Docker resources, scripted model, traffic and overrides. The after run sized each worker's ONNX threads to the Docker CPUs divided by the number of workers, at least 1: onnxruntime's default of every core at 1 worker, 4 threads at 2 workers, 2 at 4 workers, and 1 at 8 workers; the before run left the default in every worker. A change counts as evidence only when the runs are separated: every after run lies beyond every before run.
+
 ### Scripted model `replay`, latency scale 0.1
 
 **Scripted model.** Profile `replay` at latency scale 0.1: scripted model calls sleep for the latency the committed extraction runs recorded (a proxy, multiplied by the latency scale) and for the assumed agent step and judge durations. Agent step 3000 ms and judge call 4000 ms are assumptions.

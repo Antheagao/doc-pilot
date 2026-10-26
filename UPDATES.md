@@ -25,6 +25,16 @@ Update this file at the end of every session: move items between sections, appen
 
 ## Session Log
 
+### 2026-10-25 to 2026-10-26 (macOS: Batch L, the local load test, L1-L8)
+- Batch L planned from item 5 of the portfolio queue after two spikes (k6 buffers an SSE response whole, so Locust's `HttpUser` was chosen), then implemented one task per commit: `832bdc5`, `c458370`, `15f1c5a`, `60f14ce`, `1908845`, `a626695`, `0040c7e`, `d17f830`, `fc9637f`, `4bc5984`, `f620813`, `cc8cfe7`, and the closing commit.
+- The scripted model (`MODEL_PROVIDER=scripted`) answers every model call from committed data through the real code paths at cost 0; four layers keep a run from billing (the overlay blanks the key, `Settings` refuses a key beside it, the harness asks every container before and after each scale step, and a one-cent budget plus a database spend check after every phase).
+- Findings, in the order the evidence named them: the single API process saturated first, and most of its time was `/ask`'s `query_extractions` loading the whole tenant (answered in SQL: knee 8 to 16 users, read tails about halved); then, under `zero`, the workers' ONNX threads oversubscribed the cores so throughput fell as workers were added (sized to cores divided by workers: 8 workers from 3.34 to 11.3 documents/s).
+- Harness lessons: stale planner statistics after a bulk load could favor either side, so every bulk load is followed by `ANALYZE` and both baselines were re-run; a median just outside a three-run range marked a +0.2% change as real, so the report counts only separated runs and compares each after-run with the run before it; an after-run taken while documentation was being edited recorded a dirty tree and was re-run rather than published.
+- Review caught: a scripted eval run that would have been published in the README as a real model at 100%; a reclaim that re-ran and re-billed a job forever (now capped at `MAX_ATTEMPTS`).
+- Known gaps: nothing renews a worker's lease, so it must exceed the slowest job (`FUTURE.md`); closed-loop users understate queueing (README Performance limits).
+- Waiting on Anthony: M5, B11b, and B12 as before; no GIF was recorded for this batch (the SVG chart is its visual).
+- Spend: $0.00; 2678 backend tests pass (2 skipped) and 546 script tests pass.
+
 ### 2026-10-25 (macOS, continued: Batch N, auth and multi-tenant isolation, N1-N9)
 - Planned by the planner from item 4 of the portfolio queue, with spikes on a throwaway database; every task implemented by a coder and reviewed by a deep reviewer before its commit.
 - Landed `20a4bbb`, `1db867c`, `1ffb636`, `d155803`, `108a654`, `8645c39`, `4d0f015`, `af92f16`, and the closing documentation commit; 2488 backend tests and 84 demo-script tests pass.

@@ -402,8 +402,8 @@ def test_the_sizing_of_the_threads_is_stated_where_the_after_set_them_and_the_be
     assert "ONNX threads" not in first
     assert (
         "The after run sized each worker's ONNX threads to the Docker CPUs divided by the number of workers, "
-        "at least 1 (the default (every core) at 1 worker, 4 at 2 workers, 2 at 4 workers); the before run left onnxruntime's default "
-        "of every core in every worker."
+        "at least 1: onnxruntime's default of every core at 1 worker, 4 threads at 2 workers, and 2 at 4 workers; "
+        "the before run left the default in every worker."
     ) in second
 
 
@@ -643,7 +643,8 @@ def test_the_charts_label_axes_with_units_and_name_every_series(results: Path) -
         "Throughput vs worker containers",
         "/search p95 latency vs concurrent users",
         "Baseline",
-        "After (pool-fix)",
+        "After",
+        "After: pool-fix",
         "Ideal linear scaling",
         "SLO 1,000 ms",
     ):
@@ -701,16 +702,110 @@ def test_the_linear_axis_rounds_up_to_clean_ticks() -> None:
     assert report._linear_axis(8.0) == (8.0, [0.0, 2.0, 4.0, 6.0, 8.0])
 
 
-def test_the_headline_group_prefers_replay_and_falls_back_per_panel(tmp_path: Path) -> None:
+def panel_sources(markdown_charts: dict[str, str]) -> tuple[str, str]:
+    """The profile line under the title of the scaling (left) and the latency
+    (right) panel."""
+    root = ET.fromstring(markdown_charts[report.LIGHT_CHART])
+    sources = {
+        element.get("x"): element.text
+        for element in root.iter(f"{SVG}text")
+        if element.get("y") == "114.0"
+    }
+    return sources[f"{report.PLOTS[0][0]:.1f}"], sources[f"{report.PLOTS[1][0]:.1f}"]
+
+
+def test_each_panel_draws_the_profile_it_prefers(tmp_path: Path) -> None:
+    """Worker throughput is the application's own cost under zero; the read
+    latency under replay includes the model path."""
     write_runs(
         tmp_path,
+        make_artifact(profile="replay", scale=0.1, run_id="20261101T090000Z"),
+        make_artifact(profile="zero", run_id="20261101T100000Z"),
+    )
+    assert panel_sources(report.render(tmp_path, publishable=True).charts) == (
+        "zero profile, latency scale 1",
+        "replay profile, latency scale 0.1",
+    )
+
+
+def test_a_panel_falls_back_to_the_other_profile_when_its_first_did_not_measure_it(tmp_path: Path) -> None:
+    write_runs(
+        tmp_path / "no-zero-ramp",
+        make_artifact(profile="replay", scale=0.1, run_id="20261101T090000Z"),
+        make_artifact(profile="zero", ramp=[], run_id="20261101T100000Z"),
+    )
+    assert panel_sources(report.render(tmp_path / "no-zero-ramp", publishable=True).charts) == (
+        "zero profile, latency scale 1",
+        "replay profile, latency scale 0.1",
+    )
+    write_runs(
+        tmp_path / "no-replay-ramp",
         make_artifact(profile="replay", scale=0.1, ramp=[], run_id="20261101T090000Z"),
         make_artifact(profile="zero", run_id="20261101T100000Z"),
     )
-    root = ET.fromstring(report.render(tmp_path, publishable=True).charts[report.LIGHT_CHART])
-    texts = [element.text for element in root.iter(f"{SVG}text")]
-    assert texts.count("replay profile, latency scale 0.1") == 1  # the scaling panel
-    assert texts.count("zero profile, latency scale 1") == 1  # the latency panel, which replay did not measure
+    assert panel_sources(report.render(tmp_path / "no-replay-ramp", publishable=True).charts) == (
+        "zero profile, latency scale 1",
+        "zero profile, latency scale 1",
+    )
+    write_runs(
+        tmp_path / "no-zero-scaling",
+        make_artifact(profile="replay", scale=0.1, run_id="20261101T090000Z"),
+        make_artifact(profile="zero", scaling={}, run_id="20261101T100000Z"),
+    )
+    assert panel_sources(report.render(tmp_path / "no-zero-scaling", publishable=True).charts) == (
+        "replay profile, latency scale 0.1",
+        "replay profile, latency scale 0.1",
+    )
+
+
+def chart_texts(svg: str) -> list[str]:
+    return [element.text for element in ET.fromstring(svg).iter(f"{SVG}text")]
+
+
+def test_the_legend_names_the_roles_and_each_panel_names_its_own_after(tmp_path: Path) -> None:
+    """The panels draw different groups, so the afters differ: one legend line
+    cannot name them. The zero panel's after is the second fix, on top of the
+    first; the replay panel's is the first."""
+    first = after_of(started_at="2026-11-02T10:00:00.000000Z", scaling={1: [6.1, 6.3], 2: [20.0, 21.0], 4: [38.0, 40.0]})
+    write_runs(
+        tmp_path,
+        make_artifact(profile="replay", scale=0.1, run_id="20261101T090000Z"),
+        make_artifact(label="after-pool-fix", profile="replay", scale=0.1, run_id="20261102T090000Z"),
+        make_artifact(),
+        first,
+        second_after_of(),
+    )
+    texts = chart_texts(report.render(tmp_path, publishable=True).charts[report.LIGHT_CHART])
+    assert texts.count("Baseline") >= 1 and texts.count("After") >= 1
+    assert not [text for text in texts if text.startswith("After (")]
+    assert "After: onnx-threads, on top of pool-fix" in texts  # the zero scaling panel
+    assert "After: pool-fix" in texts  # the replay latency panel
+
+
+def test_a_baseline_alone_names_no_after_in_a_subtitle(tmp_path: Path) -> None:
+    write_runs(tmp_path, make_artifact())
+    assert not [text for text in chart_texts(report.render(tmp_path, publishable=True).charts[report.LIGHT_CHART]) if text.startswith("After")]
+
+
+def test_an_ideal_line_that_fits_is_drawn_whole_and_labelled_at_its_end(results: Path) -> None:
+    texts = chart_texts(render_fixture(results).charts[report.LIGHT_CHART])
+    assert "Ideal" in texts and not [text for text in texts if text.startswith("Ideal:")]
+
+
+def test_an_ideal_line_that_leaves_the_plot_is_cut_at_the_top_and_says_where_it_ends(tmp_path: Path) -> None:
+    """The axis fits the measurements: with scaling that falls short, an ideal
+    of 24 documents/s at 4 workers would flatten data that tops out at 9.5."""
+    write_runs(
+        tmp_path,
+        make_artifact(scaling={1: [6.0, 6.0], 2: [4.0, 4.2], 4: [3.5, 3.6]}),
+        after_of(scaling={1: [6.0, 6.1], 2: [7.0, 7.2], 4: [9.0, 9.5]}),
+    )
+    svg = report.render(tmp_path, publishable=True).charts[report.LIGHT_CHART]
+    assert "Ideal: 24 at 4 workers" in chart_texts(svg)
+    assert "10" in chart_texts(svg) and "24" not in chart_texts(svg)  # the axis ends at the data, not at the ideal
+    for polyline in ET.fromstring(svg).iter(f"{SVG}polyline"):
+        for pair in polyline.get("points").split():
+            assert float(pair.split(",")[1]) >= report.PLOT_TOP - 0.05
 
 
 # --- the README -------------------------------------------------------------------------------

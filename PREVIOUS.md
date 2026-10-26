@@ -2,6 +2,21 @@
 
 > Append-only log of finished batches/tasks, newest first. `/batch-loop` moves completed tasks here from [PRESENT.md](PRESENT.md) with the date and commit hash. Keep entries short — detail lives in git history.
 
+## Batch L - A local load test with published throughput and latency (COMPLETE 2026-10-26)
+
+macOS, planned 2026-10-25 against `ffff501` from item 5 of the portfolio queue; model spend $0 (every run answered by the scripted model, and each artifact records `spend_usd` 0 and only `scripted`).
+- [x] L1 The scripted model provider: opt-in, deterministic, $0, refused next to a real key - `832bdc5`
+- [x] L2 Workers safe to scale (compare-and-set settle, capped reclaimed attempts) and named database connections - `c458370`
+- [x] L3 The isolated `doc-pilot-load` stack, the shared compose guard, tenants and keys, and the no-spend preflight - `15f1c5a`
+- [x] L4 The Locust harness, samplers, phases, `load_v1` artifact, and a CI smoke - `60f14ce`
+- [x] L5 Performance tables and charts generated from the artifacts, with sync tests - `1908845`
+- [x] L6 Baselines on the M1 and the first bottleneck diagnosed (the single API process, most of it `/ask`'s `query_extractions`) - `a626695`; re-run on fresh planner statistics after the harness learned to `ANALYZE` - `0040c7e`, `d17f830`
+- [x] L7 `query_extractions` answered in SQL instead of loading the whole tenant, measured again, and the report counting only separated runs as evidence - `fc9637f`, `4bc5984`
+- [x] L7b Embedding threads sized to each worker's share of the cores (`EMBEDDING_THREADS`), measured again and compared with the run before it - `f620813`, and the after-run in this batch's closing commit
+- [x] L8 README Performance narrative, overlays, gates, and the board - `cc8cfe7` and the closing commit
+- Result: the SQL fix moved the read knee from 8 to 16 users in both profiles and roughly halved the 16-user search and ask tails; the thread fix took `zero` documents/s at 8 workers from 3.34 to 11.3, so adding workers now adds throughput instead of removing it.
+- The full task text and Result lines are in git history, in `PRESENT.md` as of the parent of the commit that closed the batch.
+
 ## Batch N - Auth and multi-tenant isolation (COMPLETE 2026-10-25)
 
 macOS, planned against `57a5fe1` from item 4 of the portfolio queue; model spend about $0.01 (one draft test reached the real model before the suite was made unable to spend).

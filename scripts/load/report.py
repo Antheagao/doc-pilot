@@ -41,7 +41,7 @@ import math
 import shlex
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -59,10 +59,13 @@ END_MARKER = "<!-- PERF_TABLE:END -->"
 LIGHT_CHART = "load-light.svg"
 DARK_CHART = "load-dark.svg"
 
-# The groups a chart draws from, first match wins: the replay profile exercises
-# the model-call path the zero profile skips. A panel falls to the next group
-# when the first has no data for it.
-HEADLINE_PROFILES = ("replay", "zero")
+# The profile each chart panel draws, first group with data wins, so a panel
+# falls to the next profile when the first did not measure it. Worker throughput
+# under `zero` is the application's own cost, while under `replay` it is mostly
+# the scripted sleeps overlapping, so the scaling panel prefers `zero`. The read
+# latency panel prefers `replay`, whose agent and judge calls put the model path
+# under the reads that `zero` skips.
+PANEL_PROFILES = {"scaling": ("zero", "replay"), "latency": ("replay", "zero")}
 PROFILE_ORDER = ("zero", "replay")
 
 PROFILE_BLURB = {
@@ -675,14 +678,20 @@ def embedding_threads_note(before: dict, after: dict) -> str | None:
     sized = embedding_threads_by_workers(after)
     if not sized or embedding_threads_by_workers(before):
         return None
-    threads = ", ".join(
-        f"{'the default (every core)' if sized[workers] is None else sized[workers]} at {_plural(workers, 'worker')}"
-        for workers in sorted(sized)
-    )
+    items = []
+    unit_said = False  # only the first count of threads says what the number is
+    for workers in sorted(sized):
+        threads = sized[workers]
+        if threads is None:
+            value = "onnxruntime's default of every core"
+        else:
+            value = str(threads) if unit_said else f"{threads} threads"
+            unit_said = True
+        items.append(f"{value} at {_plural(workers, 'worker')}")
+    listed = " and ".join(items) if len(items) < 3 else f"{', '.join(items[:-1])}, and {items[-1]}"
     return (
         "The after run sized each worker's ONNX threads to the Docker CPUs divided by the number of "
-        f"workers, at least 1 ({threads}); the before run left onnxruntime's default of every core in "
-        "every worker."
+        f"workers, at least 1: {listed}; the before run left the default in every worker."
     )
 
 
@@ -779,8 +788,8 @@ def render_markdown(groups: list[Group], notes: Iterable[str] = (), *, developme
 
 # --- charts -------------------------------------------------------------------
 
-WIDTH, HEIGHT = 960, 420
-PLOT_TOP, PLOT_BOTTOM = 124, 336
+WIDTH, HEIGHT = 960, 440
+PLOT_TOP, PLOT_BOTTOM = 148, 360
 PLOTS = ((64, 384), (534, 854))  # x extent of the left and right plot
 MIN_LABEL_GAP = 14.0
 
@@ -803,6 +812,7 @@ class Series:
 @dataclass(frozen=True)
 class PanelData:
     source: str  # "replay profile, latency scale 0.1"
+    after: str  # "After: onnx-threads, on top of query-extractions", "" with no after drawn
     series: tuple[Series, ...]
     ideal: tuple[tuple[float, float], ...] = ()
     limit: float | None = None
@@ -823,43 +833,51 @@ def _source(group: Group) -> str:
     return f"{group.profile} profile, latency scale {group.scale:g}"
 
 
-def _headline_groups(groups: list[Group]) -> list[Group]:
-    rank = {profile: index for index, profile in enumerate(HEADLINE_PROFILES)}
+def _panel_groups(groups: list[Group], panel: str) -> list[Group]:
+    """The groups in the order `panel` prefers their profiles (PANEL_PROFILES)."""
+    preferred = PANEL_PROFILES[panel]
+    rank = {profile: index for index, profile in enumerate(preferred)}
     return sorted(groups, key=lambda g: (rank.get(g.profile, len(rank)), g.scale))
 
 
+def _after_note(group: Group, series: tuple[Series, ...]) -> str:
+    """Which after the panel draws, and the earlier ones its numbers include:
+    each after is measured on top of the run before it."""
+    if not any(s.role == "after" for s in series):
+        return ""
+    *earlier, latest = (after_slug(run) or "the change" for run in group.afters)
+    return f"After: {latest}" + (f", on top of {', '.join(earlier)}" if earlier else "")
+
+
+def _panel_series(group: Group, measured: Callable[[dict], dict]) -> tuple[Series, ...]:
+    """The group's baseline and its latest after, each with the points
+    `measured` reads from its artifact (none for a run that lacks them)."""
+    return tuple(
+        Series(_series_name(run), "after" if run.is_after else "baseline", _points(measured(run.doc)))
+        for run in (group.baseline, *group.afters[-1:])
+        if measured(run.doc)
+    )
+
+
 def scaling_panel(groups: list[Group]) -> PanelData | None:
-    for group in _headline_groups(groups):
-        runs = [group.baseline, *group.afters[-1:]]
-        series = tuple(
-            Series(_series_name(run), "after" if run.is_after else "baseline", _points(scaling_documents(run.doc)))
-            for run in runs
-            if scaling_documents(run.doc)
-        )
+    for group in _panel_groups(groups, "scaling"):
+        series = _panel_series(group, scaling_documents)
         if not series or series[0].role != "baseline":
             continue
         first = series[0].points[0]
         ideal = tuple((p.x, first.median * p.x / first.x) for p in series[0].points) if len(series[0].points) > 1 else ()
-        return PanelData(_source(group), series, ideal)
+        return PanelData(_source(group), _after_note(group, series), series, ideal)
     return None
 
 
 def latency_panel(groups: list[Group]) -> PanelData | None:
-    for group in _headline_groups(groups):
-        runs = [group.baseline, *group.afters[-1:]]
-        series = tuple(
-            Series(
-                _series_name(run),
-                "after" if run.is_after else "baseline",
-                _points(ramp_value(run.doc, CHART_ENDPOINT, "latency_ms", "p95")),
-            )
-            for run in runs
-            if ramp_value(run.doc, CHART_ENDPOINT, "latency_ms", "p95")
-        )
+    for group in _panel_groups(groups, "latency"):
+        series = _panel_series(group, lambda doc: ramp_value(doc, CHART_ENDPOINT, "latency_ms", "p95"))
         if not series or series[0].role != "baseline":
             continue
         steps = _valid(group.baseline.doc, "ramp")
-        return PanelData(_source(group), series, limit=steps[0]["params"]["slo_search_p95_ms"] if steps else None)
+        limit = steps[0]["params"]["slo_search_p95_ms"] if steps else None
+        return PanelData(_source(group), _after_note(group, series), series, limit=limit)
     return None
 
 
@@ -937,6 +955,27 @@ def _draw_end_labels(svg: _Svg, labels: list[tuple[float, float, str]]) -> None:
             last = y
 
 
+def _draw_ideal(
+    svg: _Svg,
+    points: list[tuple[float, float]],
+    end: tuple[float, float],
+    labels: list[tuple[float, float, str]],
+) -> None:
+    """The ideal line, cut where it leaves the top of the plot (a line that rises
+    for the whole plot is drawn to the edge, with a label that says where it
+    would end: `end` is its last point in data units). A line that fits is
+    labelled at its end like the series."""
+    if points[-1][1] >= PLOT_TOP:
+        svg.polyline(points, svg.theme.muted, dash="6 4")
+        labels.append((points[-1][0], points[-1][1], "Ideal"))
+        return
+    inside = [point for point in points if point[1] >= PLOT_TOP]
+    (x1, y1), (x2, y2) = points[len(inside) - 1], points[len(inside)]
+    exit_x = x1 + (x2 - x1) * (y1 - PLOT_TOP) / (y1 - y2)
+    svg.polyline([*inside, (exit_x, PLOT_TOP)], svg.theme.muted, dash="6 4")
+    svg.text(exit_x + 10, PLOT_TOP + 16, f"Ideal: {end[1]:,.0f} at {end[0]:g} workers", color=svg.theme.ink, size=12)
+
+
 def _draw_panel(svg: _Svg, index: int, data: PanelData | None, *, kind: str) -> None:
     theme = svg.theme
     left, right = PLOTS[index]
@@ -946,12 +985,14 @@ def _draw_panel(svg: _Svg, index: int, data: PanelData | None, *, kind: str) -> 
         svg.text(left, 190, "Not measured in the published runs.", size=12)
         return
     svg.text(left, 114, data.source, size=11)
+    if data.after:
+        svg.text(left, 130, data.after, size=11)
     xs = sorted({p.x for s in data.series for p in s.points})
     if kind == "scaling":
         x_max = xs[-1] if len(xs) > 1 else xs[-1] * 2  # a lone point sits mid-plot, not on the edge
-        top, ticks = _linear_axis(
-            max(max(p.high for s in data.series for p in s.points), max((y for _x, y in data.ideal), default=0.0))
-        )
+        # The axis fits the measurements, not the ideal line: where scaling
+        # falls far short, ideal would squash every series into the bottom.
+        top, ticks = _linear_axis(max(p.high for s in data.series for p in s.points))
 
         def x_of(value: float) -> float:
             return left + (right - left) * value / x_max
@@ -1002,9 +1043,7 @@ def _draw_panel(svg: _Svg, index: int, data: PanelData | None, *, kind: str) -> 
         svg.line(left, y, right, y, theme.muted, 1.5, dash="6 4")
         svg.text(left + 6, y + 16, f"SLO {data.limit:,.0f} ms", size=11)
     if data.ideal:
-        points = [(x_of(x), y_of(y)) for x, y in data.ideal]
-        svg.polyline(points, theme.muted, dash="6 4")
-        labels.append((points[-1][0], points[-1][1], "Ideal"))
+        _draw_ideal(svg, [(x_of(x), y_of(y)) for x, y in data.ideal], data.ideal[-1], labels)
     for series in data.series:
         color = _series_color(theme, series.role)
         coords = [(x_of(p.x), y_of(p.median)) for p in series.points]
@@ -1023,14 +1062,15 @@ def _draw_panel(svg: _Svg, index: int, data: PanelData | None, *, kind: str) -> 
 
 
 def _legend(svg: _Svg, panels: list[PanelData | None]) -> None:
+    """The roles the panels draw, named generically: each panel's subtitle says
+    which after it shows, and the panels may draw different ones."""
     theme = svg.theme
-    entries: list[tuple[str, str, str | None]] = []  # (label, role, color)
-    seen: set[tuple[str, str]] = set()
-    for panel in panels:
-        for series in panel.series if panel else ():
-            if (series.name, series.role) not in seen:
-                seen.add((series.name, series.role))
-                entries.append((series.name, series.role, _series_color(theme, series.role)))
+    drawn = {series.role for panel in panels for series in (panel.series if panel else ())}
+    entries: list[tuple[str, str, str | None]] = [  # (label, role, color)
+        (label, role, _series_color(theme, role))
+        for label, role in (("Baseline", "baseline"), ("After", "after"))
+        if role in drawn
+    ]
     if any(panel and panel.ideal for panel in panels):
         entries.append(("Ideal linear scaling", "ideal", None))
     x = 64.0
