@@ -637,6 +637,12 @@ def comparison_metrics(before: dict, after: dict) -> list[Metric]:
     return metrics
 
 
+def runs_separated(before: dict, after: dict) -> bool:
+    """Every after run lies beyond every before run. With three runs a side, an
+    after median just past a tight before range is noise, not a change."""
+    return after["min"] > before["max"] or after["max"] < before["min"]
+
+
 def comparison_section(group: Group) -> str | None:
     sections = []
     for after in group.afters:
@@ -646,7 +652,6 @@ def comparison_section(group: Group) -> str | None:
         rows = []
         for metric in metrics:
             before, now = metric.before, metric.after
-            outside = now["median"] < before["min"] or now["median"] > before["max"]
             fmt = fmt_g if metric.unit == "users" else fmt_number
             rows.append(
                 [
@@ -654,15 +659,15 @@ def comparison_section(group: Group) -> str | None:
                     fmt_with_range(before, fmt),
                     fmt_with_range(now, fmt),
                     fmt_change(before["median"], now["median"]),
-                    "yes" if outside else "no",
+                    "yes" if runs_separated(before, now) else "no",
                 ]
             )
-        table = _table(["Measure", "Before (median, range)", "After (median, range)", "Change", "After outside the before range"], rows)
+        table = _table(["Measure", "Before (median, range)", "After (median, range)", "Change", "Runs separated"], rows)
         sections.append(
             f"#### Before and after: {after_title(after)}\n\n"
             f"{command_block('After', after.doc)}\n\n{table}\n\n"
             "Both runs used the same machine, Docker resources, scripted model, traffic and overrides. "
-            "A change that stays inside the range the baseline's own repetitions spanned is not evidence."
+            "A change counts as evidence only when the runs are separated: every after run lies beyond every before run."
         )
     return "\n\n".join(sections) if sections else None
 

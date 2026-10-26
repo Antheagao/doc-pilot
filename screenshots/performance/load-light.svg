@@ -1,14 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
 <title id="title">Load test results</title>
-<desc id="desc">Baseline documents per second: 1 workers 0.74, 2 workers 1.38, 4 workers 2.25, 8 workers 2.61. Baseline /search p95: 2 users 80.3 ms, 4 users 353 ms, 8 users 492 ms, 16 users 1,114 ms.</desc>
+<desc id="desc">Baseline documents per second: 1 workers 0.74, 2 workers 1.38, 4 workers 2.25, 8 workers 2.61. After (query-extractions) documents per second: 1 workers 0.74, 2 workers 1.38, 4 workers 2.26, 8 workers 2.66. Baseline /search p95: 2 users 80.3 ms, 4 users 353 ms, 8 users 492 ms, 16 users 1,114 ms. After (query-extractions) /search p95: 2 users 83.5 ms, 4 users 108 ms, 8 users 159 ms, 16 users 447 ms, 32 users 1,267 ms.</desc>
 <rect x="0.5" y="0.5" width="959" height="419" rx="12" fill="#ffffff" stroke="#e4e4e7"/>
 <text x="64.0" y="28.0" fill="#18181b" font-size="16" font-weight="600" text-anchor="start">Load test: worker scaling and read latency</text>
 <text x="64.0" y="46.0" fill="#52525b" font-size="12" font-weight="400" text-anchor="start">Apple M1, Docker with 8 CPUs, scripted model</text>
 <line x1="64.0" y1="60.0" x2="86.0" y2="60.0" stroke="#2a78d6" stroke-width="2"/>
 <circle cx="75.0" cy="60.0" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
 <text x="94.0" y="64.0" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Baseline</text>
-<line x1="178.0" y1="60.0" x2="200.0" y2="60.0" stroke="#52525b" stroke-width="2" stroke-dasharray="6 4"/>
-<text x="208.0" y="64.0" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Ideal linear scaling</text>
+<line x1="178.0" y1="60.0" x2="200.0" y2="60.0" stroke="#eb6834" stroke-width="2"/>
+<rect x="184.5" y="55.5" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<text x="208.0" y="64.0" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">After (query-extractions)</text>
+<line x1="411.0" y1="60.0" x2="433.0" y2="60.0" stroke="#52525b" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="441.0" y="64.0" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Ideal linear scaling</text>
 <text x="64.0" y="96.0" fill="#18181b" font-size="14" font-weight="600" text-anchor="start">Throughput vs worker containers</text>
 <text x="64.0" y="114.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="start">replay profile, latency scale 0.1</text>
 <line x1="64.0" y1="336.0" x2="384.0" y2="336.0" stroke="#e4e4e7" stroke-width="1"/>
@@ -44,8 +47,25 @@
 <circle cx="144.0" cy="287.3" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
 <circle cx="224.0" cy="256.5" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
 <circle cx="384.0" cy="243.8" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<line x1="104.0" y1="309.9" x2="104.0" y2="310.0" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="100.0" y1="309.9" x2="108.0" y2="309.9" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="100.0" y1="310.0" x2="108.0" y2="310.0" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="144.0" y1="286.5" x2="144.0" y2="287.6" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="140.0" y1="286.5" x2="148.0" y2="286.5" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="140.0" y1="287.6" x2="148.0" y2="287.6" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="224.0" y1="255.4" x2="224.0" y2="269.3" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="220.0" y1="255.4" x2="228.0" y2="255.4" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="220.0" y1="269.3" x2="228.0" y2="269.3" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="384.0" y1="242.0" x2="384.0" y2="242.2" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="380.0" y1="242.0" x2="388.0" y2="242.0" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="380.0" y1="242.2" x2="388.0" y2="242.2" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<polyline points="104.0,309.9 144.0,287.2 224.0,256.2 384.0,242.0" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="99.5" y="305.4" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<rect x="139.5" y="282.7" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<rect x="219.5" y="251.7" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<rect x="379.5" y="237.5" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
 <text x="394.0" y="131.4" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Ideal</text>
-<text x="394.0" y="247.8" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Baseline</text>
+<text x="394.0" y="246.0" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">After</text>
 <text x="534.0" y="96.0" fill="#18181b" font-size="14" font-weight="600" text-anchor="start">/search p95 latency vs concurrent users</text>
 <text x="534.0" y="114.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="start">replay profile, latency scale 0.1</text>
 <line x1="534.0" y1="336.0" x2="854.0" y2="336.0" stroke="#e4e4e7" stroke-width="1"/>
@@ -58,9 +78,10 @@
 <text x="526.0" y="128.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="end">10,000</text>
 <line x1="534.0" y1="336.0" x2="854.0" y2="336.0" stroke="#52525b" stroke-width="1"/>
 <text x="534.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">2</text>
-<text x="640.7" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">4</text>
-<text x="747.3" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">8</text>
-<text x="854.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">16</text>
+<text x="614.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">4</text>
+<text x="694.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">8</text>
+<text x="774.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">16</text>
+<text x="854.0" y="354.0" fill="#52525b" font-size="11" font-weight="400" text-anchor="middle">32</text>
 <text x="694.0" y="376.0" fill="#52525b" font-size="12" font-weight="400" text-anchor="middle">Concurrent users (closed loop)</text>
 <text transform="translate(486.0 230.0) rotate(-90)" fill="#52525b" font-size="12" text-anchor="middle">p95 latency (ms, log scale)</text>
 <line x1="534.0" y1="194.7" x2="854.0" y2="194.7" stroke="#52525b" stroke-width="1.5" stroke-dasharray="6 4"/>
@@ -68,19 +89,40 @@
 <line x1="534.0" y1="266.2" x2="534.0" y2="273.7" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
 <line x1="530.0" y1="266.2" x2="538.0" y2="266.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
 <line x1="530.0" y1="273.7" x2="538.0" y2="273.7" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="640.7" y1="226.4" x2="640.7" y2="252.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="636.7" y1="226.4" x2="644.7" y2="226.4" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="636.7" y1="252.2" x2="644.7" y2="252.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="747.3" y1="213.9" x2="747.3" y2="216.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="743.3" y1="213.9" x2="751.3" y2="213.9" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="743.3" y1="216.6" x2="751.3" y2="216.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="854.0" y1="191.2" x2="854.0" y2="192.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="850.0" y1="191.2" x2="858.0" y2="191.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<line x1="850.0" y1="192.6" x2="858.0" y2="192.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
-<polyline points="534.0,272.1 640.7,226.6 747.3,216.4 854.0,191.4" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="614.0" y1="226.4" x2="614.0" y2="252.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="610.0" y1="226.4" x2="618.0" y2="226.4" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="610.0" y1="252.2" x2="618.0" y2="252.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="694.0" y1="213.9" x2="694.0" y2="216.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="690.0" y1="213.9" x2="698.0" y2="213.9" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="690.0" y1="216.6" x2="698.0" y2="216.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="774.0" y1="191.2" x2="774.0" y2="192.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="770.0" y1="191.2" x2="778.0" y2="191.2" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="770.0" y1="192.6" x2="778.0" y2="192.6" stroke="#2a78d6" stroke-width="1.5" stroke-opacity="0.7"/>
+<polyline points="534.0,272.1 614.0,226.6 694.0,216.4 774.0,191.4" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="534.0" cy="272.1" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
-<circle cx="640.7" cy="226.6" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
-<circle cx="747.3" cy="216.4" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
-<circle cx="854.0" cy="191.4" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
-<text x="864.0" y="195.4" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">Baseline</text>
+<circle cx="614.0" cy="226.6" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="694.0" cy="216.4" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="774.0" cy="191.4" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<line x1="534.0" y1="264.5" x2="534.0" y2="272.2" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="530.0" y1="264.5" x2="538.0" y2="264.5" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="530.0" y1="272.2" x2="538.0" y2="272.2" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="614.0" y1="260.0" x2="614.0" y2="265.1" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="610.0" y1="260.0" x2="618.0" y2="260.0" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="610.0" y1="265.1" x2="618.0" y2="265.1" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="694.0" y1="249.0" x2="694.0" y2="251.2" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="690.0" y1="249.0" x2="698.0" y2="249.0" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="690.0" y1="251.2" x2="698.0" y2="251.2" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="774.0" y1="219.2" x2="774.0" y2="219.9" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="770.0" y1="219.2" x2="778.0" y2="219.2" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="770.0" y1="219.9" x2="778.0" y2="219.9" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="854.0" y1="186.3" x2="854.0" y2="187.9" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="850.0" y1="186.3" x2="858.0" y2="186.3" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<line x1="850.0" y1="187.9" x2="858.0" y2="187.9" stroke="#eb6834" stroke-width="1.5" stroke-opacity="0.7"/>
+<polyline points="534.0,270.9 614.0,262.9 694.0,251.2 774.0,219.4 854.0,187.4" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="529.5" y="266.4" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<rect x="609.5" y="258.4" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<rect x="689.5" y="246.7" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<rect x="769.5" y="214.9" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<rect x="849.5" y="182.9" width="9" height="9" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<text x="864.0" y="191.4" fill="#18181b" font-size="12" font-weight="400" text-anchor="start">After</text>
 </svg>

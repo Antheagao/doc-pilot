@@ -848,6 +848,36 @@ A document is two jobs, an extract and an index. Throughput is measured between 
 
 A step fails when more than 1% of its reads fail or the `/search` p95 is over 1,000 ms. The knee, the last step that met both limits, was 8 users over 3 runs. Each run's own knee and the step after it, then the median across runs. Tenants: `load-large` 2,000 documents and 6,400 chunks, `load-medium` 300 documents and 960 chunks, `load-small` 30 documents and 92 chunks.
 
+#### Before and after: `query-extractions`
+
+After (commit `fc9637f`, run `20261026T060421Z`):
+
+```
+python scripts/load/load.py run --profile zero --scale 1 --label after-query-extractions --out scripts/load/results
+```
+
+| Measure | Before (median, range) | After (median, range) | Change | Runs separated |
+| --- | --- | --- | --- | --- |
+| Documents/s at 1 worker | 6.01 (5.82 to 6.03) | 6.03 (5.90 to 6.06) | +0.4% | no |
+| Documents/s at 2 workers | 4.08 (3.99 to 4.16) | 4.14 (4.07 to 4.17) | +1.4% | no |
+| Documents/s at 4 workers | 3.49 (3.45 to 3.54) | 3.51 (3.49 to 3.53) | +0.5% | no |
+| Documents/s at 8 workers | 3.31 (3.13 to 3.34) | 3.34 (3.30 to 3.34) | +0.7% | no |
+| Uploads/s at 1 user | 157 (153 to 167) | 154 (154 to 172) | -1.6% | no |
+| Uploads/s at 2 users | 219 (210 to 233) | 227 (213 to 237) | +3.8% | no |
+| Uploads/s at 4 users | 222 (217 to 244) | 246 (228 to 249) | +10.9% | no |
+| Uploads/s at 8 users | 158 (146 to 169) | 193 (157 to 198) | +22.1% | no |
+| Knee (users) | 8 | 16 | +100.0% | yes |
+| GET /search p95 (ms) at 8 users | 880 (703 to 922) | 357 (350 to 363) | -59.5% | yes |
+| POST /ask p95 (ms) at 8 users | 1,085 (904 to 1,103) | 428 (412 to 430) | -60.6% | yes |
+| POST /ask/stream, answer p95 (ms) at 8 users | 1,107 (1,002 to 1,154) | 484 (469 to 504) | -56.3% | yes |
+| GET /documents p95 (ms) at 8 users | 467 (416 to 564) | 157 (144 to 172) | -66.4% | yes |
+| GET /search p95 (ms) at 16 users | 1,473 (1,383 to 1,637) | 748 (698 to 880) | -49.2% | yes |
+| POST /ask p95 (ms) at 16 users | 1,803 (1,604 to 1,998) | 923 (912 to 1,130) | -48.8% | yes |
+| POST /ask/stream, answer p95 (ms) at 16 users | 1,989 (1,806 to 2,030) | 1,087 (1,006 to 1,178) | -45.4% | yes |
+| GET /documents p95 (ms) at 16 users | 766 (636 to 879) | 389 (378 to 407) | -49.3% | yes |
+
+Both runs used the same machine, Docker resources, scripted model, traffic and overrides. A change counts as evidence only when the runs are separated: every after run lies beyond every before run.
+
 ### Scripted model `replay`, latency scale 0.1
 
 **Scripted model.** Profile `replay` at latency scale 0.1: scripted model calls sleep for the latency the committed extraction runs recorded (a proxy, multiplied by the latency scale) and for the assumed agent step and judge durations. Agent step 3000 ms and judge call 4000 ms are assumptions.
@@ -898,6 +928,36 @@ A document is two jobs, an extract and an index. Throughput is measured between 
 | One step past | 16 | GET /documents | 111 | 866 (634 to 932) | 970 | 0.83 | 0.0% | 3 |
 
 A step fails when more than 1% of its reads fail or the `/search` p95 is over 1,000 ms. The knee, the last step that met both limits, was 8 users over 3 runs. Each run's own knee and the step after it, then the median across runs. Tenants: `load-large` 2,000 documents and 6,400 chunks, `load-medium` 300 documents and 960 chunks, `load-small` 30 documents and 92 chunks.
+
+#### Before and after: `query-extractions`
+
+After (commit `fc9637f`, run `20261026T071842Z`):
+
+```
+python scripts/load/load.py run --profile replay --scale 0.1 --label after-query-extractions --out scripts/load/results
+```
+
+| Measure | Before (median, range) | After (median, range) | Change | Runs separated |
+| --- | --- | --- | --- | --- |
+| Documents/s at 1 worker | 0.74 | 0.74 (0.73 to 0.74) | +0.2% | no |
+| Documents/s at 2 workers | 1.38 (1.37 to 1.38) | 1.38 (1.37 to 1.40) | +0.2% | no |
+| Documents/s at 4 workers | 2.25 (2.23 to 2.27) | 2.26 (1.89 to 2.28) | +0.4% | no |
+| Documents/s at 8 workers | 2.61 (2.60 to 2.67) | 2.66 (2.65 to 2.66) | +2.0% | no |
+| Uploads/s at 1 user | 146 (145 to 155) | 152 (148 to 160) | +3.5% | no |
+| Uploads/s at 2 users | 211 (210 to 215) | 207 (207 to 238) | -1.9% | no |
+| Uploads/s at 4 users | 220 (212 to 226) | 223 (216 to 246) | +1.3% | no |
+| Uploads/s at 8 users | 183 (180 to 183) | 184 (182 to 192) | +0.4% | no |
+| Knee (users) | 8 | 16 | +100.0% | yes |
+| GET /search p95 (ms) at 8 users | 492 (490 to 534) | 159 (159 to 170) | -67.7% | yes |
+| POST /ask p95 (ms) at 8 users | 1,828 (1,825 to 1,987) | 1,143 (1,136 to 1,150) | -37.5% | yes |
+| POST /ask/stream, answer p95 (ms) at 8 users | 1,964 (1,933 to 2,098) | 1,162 (1,150 to 1,174) | -40.8% | yes |
+| GET /documents p95 (ms) at 8 users | 330 (47.5 to 372) | 45.2 (40.2 to 72.2) | -86.3% | no |
+| GET /search p95 (ms) at 16 users | 1,114 (1,071 to 1,118) | 447 (440 to 449) | -59.9% | yes |
+| POST /ask p95 (ms) at 16 users | 2,552 (2,519 to 2,613) | 1,474 (1,465 to 1,482) | -42.3% | yes |
+| POST /ask/stream, answer p95 (ms) at 16 users | 2,745 (2,740 to 2,786) | 1,552 (1,523 to 1,575) | -43.5% | yes |
+| GET /documents p95 (ms) at 16 users | 866 (634 to 932) | 232 (222 to 257) | -73.2% | yes |
+
+Both runs used the same machine, Docker resources, scripted model, traffic and overrides. A change counts as evidence only when the runs are separated: every after run lies beyond every before run.
 
 <!-- PERF_TABLE:END -->
 

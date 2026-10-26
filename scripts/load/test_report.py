@@ -219,7 +219,7 @@ LATENCY_TABLE = """| Step | Users | Endpoint | p50 (ms) | p95 (ms, range) | p99 
 | One step past | 16 | POST /ask/stream, answer | 967 | 2,900 (2,800 to 3,000) | 4,350 | 8.00 | 0.0% | 2 |
 | One step past | 16 | GET /documents | 121 | 362 (350 to 375) | 544 | 8.00 | 0.0% | 2 |"""
 
-COMPARISON_TABLE = """| Measure | Before (median, range) | After (median, range) | Change | After outside the before range |
+COMPARISON_TABLE = """| Measure | Before (median, range) | After (median, range) | Change | Runs separated |
 | --- | --- | --- | --- | --- |
 | Documents/s at 1 worker | 6.10 (6.00 to 6.20) | 6.20 (6.10 to 6.30) | +1.6% | no |
 | Documents/s at 2 workers | 11.5 (11.0 to 12.0) | 20.5 (20.0 to 21.0) | +78.3% | yes |
@@ -234,6 +234,26 @@ COMPARISON_TABLE = """| Measure | Before (median, range) | After (median, range)
 | POST /ask p95 (ms) at 16 users | 2,900 (2,800 to 3,000) | 2,900 (2,800 to 3,000) | +0.0% | no |
 | POST /ask/stream, answer p95 (ms) at 16 users | 2,900 (2,800 to 3,000) | 2,900 (2,800 to 3,000) | +0.0% | no |
 | GET /documents p95 (ms) at 16 users | 362 (350 to 375) | 362 (350 to 375) | +0.0% | no |"""
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "separated"),
+    [
+        ((6.0, 6.2), (6.3, 6.4), True),
+        ((6.0, 6.2), (5.7, 5.9), True),
+        # The median 6.25 is past the before range, but one after run is not.
+        ((6.0, 6.2), (6.1, 6.3), False),
+        ((6.0, 6.2), (6.2, 6.3), False),
+        ((0.74, 0.74), (0.73, 0.74), False),
+    ],
+)
+def test_runs_are_separated_only_when_the_ranges_do_not_touch(
+    before: tuple[float, float], after: tuple[float, float], separated: bool
+) -> None:
+    def spread(low: float, high: float) -> dict:
+        return {"min": low, "max": high, "median": (low + high) / 2}
+
+    assert report.runs_separated(spread(*before), spread(*after)) is separated
 
 
 def render_fixture(directory: Path) -> report.Rendered:
