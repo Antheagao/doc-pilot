@@ -53,7 +53,8 @@ METHODOLOGY = (
     "measurement at a fixed arrival rate, and a closed loop slows down when the server does, "
     "which hides the queueing an open loop would show. Worker throughput is jobs "
     "(extract and index, two per document) completed per second between the 10% and 90% marks "
-    "of the backlog."
+    "of the backlog. The database is analyzed after each bulk load and before any measured "
+    "window, so every run is measured on fresh planner statistics."
 )
 
 # (label, permille). Rank = ceil(permille * n / 1000).

@@ -246,6 +246,9 @@ class FakeDriver:
         if sql == phases.COMPLETIONS_SQL:
             count = int(2 * self.backlog * self.completed_fraction)
             return "\n".join(str(3000.0 + 0.1 * i) for i in range(count)) + "\n"
+        if sql == phases.ANALYZE_SQL:
+            self.events.append(("analyze",))
+            return "ANALYZE\n"
         if sql == phases.TENANT_SIZES_SQL:
             return "load-large|25|100\nload-medium|25|100\nload-small|25|100\n"
         raise AssertionError(f"unexpected query: {sql}")
@@ -327,6 +330,8 @@ def test_a_scaling_phase_uploads_a_backlog_then_starts_the_workers(driver: FakeD
     assert driver.events == [
         ("prepare", 0, False),
         ("locust", "ingest", 2, 10, "scaling-w2-r1-backlog"),
+        # Fresh statistics for the backlog before the measured drain starts.
+        ("analyze",),
         ("telemetry-start",),
         ("scale", 2),
         ("telemetry-stop",),
@@ -523,6 +528,27 @@ def test_a_ramp_without_populate_starts_the_read_workers(driver: FakeDriver) -> 
     phases.run_ramp(driver, small_plan(ramp_users=(2,), read_workers=2), 1, [])
     assert driver.events[0] == ("prepare", 2, False)
     assert ("scale", 2) in driver.events
+
+
+def test_the_ramp_analyzes_the_database_after_populating_and_before_any_step(driver: FakeDriver) -> None:
+    phases.run_ramp(driver, small_plan(ramp_users=(2, 4), tenant_documents=(("load-large", 3),)), 1, [])
+    names = [event[0] for event in driver.events]
+    assert names.count("analyze") == 1
+    analyzed = names.index("analyze")
+    populate = [i for i, e in enumerate(driver.events) if e[0] == "locust" and e[1] == "ingest"]
+    reads = [i for i, e in enumerate(driver.events) if e[0] == "locust" and e[1] == "read"]
+    assert populate and reads
+    assert max(populate) < analyzed < min(reads)
+
+
+def test_the_method_says_the_database_is_analyzed_before_measuring() -> None:
+    assert "analyzed after each bulk load" in phases_artifact_methodology()
+
+
+def phases_artifact_methodology() -> str:
+    import artifact
+
+    return artifact.METHODOLOGY
 
 
 def test_the_ramp_records_the_tenant_sizes(driver: FakeDriver) -> None:

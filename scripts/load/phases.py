@@ -374,6 +374,11 @@ COMPLETIONS_SQL = (
     f"{HARNESS_TAG} select extract(epoch from finished_at) from jobs "
     "where state = 'done' and kind in ('extract', 'index') order by finished_at, id"
 )
+# Fresh planner statistics after a bulk load: thousands of rows arrive in
+# seconds, faster than autovacuum's analyze notices them (up to a minute), and a
+# query planned on stale estimates can be ten times slower. Run as the owner
+# before any measured window, so every run is measured on the same plans.
+ANALYZE_SQL = f"{HARNESS_TAG} analyze"
 TENANT_SIZES_SQL = (
     f"{HARNESS_TAG} select o.slug, "
     "(select count(*) from documents d where d.organization_id = o.id), "
@@ -551,6 +556,7 @@ def run_scaling(driver: Driver, plan: Plan, workers: int, repetition: int, sampl
         driver, tag, plan.backlog_users, plan.backlog_documents, weights_json(plan.user_weights), sample_files
     )
     backlog_endpoints = backlog.pop("endpoints")
+    driver.query(ANALYZE_SQL)
     expected = int(driver.query(EXPECTED_JOBS_SQL).strip())
     already_done = int(driver.query(DONE_JOBS_SQL).strip())
     with driver.telemetry() as telemetry:
@@ -625,6 +631,7 @@ def run_ramp(driver: Driver, plan: Plan, repetition: int, sample_files: list[Pat
     setup = populate_tenants(driver, plan, repetition, sample_files)
     driver.scale_workers(plan.read_workers)
     wait_until_drained(driver, plan.drain_timeout_seconds)
+    driver.query(ANALYZE_SQL)
     sizes = tenant_sizes(driver)
     records: list[dict] = []
 
