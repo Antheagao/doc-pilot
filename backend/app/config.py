@@ -165,6 +165,13 @@ class Settings(BaseSettings):
     # A local directory holding an already-downloaded ONNX export of
     # embedding_model, bypassing the download entirely (air-gapped hosts).
     embedding_model_path: str | None = None
+    # Intra-op threads of this process's ONNX session (FastEmbedEmbedder), or
+    # None for onnxruntime's default of one per core. Size it as
+    # max(1, cores // embedding processes), leaving a lone process on the
+    # default: more threads than cores in total collapse throughput, and the
+    # measurement is in scripts/load/phases.py embedding_threads. Compose's
+    # worker reads WORKER_EMBEDDING_THREADS; an empty value means None.
+    embedding_threads: int | None = Field(default=None, ge=1)
     # Chunking (app/retrieval/chunking.py). 0 means one chunk per page.
     # 200/80 is what the retrieval eval measured best on this corpus
     # (README "Retrieval eval"): whole-page chunks blur a 16-item receipt
@@ -287,6 +294,13 @@ class Settings(BaseSettings):
         if any("*" in origin for origin in value):
             raise ValueError("CORS_ORIGINS must list explicit origins, not a wildcard")
         return value
+
+    @field_validator("embedding_threads", mode="before")
+    @classmethod
+    def _blank_embedding_threads_is_unset(cls, value: object) -> object:
+        # Compose passes `${WORKER_EMBEDDING_THREADS:-}`, so an unset variable
+        # arrives as an empty string, not as an absent one.
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator("extraction_prompt_version")
     @classmethod

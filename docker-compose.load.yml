@@ -126,6 +126,9 @@ services:
       SCRIPTED_AGENT_STEP_MS: ${SCRIPTED_AGENT_STEP_MS:-3000}
       SCRIPTED_JUDGE_MS: ${SCRIPTED_JUDGE_MS:-4000}
       EMBEDDING_BACKEND: ${LOAD_EMBEDDING_BACKEND:-fastembed}
+      # Set by load.py for every worker count it scales to (blank for one
+      # worker): see the base file.
+      EMBEDDING_THREADS: ${WORKER_EMBEDDING_THREADS:-}
       ANTHROPIC_API_KEY: ""
       # A lease, so `up --scale worker=N` is safe (see the base file): longer
       # than the slowest job, because nothing renews it while a job runs.

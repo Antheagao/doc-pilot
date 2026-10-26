@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import load
+import phases
 import pytest
 from test_artifact import good_artifact
 
@@ -65,6 +66,7 @@ def probe_output(**changes: object) -> str:
         "has_key": False,
         "database": "docpilot_load",
         "role": "docpilot_runtime",
+        "embedding_threads": None,
     }
     return json.dumps({**report, **changes}) + "\n"
 
@@ -132,7 +134,15 @@ def stack(docker: FakeDocker) -> FakeDocker:
     docker.on(has("exec", "doc-pilot-load-api-1"), probe_output())
     docker.on(has("exec", "doc-pilot-load-worker-1"), probe_output())
     docker.on(has("volume", "ls"), "")
+    docker.on(has("info"), json.dumps({"ServerVersion": "29.4.0", "NCPU": 8, "MemTotal": 8321994752}))
     return docker
+
+
+@pytest.fixture(autouse=True)
+def _worker_embedding_threads_variable_is_restored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The driver hands the thread count to compose through the process
+    environment; whatever a test leaves there goes with it."""
+    monkeypatch.setenv(load.WORKER_EMBEDDING_THREADS, "")
 
 
 @pytest.fixture
@@ -369,6 +379,22 @@ def test_a_clean_probe_has_no_problems() -> None:
     probe = load.parse_probe("c", probe_output())
     assert probe == load.Probe("c", "scripted", False, "docpilot_load", "docpilot_runtime")
     assert load.probe_problems(probe) == []
+
+
+def test_the_probe_reads_the_resolved_embedding_threads() -> None:
+    assert load.parse_probe("c", probe_output(embedding_threads=4)).embedding_threads == 4
+    assert load.parse_probe("c", probe_output(embedding_threads=None)).embedding_threads is None
+
+
+def test_a_worker_must_have_resolved_the_threads_it_was_started_with() -> None:
+    probe = load.parse_probe("w", probe_output(embedding_threads=8))
+    assert load.probe_problems(probe, 8) == []
+    assert load.probe_problems(probe) == []  # nothing expected: nothing checked
+    assert load.probe_problems(probe, 4) == ["w: EMBEDDING_THREADS resolved to 8, not 4"]
+    default = load.parse_probe("w", probe_output())
+    assert load.probe_problems(default, None) == []  # the default is a value too
+    assert load.probe_problems(default, 4) == ["w: EMBEDDING_THREADS resolved to None, not 4"]
+    assert load.probe_problems(probe, None) == ["w: EMBEDDING_THREADS resolved to 8, not None"]
 
 
 def test_the_probe_reads_the_last_line_of_the_output() -> None:
@@ -1168,31 +1194,205 @@ def test_document_facts_parse() -> None:
 # --- the driver against a fake docker -------------------------------------------------------------
 
 
+WORKER = "doc-pilot-load-worker-"
+
+
+class FakeWorkers:
+    """The worker service as compose plays it. `up --scale worker=N
+    --no-recreate` keeps the containers that exist, starts new ones with the
+    EMBEDDING_THREADS in the environment at that moment, and removes the extras,
+    so each container keeps the value it started with. `running` holds the value
+    ("" for unset) each already running container started with; `capacity` caps
+    how many start; `claimed` is the number of jobs a worker has claimed; `probe`
+    changes what every worker's probe reports."""
+
+    def __init__(
+        self,
+        docker: FakeDocker,
+        *,
+        running: tuple[str, ...] = (),
+        capacity: int | None = None,
+        claimed: int = 0,
+        **probe: object,
+    ) -> None:
+        self.started_with = list(running)
+        self.capacity = capacity
+        self.claimed = claimed
+        self.probe = probe
+        self.scaled: list[int] = []
+        docker.handlers[:0] = [
+            (has("up"), self._up),
+            (has("ps"), self._ps),
+            (lambda cmd: cmd[:2] == ["docker", "exec"] and cmd[2].startswith(WORKER), self._probe),
+            (has("psql", phases.CLAIMED_JOBS_SQL), lambda cmd: f"{self.claimed}\n"),
+        ]
+
+    def _up(self, cmd: list[str]) -> str:
+        count = int(next(word for word in cmd if word.startswith("worker=")).partition("=")[2])
+        self.scaled.append(count)
+        count = count if self.capacity is None else min(count, self.capacity)
+        del self.started_with[count:]
+        while len(self.started_with) < count:
+            self.started_with.append(os.environ.get(load.WORKER_EMBEDDING_THREADS, ""))
+        return ""
+
+    def _ps(self, cmd: list[str]) -> str:
+        workers = [
+            {"Service": "worker", "Name": f"{WORKER}{n}", "State": "running"}
+            for n in range(1, len(self.started_with) + 1)
+        ]
+        return ps_output(RUNNING[0], RUNNING[2], *workers)
+
+    def _probe(self, cmd: list[str]) -> str:
+        started = self.started_with[int(cmd[2].removeprefix(WORKER)) - 1]
+        return probe_output(**{"embedding_threads": int(started) if started else None, **self.probe})
+
+
 def test_scaling_runs_up_with_the_scale_flag_then_checks_the_stack_again(stack: FakeDocker, tmp_path: Path) -> None:
-    stack.on(has("up"), "")
+    FakeWorkers(stack)
     load.StackDriver(tmp_path).scale_workers(1)
     [up] = stack.ran("up")
     assert up[-8:] == ["up", "-d", "--no-build", "--no-recreate", "--no-deps", "--scale", "worker=1", "worker"]
     assert up[up.index("-p") + 1] == "doc-pilot-load"
-    [probe] = stack.ran("exec", "doc-pilot-load-worker-1")
+    [probe] = stack.ran("exec", f"{WORKER}1")
     assert stack.calls.index(up) < stack.calls.index(probe)  # the scale step first, then the probes
 
 
+@pytest.mark.parametrize(("workers", "threads"), [(1, None), (2, 4), (3, 2), (4, 2), (8, 1), (16, 1)])
+def test_each_worker_starts_with_the_docker_cpus_divided_by_the_workers_and_a_lone_one_with_the_default(
+    stack: FakeDocker, tmp_path: Path, workers: int, threads: int | None
+) -> None:
+    fake = FakeWorkers(stack)  # 8 CPUs, from `docker info`
+    driver = load.StackDriver(tmp_path)
+    driver.scale_workers(workers)
+    blank = "" if threads is None else str(threads)  # the default is passed as an empty variable
+    assert fake.started_with == [blank] * workers
+    assert os.environ[load.WORKER_EMBEDDING_THREADS] == blank
+    assert driver.embedding_threads == threads
+    assert fake.scaled == [workers]  # started from none: nothing to restart
+
+
+def test_the_docker_cpu_count_is_read_once(stack: FakeDocker, tmp_path: Path) -> None:
+    FakeWorkers(stack)
+    driver = load.StackDriver(tmp_path)
+    driver.scale_workers(1)
+    driver.scale_workers(0)
+    assert len(stack.ran("info")) == 1
+
+
+@pytest.mark.parametrize("ncpu", [0, None, "8"])
+def test_a_docker_cpu_count_that_is_not_a_positive_number_is_an_error(
+    stack: FakeDocker, tmp_path: Path, ncpu: object
+) -> None:
+    FakeWorkers(stack)
+    stack.handlers.insert(0, (has("info"), json.dumps({"ServerVersion": "29.4.0", "NCPU": ncpu})))
+    with pytest.raises(CliError, match="Docker reported"):
+        load.StackDriver(tmp_path).scale_workers(2)
+    assert not stack.ran("up")
+
+
+def test_docker_that_cannot_say_its_cpus_is_an_error(stack: FakeDocker, tmp_path: Path) -> None:
+    FakeWorkers(stack)
+    stack.handlers.insert(0, (has("info"), (1, "", "Cannot connect to the Docker daemon")))
+    with pytest.raises(CliError, match="could not read Docker's CPU count"):
+        load.StackDriver(tmp_path).scale_workers(2)
+
+
+def test_workers_running_with_another_thread_count_are_stopped_before_the_new_ones_start(
+    stack: FakeDocker, tmp_path: Path
+) -> None:
+    fake = FakeWorkers(stack)
+    driver = load.StackDriver(tmp_path)
+    driver.scale_workers(1)
+    driver.scale_workers(4)
+    assert fake.scaled == [1, 0, 4]  # --no-recreate alone would have kept the first one on the default
+    assert fake.started_with == ["2"] * 4
+    assert stack.calls.index(stack.ran("psql", phases.CLAIMED_JOBS_SQL)[0]) < stack.calls.index(stack.ran("worker=0")[0])
+
+
+def test_going_back_to_the_default_restarts_the_workers_too(stack: FakeDocker, tmp_path: Path) -> None:
+    """The default is a value: two workers on 4 threads cannot stay when the
+    next step is one worker on none."""
+    fake = FakeWorkers(stack)
+    driver = load.StackDriver(tmp_path)
+    driver.scale_workers(2)
+    driver.scale_workers(1)
+    assert fake.scaled == [2, 0, 1] and fake.started_with == [""]
+    assert os.environ[load.WORKER_EMBEDDING_THREADS] == ""
+    driver.scale_workers(1)
+    assert fake.scaled == [2, 0, 1, 1]  # the same value again: nothing to restart
+    assert len(stack.ran("psql", phases.CLAIMED_JOBS_SQL)) == 1
+
+
+def test_workers_with_the_same_thread_count_are_only_added_to(stack: FakeDocker, tmp_path: Path) -> None:
+    fake = FakeWorkers(stack)
+    driver = load.StackDriver(tmp_path)
+    driver.scale_workers(8)
+    driver.scale_workers(16)  # 8 CPUs for 8 workers and for 16: one thread either way
+    assert fake.scaled == [8, 16] and fake.started_with == ["1"] * 16
+    assert not stack.ran("psql")
+
+
+def test_scaling_down_to_none_stops_them_and_forgets_the_value(stack: FakeDocker, tmp_path: Path) -> None:
+    fake = FakeWorkers(stack)
+    driver = load.StackDriver(tmp_path)
+    driver.scale_workers(2)
+    driver.scale_workers(0)
+    assert fake.scaled == [2, 0] and fake.started_with == []
+    assert driver.embedding_threads is None
+    driver.scale_workers(2)  # a stack with none running has nothing to restart
+    assert fake.scaled == [2, 0, 2]
+
+
+def test_running_workers_of_an_unknown_start_are_restarted(stack: FakeDocker, tmp_path: Path) -> None:
+    """A stack started by hand (or by an earlier driver) says nothing about the
+    value its workers have, so they are not trusted to have the right one."""
+    fake = FakeWorkers(stack, running=("",))
+    load.StackDriver(tmp_path).scale_workers(1)
+    assert fake.scaled == [0, 1] and fake.started_with == [""]  # not trusted, even when the new value is the default
+
+
+def test_workers_holding_a_claimed_job_are_never_restarted(stack: FakeDocker, tmp_path: Path) -> None:
+    fake = FakeWorkers(stack)
+    driver = load.StackDriver(tmp_path)
+    driver.scale_workers(1)
+    fake.claimed = 2
+    with pytest.raises(CliError, match="2 job.s. are claimed.*4 embedding thread"):
+        driver.scale_workers(2)
+    assert fake.scaled == [1] and fake.started_with == [""]
+
+
+def test_a_worker_that_resolved_another_thread_count_fails_the_scale_step(stack: FakeDocker, tmp_path: Path) -> None:
+    """The container ignored the value (a compose file that does not pass it
+    on, say): it would be measured at onnxruntime's default."""
+    FakeWorkers(stack, embedding_threads=None)
+    with pytest.raises(CliError, match=f"checks after scaling.*{WORKER}1: EMBEDDING_THREADS resolved to None, not 4"):
+        load.StackDriver(tmp_path).scale_workers(2)
+
+
+def test_every_worker_is_read_back_not_only_the_first(stack: FakeDocker, tmp_path: Path) -> None:
+    fake = FakeWorkers(stack)
+    stack.handlers.insert(0, (has("exec", f"{WORKER}2"), probe_output(embedding_threads=8)))
+    with pytest.raises(CliError, match=f"{WORKER}2: EMBEDDING_THREADS resolved to 8, not 4"):
+        load.StackDriver(tmp_path).scale_workers(2)
+    assert fake.started_with == ["4", "4"]
+
+
 def test_scaling_to_a_number_that_is_not_running_is_an_error(stack: FakeDocker, tmp_path: Path) -> None:
-    stack.on(has("up"), "")
+    FakeWorkers(stack, capacity=1)
     with pytest.raises(CliError, match="asked for 4 worker.s., 1 running"):
         load.StackDriver(tmp_path).scale_workers(4)
 
 
 def test_scaling_stops_when_a_new_worker_fails_the_no_spend_check(stack: FakeDocker, tmp_path: Path) -> None:
-    stack.on(has("up"), "")
-    stack.handlers.insert(0, (has("exec", "doc-pilot-load-worker-1"), probe_output(has_key=True)))
-    with pytest.raises(CliError, match="failed its no-spend check after scaling.*holds an Anthropic API key"):
+    FakeWorkers(stack, has_key=True)
+    with pytest.raises(CliError, match="failed its checks after scaling.*holds an Anthropic API key"):
         load.StackDriver(tmp_path).scale_workers(1)
 
 
 def test_a_failed_scale_command_is_an_error(stack: FakeDocker, tmp_path: Path) -> None:
-    stack.on(has("up"), (1, "", "boom"))
+    FakeWorkers(stack)
+    stack.handlers.insert(0, (has("up"), (1, "", "boom")))
     with pytest.raises(CliError, match="could not scale the workers to 8"):
         load.StackDriver(tmp_path).scale_workers(8)
 
@@ -1262,6 +1462,71 @@ def test_a_stack_that_does_not_pass_its_preflight_is_an_error(monkeypatch: pytes
     monkeypatch.setattr(load, "preflight", lambda args: 1)
     with pytest.raises(CliError, match="did not pass its seed and preflight"):
         load.StackDriver(tmp_path, telemetry=NoSamplers()).prepare(0, fresh=True)
+
+
+def fresh_stack_with_workers(
+    stack: FakeDocker, monkeypatch: pytest.MonkeyPatch, fake: FakeWorkers, tmp_path: Path, *, started_with: str | None = None
+) -> tuple[load.StackDriver, list[str]]:
+    """A driver whose reset, seed and clock are stubbed, whose `bring_up`
+    starts the workers the way compose would (with what the environment says, or
+    with `started_with`), and whose preflight is the real one."""
+    seen: list[str] = []
+
+    def bring_up(workers: int, loadgen: bool = False) -> int:
+        seen.append(os.environ[load.WORKER_EMBEDDING_THREADS])
+        fake.started_with[:] = [seen[-1] if started_with is None else started_with] * workers
+        return 0
+
+    psql_answers(stack)
+    monkeypatch.setattr(load, "stack_reset", lambda args: 0)
+    monkeypatch.setattr(load, "bring_up", bring_up)
+    monkeypatch.setattr(load, "seed", lambda args: 0)
+    monkeypatch.setattr(load, "measure_clock_offset", lambda: 0.0)
+    return load.StackDriver(tmp_path, telemetry=NoSamplers()), seen
+
+
+def test_a_fresh_stack_starts_its_workers_with_the_threads_and_the_preflight_reads_them_back_once(
+    stack: FakeDocker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = FakeWorkers(stack)
+    driver, seen = fresh_stack_with_workers(stack, monkeypatch, fake, tmp_path)
+    driver.prepare(4, fresh=True)
+    assert seen == ["2"] and fake.started_with == ["2"] * 4
+    assert driver.embedding_threads == 2
+    for number in range(1, 5):
+        assert len(stack.ran("exec", f"{WORKER}{number}")) == 1  # one probe each, not one for the preflight and one more
+
+
+def test_a_fresh_single_worker_starts_on_the_default_and_is_read_back_as_such(
+    stack: FakeDocker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = FakeWorkers(stack)
+    driver, seen = fresh_stack_with_workers(stack, monkeypatch, fake, tmp_path)
+    driver.prepare(1, fresh=True)
+    assert seen == [""] and driver.embedding_threads is None
+    fake.probe = {"embedding_threads": 8}  # a worker that resolved every core explicitly is not the default
+    with pytest.raises(CliError, match="did not pass its seed and preflight"):
+        driver.prepare(1, fresh=True)
+
+
+def test_a_fresh_stack_whose_workers_did_not_get_the_threads_is_an_error(
+    stack: FakeDocker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    fake = FakeWorkers(stack)
+    driver, _seen = fresh_stack_with_workers(stack, monkeypatch, fake, tmp_path, started_with="8")
+    with pytest.raises(CliError, match="did not pass its seed and preflight"):
+        driver.prepare(4, fresh=True)
+    assert f"{WORKER}1: EMBEDDING_THREADS resolved to 8, not 2" in capsys.readouterr().err
+
+
+def test_a_fresh_stack_with_no_workers_passes_no_threads(
+    stack: FakeDocker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = FakeWorkers(stack)
+    driver, seen = fresh_stack_with_workers(stack, monkeypatch, fake, tmp_path)
+    driver.prepare(0, fresh=True)
+    assert seen == [""] and driver.embedding_threads is None
+    assert not stack.ran("info")  # there is nothing to size
 
 
 def locust_spec(**changes: object):

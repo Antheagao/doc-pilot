@@ -108,11 +108,14 @@ def make_artifact(
     ingest: dict[int, list[float]] | None = None,
     ramp: list[dict[int, float]] | None = None,
     dirty: bool = False,
+    started_at: str = "2026-11-01T10:00:00.000000Z",
+    threads: dict[int, int | None] | None = None,
     mutate=None,
 ) -> dict:
     """A small publishable artifact: `scaling` maps workers to the documents/s
     of each repetition, `ingest` users to uploads/s, `ramp` is one search-p95
-    mapping per repetition."""
+    mapping per repetition. `threads` maps workers to the `embedding_threads`
+    its scaling phases record (a run made before it was set has none)."""
     scaling = {1: [6.0, 6.2], 2: [11.0, 12.0], 4: [20.0, 21.0]} if scaling is None else scaling
     ingest = {2: [50.0, 54.0]} if ingest is None else ingest
     ramp = [{2: 40.0, 4: 80.0, 8: 300.0, 16: 1500.0}, {2: 42.0, 4: 90.0, 8: 500.0, 16: 1400.0}] if ramp is None else ramp
@@ -123,6 +126,9 @@ def make_artifact(
         records += [scaling_phase(rep, workers, rate) for rep, rate in enumerate(rates, start=1)]
     for rep, steps in enumerate(ramp, start=1):
         records += ramp_steps(rep, steps)
+    for record in records:
+        if threads and record["name"] == "scaling":
+            record["params"]["embedding_threads"] = threads[record["params"]["workers"]]
     scenario = {"workload": {"version": 1}, "plan": {"preset": "full"}}
     document = artifact.build_artifact(
         run_id=run_id,
@@ -159,7 +165,7 @@ def make_artifact(
         clock_offset_s=0.05,
         spend_usd=0.0,
         models_seen=["scripted"],
-        started_at="2026-11-01T10:00:00.000000Z",
+        started_at=started_at,
         ended_at="2026-11-01T11:00:00.000000Z",
     )
     if mutate:
@@ -186,6 +192,13 @@ def with_scenario(document: dict, description: dict) -> None:
 def after_of(**changes) -> dict:
     """An after run that matches `make_artifact()` except for `changes`."""
     return make_artifact(label="after-pool-fix", run_id="20261102T100000Z", **changes)
+
+
+def second_after_of(**changes) -> dict:
+    """An after run made after `after_of()`, with the scaling of a second fix."""
+    return make_artifact(
+        label="after-onnx-threads", run_id="20261103T100000Z", started_at="2026-11-03T10:00:00.000000Z", **changes
+    )
 
 
 @pytest.fixture
@@ -279,7 +292,140 @@ def test_the_region_names_the_machine_the_docker_share_and_the_exact_command(res
     assert "Baseline (commit `0123456`, run `20261101T100000Z`)" in markdown
     assert "After (commit `0123456`, run `20261102T100000Z`)" in markdown
     assert "### Scripted model `zero`, latency scale 1" in markdown
-    assert "#### Before and after: `pool-fix`" in markdown
+    assert "#### Before and after: `pool-fix`\n" in markdown  # against the baseline above: no other run named
+
+
+# --- chained comparisons -------------------------------------------------------------
+
+
+@pytest.fixture
+def chained(tmp_path: Path) -> Path:
+    """A baseline, a first after (a fix that doubles two workers), and a second
+    after (a second fix that takes four workers from 38 to 60)."""
+    write_runs(
+        tmp_path / "chained",
+        make_artifact(),
+        after_of(scaling={1: [6.1, 6.3], 2: [20.0, 21.0], 4: [38.0, 40.0]}, started_at="2026-11-02T10:00:00.000000Z"),
+        second_after_of(
+            scaling={1: [6.1, 6.3], 2: [20.0, 21.0], 4: [58.0, 62.0]},
+            threads={1: None, 2: 4, 4: 2},
+        ),
+    )
+    return tmp_path / "chained"
+
+
+def comparison_sections(markdown: str) -> list[str]:
+    return ["#### Before and after:" + part for part in markdown.split("#### Before and after:")[1:]]
+
+
+def table_row(section: str, measure: str) -> list[str]:
+    [line] = [line for line in section.splitlines() if line.startswith(f"| {measure} |")]
+    return [cell.strip() for cell in line.strip("|").split("|")]
+
+
+def test_each_after_is_compared_with_the_run_before_it_not_the_baseline(chained: Path) -> None:
+    first, second = comparison_sections(render_fixture(chained).markdown)
+    assert table_row(first, "Documents/s at 4 workers")[1:4] == ["20.5 (20.0 to 21.0)", "39.0 (38.0 to 40.0)", "+90.2%"]
+    # The second fix is credited with 39.0 to 60.0, not with the baseline's 20.5.
+    assert table_row(second, "Documents/s at 4 workers")[1:4] == ["39.0 (38.0 to 40.0)", "60.0 (58.0 to 62.0)", "+53.8%"]
+    assert table_row(second, "Documents/s at 2 workers")[3] == "+0.0%"
+
+
+def test_a_section_names_the_run_before_it_unless_that_is_the_baseline_above(chained: Path) -> None:
+    first, second = comparison_sections(render_fixture(chained).markdown)
+    assert first.startswith("#### Before and after: `pool-fix`\n")
+    assert second.startswith(
+        "#### Before and after: `onnx-threads` against `pool-fix` (run `20261102T100000Z`)\n"
+    )
+    assert "After (commit `0123456`, run `20261103T100000Z`)" in second
+
+
+def test_the_afters_follow_each_other_in_the_order_they_started_not_the_order_of_their_names(tmp_path: Path) -> None:
+    late_name_started_first = make_artifact(
+        label="after-b", run_id="20261109T100000Z", started_at="2026-11-02T10:00:00.000000Z", scaling={1: [6.5], 2: [12.0], 4: [22.0]}
+    )
+    early_name_started_last = make_artifact(
+        label="after-a", run_id="20261102T100000Z", started_at="2026-11-04T10:00:00.000000Z", scaling={1: [7.0], 2: [13.0], 4: [24.0]}
+    )
+    write_runs(tmp_path, make_artifact(), early_name_started_last, late_name_started_first)
+    groups, _notes = report.build_groups(report.load_runs(tmp_path, publishable=True)[0], strict=True)
+    [group] = groups
+    assert [after.doc["label"] for after in group.afters] == ["after-b", "after-a"]
+    assert [(before.doc["label"], after.doc["label"]) for before, after in group.pairs] == [
+        ("baseline", "after-b"),
+        ("after-b", "after-a"),
+    ]
+
+
+def test_a_group_with_no_after_has_no_pairs() -> None:
+    assert report.Group(report.Run("baseline.json", make_artifact()), ()).pairs == ()
+
+
+def test_every_consecutive_pair_must_be_comparable(tmp_path: Path) -> None:
+    write_runs(
+        tmp_path,
+        make_artifact(),
+        after_of(started_at="2026-11-02T10:00:00.000000Z"),
+        second_after_of(mutate=lambda doc: doc["machine"].update(cpu="Apple M2")),
+    )
+    with pytest.raises(report.ReportError, match="after-onnx-threads.json cannot be compared with .*after-pool-fix.json"):
+        report.render(tmp_path, publishable=True)
+
+
+def test_afters_that_match_each_other_but_not_the_baseline_are_refused_at_the_first_pair(tmp_path: Path) -> None:
+    def changed(doc: dict) -> None:
+        doc["machine"].update(cpu="Apple M2")
+
+    write_runs(
+        tmp_path,
+        make_artifact(),
+        after_of(started_at="2026-11-02T10:00:00.000000Z", mutate=changed),
+        second_after_of(mutate=changed),
+    )
+    with pytest.raises(report.ReportError, match="after-pool-fix.json cannot be compared with .*baseline.json"):
+        report.render(tmp_path, publishable=True)
+
+
+def test_a_baseline_that_never_set_embedding_threads_is_still_comparable_with_an_after_that_did() -> None:
+    """The threads are the change under test: only the after records them, and
+    the phases' params are not part of the comparison."""
+    before = make_artifact()
+    after = after_of(threads={1: None, 2: 4, 4: 2})
+    assert "embedding_threads" not in json.dumps(before["phases"])
+    assert report.comparability_problems(before, after) == []
+    assert report.comparability_problems(after, before) == []
+    assert before["methodology"] == after["methodology"] == artifact.METHODOLOGY
+
+
+def test_the_sizing_of_the_threads_is_stated_where_the_after_set_them_and_the_before_did_not(chained: Path) -> None:
+    first, second = comparison_sections(render_fixture(chained).markdown)
+    assert "ONNX threads" not in first
+    assert (
+        "The after run sized each worker's ONNX threads to the Docker CPUs divided by the number of workers, "
+        "at least 1 (the default (every core) at 1 worker, 4 at 2 workers, 2 at 4 workers); the before run left onnxruntime's default "
+        "of every core in every worker."
+    ) in second
+
+
+def test_no_sizing_is_stated_when_the_before_ran_with_it_too(tmp_path: Path) -> None:
+    sized = {1: None, 2: 4, 4: 2}
+    write_runs(
+        tmp_path,
+        make_artifact(threads=sized),
+        after_of(threads=sized, started_at="2026-11-02T10:00:00.000000Z"),
+    )
+    assert "ONNX threads" not in render_fixture(tmp_path).markdown
+
+
+def test_a_before_that_recorded_only_the_default_still_counts_as_having_set_the_threads(tmp_path: Path) -> None:
+    """One worker records null: the key, not a number, says the run was sized."""
+    one_worker = {1: [6.0, 6.2]}
+    write_runs(
+        tmp_path,
+        make_artifact(scaling=one_worker, threads={1: None}),
+        after_of(scaling=one_worker, threads={1: None}, started_at="2026-11-02T10:00:00.000000Z"),
+    )
+    assert "ONNX threads" not in render_fixture(tmp_path).markdown
 
 
 def test_the_method_is_the_artifacts_own_methodology_string(results: Path) -> None:
@@ -422,8 +568,8 @@ def test_the_refusal_names_what_differs(tmp_path: Path) -> None:
     with pytest.raises(report.ReportError) as raised:
         report.render(tmp_path, publishable=True)
     message = str(raised.value)
-    assert "machine cpu differs: baseline 'Apple M1', after 'Apple M2'" in message
-    assert "machine cores differs: baseline 8, after 10" in message
+    assert "machine cpu differs: before 'Apple M1', after 'Apple M2'" in message
+    assert "machine cores differs: before 8, after 10" in message
 
 
 def test_an_after_of_another_model_profile_has_no_baseline(tmp_path: Path) -> None:

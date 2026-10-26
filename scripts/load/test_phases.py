@@ -206,12 +206,16 @@ class FakeDriver:
         self.completed_fraction = 1.0
         self.open_jobs = [0]
         self.backlog = 0
+        # What the real driver does with Docker's CPUs (StackDriver).
+        self.cpus = 8
+        self.embedding_threads: int | None = None
 
     def prepare(self, workers: int, *, fresh: bool) -> None:
         self.events.append(("prepare", workers, fresh))
 
     def scale_workers(self, count: int) -> None:
         self.events.append(("scale", count))
+        self.embedding_threads = phases.embedding_threads(count, self.cpus) if count else None
 
     def run_locust(self, spec: phases.LocustSpec, destination: Path) -> None:
         self.events.append(("locust", spec.workload, spec.users, spec.upload_quota, spec.tag))
@@ -325,6 +329,29 @@ def test_a_short_ingest_step_is_invalid_not_dropped(driver: FakeDriver) -> None:
 # --- worker scaling ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("workers", "cpus", "threads"),
+    [(1, 8, None), (2, 8, 4), (3, 8, 2), (4, 8, 2), (8, 8, 1), (16, 8, 1), (1, 1, None), (2, 1, None), (5, 12, 2)],
+)
+def test_each_worker_gets_the_docker_cpus_divided_by_the_workers_and_one_worker_keeps_the_default(
+    workers: int, cpus: int, threads: int | None
+) -> None:
+    assert phases.embedding_threads(workers, cpus) == threads
+
+
+def test_there_is_no_thread_count_for_no_workers() -> None:
+    with pytest.raises(ValueError, match="fewer than one worker"):
+        phases.embedding_threads(0, 8)
+
+
+def test_a_scaling_phase_records_the_threads_each_worker_count_ran_with(driver: FakeDriver) -> None:
+    recorded = {
+        workers: phases.run_scaling(driver, small_plan(), workers, 1, [])["params"]["embedding_threads"]
+        for workers in (1, 2, 3, 8, 16)
+    }
+    assert recorded == {1: None, 2: 4, 3: 2, 8: 1, 16: 1}
+
+
 def test_a_scaling_phase_uploads_a_backlog_then_starts_the_workers(driver: FakeDriver) -> None:
     record = phases.run_scaling(driver, small_plan(), 2, 1, [])
     assert driver.events == [
@@ -345,7 +372,7 @@ def test_a_scaling_phase_uploads_a_backlog_then_starts_the_workers(driver: FakeD
     assert results["documents_per_s"] == pytest.approx(5.0) and results["jobs_counted"] == "extract+index"
     assert results["window"]["jobs"] == 16
     assert results["backlog"]["uploaded"] == 10
-    assert record["params"] == {"workers": 2, "backlog_documents": 10}
+    assert record["params"] == {"workers": 2, "backlog_documents": 10, "embedding_threads": 4}
 
 
 def test_a_drain_that_did_not_finish_is_invalid(driver: FakeDriver) -> None:
@@ -522,6 +549,20 @@ def test_a_populate_upload_that_fails_ends_the_run(driver: FakeDriver) -> None:
     plan = small_plan(tenant_documents=(("load-large", 30),))
     with pytest.raises(phases.PhaseError, match="29 of 30 uploads succeeded"):
         phases.populate_tenants(driver, plan, 1, [])
+
+
+def test_a_ramp_step_records_the_threads_of_the_read_workers_not_the_populate_workers(driver: FakeDriver) -> None:
+    plan = small_plan(
+        ramp_users=(2, 4), tenant_documents=(("load-large", 3),), populate_workers=4, read_workers=2
+    )
+    records = phases.run_ramp(driver, plan, 1, [])
+    assert [r["params"]["embedding_threads"] for r in records] == [4, 4]  # not the 2 of the four populate workers
+    assert [e for e in driver.events if e[0] == "scale"] == [("scale", 4), ("scale", 2)]
+
+
+def test_a_ramp_with_one_read_worker_records_the_default_as_null(driver: FakeDriver) -> None:
+    [record] = phases.run_ramp(driver, small_plan(ramp_users=(2,), read_workers=1), 1, [])
+    assert "embedding_threads" in record["params"] and record["params"]["embedding_threads"] is None
 
 
 def test_a_ramp_without_populate_starts_the_read_workers(driver: FakeDriver) -> None:

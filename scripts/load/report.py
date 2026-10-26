@@ -18,11 +18,13 @@ What is published, and what is refused:
   directory, never the README.
 - An artifact whose label starts with "after" is an after; any other is a
   baseline. A baseline is identified by the scripted model's profile and
-  latency scale, so zero and replay runs are separate groups. An after pairs
-  with the baseline of its group and is refused when the two cannot be
-  compared (`comparability_problems`): a number that moved because the machine,
-  Docker's share of it, the traffic, the model profile or an override moved
-  says nothing about the code.
+  latency scale, so zero and replay runs are separate groups. Each after of a
+  group is compared with the run immediately before it, in order of
+  `started_at` (the baseline for the first after), so a second change is not
+  credited with the first one's gain; a pair is refused when its two runs
+  cannot be compared (`comparability_problems`): a number that moved because
+  the machine, Docker's share of it, the traffic, the model profile or an
+  override moved says nothing about the code.
 
 Medians and ranges come from the valid repetitions only, as artifact.spread
 computes them. The read latency tables use each repetition's own knee, the last
@@ -134,10 +136,16 @@ class Run:
 
 @dataclass(frozen=True)
 class Group:
-    """A baseline and the afters measured against it (oldest first)."""
+    """A baseline and the afters that followed it, oldest `started_at` first."""
 
     baseline: Run
     afters: tuple[Run, ...]
+
+    @property
+    def pairs(self) -> tuple[tuple[Run, Run], ...]:
+        """(before, after) for every after: the run just before it, which is
+        the baseline for the first."""
+        return tuple(zip((self.baseline, *self.afters), self.afters, strict=False))
 
     @property
     def profile(self) -> str:
@@ -188,7 +196,7 @@ def load_runs(directory: Path, *, publishable: bool) -> tuple[list[Run], list[st
 
 def _differences(label: str, left: dict, right: dict) -> list[str]:
     return [
-        f"{label} {key} differs: baseline {left.get(key)!r}, after {right.get(key)!r}"
+        f"{label} {key} differs: before {left.get(key)!r}, after {right.get(key)!r}"
         for key in sorted(set(left) | set(right))
         if left.get(key) != right.get(key)
     ]
@@ -200,7 +208,9 @@ def comparability_problems(before: dict, after: dict) -> list[str]:
     Same machine, same Docker resources, the same scripted-model profile, scale
     and durations, the same scenario digest (the traffic and the plan), the same
     overrides and embedder, and the same methodology. Commit, label, times and
-    results are the point of a comparison and are not compared."""
+    results are the point of a comparison and are not compared, and neither are
+    the parameters of the phases: a change under test may record one the before
+    run never had (`embedding_threads`)."""
     problems = _differences("machine", before["machine"], after["machine"])
     docker_keys = ("ncpu", "memory_bytes", "operating_system", "architecture")
     problems += _differences(
@@ -216,13 +226,13 @@ def comparability_problems(before: dict, after: dict) -> list[str]:
     )
     if before["scenario"]["digest"] != after["scenario"]["digest"]:
         problems.append(
-            f"scenario digest differs: baseline {before['scenario']['digest'][:12]}, "
+            f"scenario digest differs: before {before['scenario']['digest'][:12]}, "
             f"after {after['scenario']['digest'][:12]}"
         )
     problems += _differences("override", before["stack"]["overrides"], after["stack"]["overrides"])
     if before["stack"].get("embedder") != after["stack"].get("embedder"):
         problems.append(
-            f"embedder differs: baseline {before['stack'].get('embedder')!r}, after {after['stack'].get('embedder')!r}"
+            f"embedder differs: before {before['stack'].get('embedder')!r}, after {after['stack'].get('embedder')!r}"
         )
     if before.get("methodology") != after.get("methodology"):
         problems.append("methodology differs")
@@ -230,12 +240,14 @@ def comparability_problems(before: dict, after: dict) -> list[str]:
 
 
 def build_groups(runs: list[Run], *, strict: bool) -> tuple[list[Group], list[str]]:
-    """Pair every after with the baseline of its group.
+    """Order the afters of each group after its baseline and check every
+    consecutive pair.
 
     Raises ReportError when the runs disagree on the methodology, when an after
-    has no baseline of its model profile and scale, or when a pair fails
-    `comparability_problems`. Two baselines of one group are an error when
-    `strict` (the committed results must say which one is the baseline) and
+    has no baseline of its model profile and scale, or when a pair (an after and
+    the run before it) fails `comparability_problems`. Two baselines of one
+    group are an error when `strict` (the committed results must say which one
+    is the baseline) and
     otherwise the newest wins, with a note."""
     notes: list[str] = []
     if len({run.doc.get("methodology") for run in runs}) > 1:
@@ -263,14 +275,15 @@ def build_groups(runs: list[Run], *, strict: bool) -> tuple[list[Group], list[st
     groups = []
     for key in sorted(baselines, key=_group_order):
         baseline = baselines[key][-1]
-        group_afters = tuple(afters.get(key, ()))
-        for after in group_afters:
-            problems = comparability_problems(baseline.doc, after.doc)
+        group_afters = tuple(sorted(afters.get(key, ()), key=lambda run: (run.doc["started_at"], run.name)))
+        group = Group(baseline, group_afters)
+        for before, after in group.pairs:
+            problems = comparability_problems(before.doc, after.doc)
             if problems:
                 raise ReportError(
-                    f"{after.name} cannot be compared with {baseline.name}:\n  " + "\n  ".join(problems)
+                    f"{after.name} cannot be compared with {before.name}:\n  " + "\n  ".join(problems)
                 )
-        groups.append(Group(baseline, group_afters))
+        groups.append(group)
     return groups, notes
 
 
@@ -643,31 +656,73 @@ def runs_separated(before: dict, after: dict) -> bool:
     return after["min"] > before["max"] or after["max"] < before["min"]
 
 
+def embedding_threads_by_workers(doc: dict) -> dict[int, int | None]:
+    """The ONNX threads each worker count ran with, from the phases that
+    recorded `embedding_threads` (None is the default of every core); empty for
+    a run made before it was recorded."""
+    return {
+        phase["params"]["workers"]: phase["params"]["embedding_threads"]
+        for phase in doc["phases"]
+        if "embedding_threads" in phase["params"] and "workers" in phase["params"]
+    }
+
+
+def embedding_threads_note(before: dict, after: dict) -> str | None:
+    """A sentence on how the workers' threads changed between two runs, when the
+    after recorded them and the before did not. It is read from the phases, not
+    written into the compared methodology text, so a run's methodology stays
+    comparable with every earlier artifact."""
+    sized = embedding_threads_by_workers(after)
+    if not sized or embedding_threads_by_workers(before):
+        return None
+    threads = ", ".join(
+        f"{'the default (every core)' if sized[workers] is None else sized[workers]} at {_plural(workers, 'worker')}"
+        for workers in sorted(sized)
+    )
+    return (
+        "The after run sized each worker's ONNX threads to the Docker CPUs divided by the number of "
+        f"workers, at least 1 ({threads}); the before run left onnxruntime's default of every core in "
+        "every worker."
+    )
+
+
+def comparison_title(before: Run, after: Run, group: Group) -> str:
+    """The section heading. Against the baseline it names only the after: the
+    group's baseline block, with its run id, sits right above. Against an earlier
+    after it names that run too, so a second change is not read as the first."""
+    title = f"#### Before and after: {after_title(after)}"
+    if before is group.baseline:
+        return title
+    return f"{title} against {after_title(before)} (run `{before.doc['run_id']}`)"
+
+
 def comparison_section(group: Group) -> str | None:
     sections = []
-    for after in group.afters:
-        metrics = comparison_metrics(group.baseline.doc, after.doc)
+    for before, after in group.pairs:
+        metrics = comparison_metrics(before.doc, after.doc)
         if not metrics:
             continue
         rows = []
         for metric in metrics:
-            before, now = metric.before, metric.after
+            earlier, now = metric.before, metric.after
             fmt = fmt_g if metric.unit == "users" else fmt_number
             rows.append(
                 [
                     metric.name,
-                    fmt_with_range(before, fmt),
+                    fmt_with_range(earlier, fmt),
                     fmt_with_range(now, fmt),
-                    fmt_change(before["median"], now["median"]),
-                    "yes" if runs_separated(before, now) else "no",
+                    fmt_change(earlier["median"], now["median"]),
+                    "yes" if runs_separated(earlier, now) else "no",
                 ]
             )
         table = _table(["Measure", "Before (median, range)", "After (median, range)", "Change", "Runs separated"], rows)
+        threads = embedding_threads_note(before.doc, after.doc)
         sections.append(
-            f"#### Before and after: {after_title(after)}\n\n"
+            f"{comparison_title(before, after, group)}\n\n"
             f"{command_block('After', after.doc)}\n\n{table}\n\n"
             "Both runs used the same machine, Docker resources, scripted model, traffic and overrides. "
-            "A change counts as evidence only when the runs are separated: every after run lies beyond every before run."
+            + (f"{threads} " if threads else "")
+            + "A change counts as evidence only when the runs are separated: every after run lies beyond every before run."
         )
     return "\n\n".join(sections) if sections else None
 

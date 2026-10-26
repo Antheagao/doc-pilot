@@ -177,6 +177,13 @@ services:
       # use into this volume, shared with api, so it's fetched once rather
       # than on every container start.
       EMBEDDING_CACHE_DIR: /data/models
+      # ONNX threads per worker (app/config.py embedding_threads). Empty keeps
+      # onnxruntime's default of every core in each process, so N workers run
+      # N times the cores' threads and throughput falls as workers are added.
+      # With `--scale worker=N` on C cores, set it to C // N (at least 1), and
+      # leave it empty for one worker (see embedding_threads in
+      # scripts/load/phases.py for the measurement).
+      EMBEDDING_THREADS: ${WORKER_EMBEDDING_THREADS:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: doc-pilot-worker
       # Langfuse: see the api service.

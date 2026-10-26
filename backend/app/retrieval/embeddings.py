@@ -115,12 +115,14 @@ class FastEmbedEmbedder:
         *,
         cache_dir: str | None = None,
         model_path: str | None = None,
+        threads: int | None = None,
     ) -> None:
         self.name = f"fastembed:{model_name}"
         self.dim = EMBEDDING_DIM
         self._model_name = model_name
         self._cache_dir = cache_dir
         self._model_path = model_path
+        self._threads = threads
         self._model = None
         self._query_prefix = (
             BGE_QUERY_INSTRUCTION if model_name.lower().startswith("baai/bge-") else ""
@@ -140,6 +142,9 @@ class FastEmbedEmbedder:
             # measures), and anything else is left to fastembed's download.
             model_path = self._model_path or ensure_pinned_model(self._model_name, self._cache_dir)
             kwargs = {"specific_model_path": str(model_path)} if model_path else {}
+            # Left out when unset, so onnxruntime keeps its own default.
+            if self._threads is not None:
+                kwargs["threads"] = self._threads
             model = TextEmbedding(self._model_name, cache_dir=self._cache_dir, **kwargs)
             if model.embedding_size != self.dim:
                 raise ValueError(
@@ -172,6 +177,7 @@ def build_embedder(settings: Settings) -> Embedder:
             settings.embedding_model,
             cache_dir=settings.embedding_cache_dir,
             model_path=settings.embedding_model_path,
+            threads=settings.embedding_threads,
         )
     raise ValueError(
         f"unknown embedding_backend {settings.embedding_backend!r}; "

@@ -15,7 +15,9 @@ What each phase measures, and how:
   10% and the 90% mark of the backlog divided by the time between those two
   completions, so the staggered start of the workers and the thin tail of the
   last jobs do not count (steady_window). Completion times are the jobs' own
-  `finished_at`, read from the database, not a sampled approximation.
+  `finished_at`, read from the database, not a sampled approximation. Each worker
+  runs with `embedding_threads` ONNX threads (Docker's CPUs divided by N, the
+  default for one worker), which the phase's params record.
 - read ramp: tenants of fixed size, then a fixed mix of reads at rising numbers
   of users, a minute each. A step fails when more than 1% of its requests fail
   or the /search p95 passes a 1 s SLO written down before any run; the ramp
@@ -56,6 +58,30 @@ MAX_ERROR_RATE = 0.01
 # The completion marks that bound the steady part of a drain, in percent.
 WINDOW_LOW_PCT = 10
 WINDOW_HIGH_PCT = 90
+
+
+def embedding_threads(workers: int, cpus: int) -> int | None:
+    """The ONNX threads each of `workers` worker processes gets on a Docker
+    allotment of `cpus`: the CPUs divided by the workers, at least 1. None when
+    that would be every core (one worker), which means onnxruntime's own default
+    and is passed as an empty EMBEDDING_THREADS: an explicit count also sets the
+    session's inter-op threads, and two 60 s runs of one process were within
+    noise of the default but both lower at 8 (39.1 and 36.8 against 39.5 and 38.5
+    chunks/s).
+
+    onnxruntime defaults to one thread per core in every process, so N workers
+    run N times the cores' threads. Measured in the load image on 8 CPUs
+    (scripts/load/onnx_threads_bench.py, 3-chunk batches, total chunks/s), the
+    total peaked where processes times threads equalled the cores and collapsed
+    past it: one process wanted every core (about 37 chunks/s at the default and
+    at 8 threads, 25 at 4), eight processes wanted 1 thread each (72 chunks/s,
+    against 16 at the default, under a quarter). So no fixed value serves one
+    worker and eight."""
+    if workers < 1:
+        raise ValueError("there is no thread count for fewer than one worker")
+    threads = max(1, cpus // workers)
+    return None if threads >= cpus else threads
+
 
 # Every job a document makes is an extract and then an index job.
 JOBS_PER_DOCUMENT = 2
@@ -333,6 +359,10 @@ class Driver(Protocol):
     # Seconds the stack's clock (the db container's, which stamps every sample
     # and job) is ahead of the host's, measured when the stack started.
     clock_offset_s: float
+    # What `embedding_threads` gave the workers now running (None is the
+    # default of every core, and also what it is with no worker running),
+    # recorded in the params of the phases they work in.
+    embedding_threads: int | None
 
     def prepare(self, workers: int, *, fresh: bool) -> None:
         """A seeded, preflighted stack with `workers` workers: reset from empty
@@ -340,7 +370,10 @@ class Driver(Protocol):
         if there is none)."""
 
     def scale_workers(self, count: int) -> None:
-        """Set the number of worker containers and re-run the no-spend check."""
+        """Set the number of worker containers, each with the embedding threads
+        `embedding_threads` gives for that count (workers running with another
+        value are restarted, so only at a drained queue), and re-run the
+        no-spend check."""
 
     def run_locust(self, spec: LocustSpec, destination: Path) -> None:
         """Run Locust in the loadgen container and leave its raw samples at
@@ -362,6 +395,9 @@ class Driver(Protocol):
 QUEUE_OPEN_SQL = (
     f"{HARNESS_TAG} select count(*) from jobs where state in ('pending', 'processing')"
 )
+# Jobs a worker has claimed and not settled: stopping that worker strands them
+# until the lease reclaims them.
+CLAIMED_JOBS_SQL = f"{HARNESS_TAG} select count(*) from jobs where state = 'processing'"
 FAILED_JOBS_SQL = f"{HARNESS_TAG} select count(*) from jobs where state = 'failed'"
 # Jobs still to run, counting the index job every pending extract job will add.
 EXPECTED_JOBS_SQL = (
@@ -562,6 +598,7 @@ def run_scaling(driver: Driver, plan: Plan, workers: int, repetition: int, sampl
     with driver.telemetry() as telemetry:
         started = time.time()
         driver.scale_workers(workers)
+        threads = driver.embedding_threads
         wait_until_drained(driver, plan.drain_timeout_seconds)
         ended = time.time()
     completions = [float(line) for line in driver.query(COMPLETIONS_SQL).split()][already_done:]
@@ -588,7 +625,7 @@ def run_scaling(driver: Driver, plan: Plan, workers: int, repetition: int, sampl
         "documents_per_s": None if window is None else window.jobs_per_s / JOBS_PER_DOCUMENT,
         "backlog": {**backlog, "endpoints": backlog_endpoints},
     }
-    params = {"workers": workers, "backlog_documents": plan.backlog_documents}
+    params = {"workers": workers, "backlog_documents": plan.backlog_documents, "embedding_threads": threads}
     driver.check_spend()
     return phase_record("scaling", repetition, params, results, telemetry, started, ended, None, reasons)
 
@@ -630,6 +667,7 @@ def run_ramp(driver: Driver, plan: Plan, repetition: int, sample_files: list[Pat
     driver.prepare(plan.populate_workers if plan.tenant_documents else plan.read_workers, fresh=plan.fresh_stack)
     setup = populate_tenants(driver, plan, repetition, sample_files)
     driver.scale_workers(plan.read_workers)
+    read_threads = driver.embedding_threads
     wait_until_drained(driver, plan.drain_timeout_seconds)
     driver.query(ANALYZE_SQL)
     sizes = tenant_sizes(driver)
@@ -679,6 +717,7 @@ def run_ramp(driver: Driver, plan: Plan, repetition: int, sample_files: list[Pat
             "step_seconds": plan.step_seconds,
             "warmup_seconds": plan.warmup_seconds,
             "workers": plan.read_workers,
+            "embedding_threads": read_threads,
             "slo_search_p95_ms": SLO_SEARCH_P95_MS,
             "max_error_rate": MAX_ERROR_RATE,
         }

@@ -28,7 +28,9 @@ no Anthropic key; it also creates the pg_stat_statements extension.
 the models volume), start the stack with the load generator (profile `loadgen`,
 Locust in its own small image, inside the load network), seed, preflight, run
 the phases in phases.py with the samplers in samplers.py running, re-run the
-no-spend check after every change in the number of workers, check spend and the
+no-spend check after every change in the number of workers (and give each worker
+Docker's CPUs divided by their number as its ONNX threads, read back from the
+container), check spend and the
 recorded model names from the database after every phase, write a `load_v1`
 artifact (artifact.py), and stop the stack (volumes kept). `run` writes under
 scripts/load/out/ unless told otherwise; only a full-plan run may write to
@@ -44,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import enum
 import json
 import os
 import re
@@ -113,6 +116,8 @@ TENANTS_FILE = OUT_DIR / "tenants.json"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 EVALS_DIR = REPO_ROOT / "evals"
 LOADGEN = "loadgen"
+# The variable docker-compose.load.yml passes to every worker as EMBEDDING_THREADS.
+WORKER_EMBEDDING_THREADS = "WORKER_EMBEDDING_THREADS"
 API_INTERNAL_URL = "http://api:8000"
 BACKEND_IMAGE = "doc-pilot-load-backend"
 # `dpk_<12 lowercase base32>_<43 url-safe>`: backend/app/auth/tokens.py.
@@ -192,6 +197,9 @@ class Probe:
     has_key: bool
     database: str
     role: str
+    # Settings.embedding_threads as the process resolved it; None is onnxruntime's
+    # default of every core.
+    embedding_threads: int | None = None
 
 
 # Run inside a container by `python -c`: the settings the process really
@@ -216,6 +224,7 @@ print(json.dumps({
     "has_key": bool(settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")),
     "database": database,
     "role": role,
+    "embedding_threads": settings.embedding_threads,
 }))
 """
 
@@ -224,20 +233,34 @@ def parse_probe(container: str, output: str) -> Probe:
     """The Probe a container printed; CliError when the output is not it."""
     try:
         report = json.loads(output.strip().splitlines()[-1])
+        threads = report["embedding_threads"]
         return Probe(
             container,
             str(report["provider"]),
             bool(report["has_key"]),
             str(report["database"]),
             str(report["role"]),
+            None if threads is None else int(threads),
         )
     except (IndexError, KeyError, TypeError, ValueError) as exc:
         raise CliError(f"{container}: the probe printed something unexpected") from exc
 
 
-def probe_problems(probe: Probe) -> list[str]:
+class Unchecked(enum.Enum):
+    """`embedding_threads` for a check that does not look at the threads (None
+    is a value: onnxruntime's default of every core)."""
+
+    NOT_CHECKED = enum.auto()
+
+
+NOT_CHECKED = Unchecked.NOT_CHECKED
+
+
+def probe_problems(probe: Probe, embedding_threads: int | None | Unchecked = NOT_CHECKED) -> list[str]:
     """Why a container must not get traffic; empty when it is scripted, keyless
-    and connected to the load database as the runtime role."""
+    and connected to the load database as the runtime role. With
+    `embedding_threads` (a worker just started with that value, None for the
+    default) it must also have resolved exactly that."""
     problems = []
     if probe.provider != SCRIPTED:
         problems.append(f"{probe.container}: model provider is {probe.provider!r}, not {SCRIPTED!r}")
@@ -247,6 +270,11 @@ def probe_problems(probe: Probe) -> list[str]:
         problems.append(f"{probe.container}: connected to database {probe.database!r}, not {DATABASE!r}")
     if probe.role != RUNTIME_ROLE:
         problems.append(f"{probe.container}: connected as role {probe.role!r}, not {RUNTIME_ROLE!r}")
+    if embedding_threads is not NOT_CHECKED and probe.embedding_threads != embedding_threads:
+        problems.append(
+            f"{probe.container}: EMBEDDING_THREADS resolved to {probe.embedding_threads!r}, "
+            f"not {embedding_threads!r}"
+        )
     return problems
 
 
@@ -291,26 +319,31 @@ def create_statements_extension() -> None:
     owner_psql("-c", "select count(*) from pg_stat_statements")
 
 
-def check_stack() -> tuple[list[str], int]:
+def check_stack(embedding_threads: int | None | Unchecked = NOT_CHECKED) -> tuple[list[str], int]:
     """Every reason traffic must not start (empty when the stack is scripted,
     keyless, and on the load database), and how many containers were asked.
     Checks the resolved config of every service (so a container that is not
     running yet is covered), then asks each running api and worker container
-    what it resolved. Public so the harness can re-run it after each scale step."""
+    what it resolved; with `embedding_threads`, every worker must also have
+    resolved that EMBEDDING_THREADS. Public so the harness can re-run it after
+    each scale step."""
     problems = config_problems(STACK.resolved_config(all_profiles=True))
     containers = running_model_containers(STACK.container_records(include_stopped=False))
     if not any(record["Service"] == "api" for record in containers):
         problems.append("no api container is running: run `load.py stack up`")
     for record in containers:
+        expected = embedding_threads if record["Service"] == "worker" else NOT_CHECKED
         try:
-            problems += probe_problems(probe_container(record))
+            problems += probe_problems(probe_container(record), expected)
         except CliError as exc:
             problems.append(f"{record.get('Name')}: {exc}")
     return problems, len(containers)
 
 
-def preflight(_args: argparse.Namespace) -> int:
-    problems, asked = check_stack()
+def preflight(args: argparse.Namespace) -> int:
+    """`args.embedding_threads`, when the caller just started workers with it,
+    is also read back from every worker."""
+    problems, asked = check_stack(getattr(args, "embedding_threads", NOT_CHECKED))
     if problems:
         print("Preflight failed, no traffic may be sent:", file=sys.stderr)
         for problem in problems:
@@ -665,6 +698,12 @@ class StackDriver:
         samples_dir.mkdir(parents=True, exist_ok=True)
         self.ledger = Ledger()
         self.clock_offset_s = 0.0
+        # What phases.embedding_threads gave the workers now running; None is
+        # the default, so whether it is known at all is kept apart (a stack
+        # started by hand, or one with no worker, has no known value).
+        self.embedding_threads: int | None = None
+        self._embedding_threads_known = False
+        self._docker_cpus: int | None = None
         self._up = False
         self._telemetry = telemetry or samplers.Telemetry(
             lambda argv: STACK.compose_args("exec", "-T", "db", *argv),
@@ -682,12 +721,48 @@ class StackDriver:
             return
         if stack_reset(argparse.Namespace()) != 0:
             raise CliError("could not reset the load stack")
+        started = argparse.Namespace()
+        if workers >= 1:
+            started.embedding_threads = self._embedding_threads_for(workers)
+            self._pass_embedding_threads(started.embedding_threads)
+        else:
+            self._forget_embedding_threads()
         if bring_up(workers, loadgen=True) != 0:
             raise CliError("could not start the load stack")
-        if seed(argparse.Namespace()) != 0 or preflight(argparse.Namespace()) != 0:
+        # The preflight reads the threads back from the workers it probes.
+        if seed(argparse.Namespace()) != 0 or preflight(started) != 0:
             raise CliError("the load stack did not pass its seed and preflight")
         self._check_clock()
         self._up = True
+
+    def _docker_cpu_count(self) -> int:
+        """The CPUs Docker gives every container, as the artifact's docker
+        section records them; asked once."""
+        if self._docker_cpus is None:
+            try:
+                cpus = artifact.capture_docker()["ncpu"]
+            except RuntimeError as exc:
+                raise CliError(f"could not read Docker's CPU count: {exc}") from exc
+            if not isinstance(cpus, int) or isinstance(cpus, bool) or cpus < 1:
+                raise CliError(f"Docker reported {cpus!r} CPUs")
+            self._docker_cpus = cpus
+        return self._docker_cpus
+
+    def _embedding_threads_for(self, count: int) -> int | None:
+        """phases.embedding_threads for `count` workers on Docker's CPUs."""
+        return phases.embedding_threads(count, self._docker_cpu_count())
+
+    def _pass_embedding_threads(self, threads: int | None) -> None:
+        """Hand the value to compose through the environment, where
+        docker-compose.load.yml reads it (blank for the default, so an earlier
+        value never lingers), and remember it."""
+        self.embedding_threads = threads
+        self._embedding_threads_known = True
+        os.environ[WORKER_EMBEDDING_THREADS] = "" if threads is None else str(threads)
+
+    def _forget_embedding_threads(self) -> None:
+        self.embedding_threads = None
+        self._embedding_threads_known = False
 
     def _check_clock(self) -> None:
         """Refuse to measure if the stack's clock is more than a second from the
@@ -702,22 +777,61 @@ class StackDriver:
             self.clock_offset_s = offset
 
     def scale_workers(self, count: int) -> None:
-        """`up -d --scale worker=N` for the worker service alone, then the
-        no-spend check again: the new containers must be scripted and keyless
-        like the first, and there must be as many as were asked for."""
+        """Set the number of worker containers, each started with the embedding
+        threads phases.embedding_threads gives for that count, then check the
+        stack again: the new containers must be scripted and keyless like the
+        first, have resolved those threads, and there must be as many as were
+        asked for.
+
+        `--no-recreate` leaves a running worker as it is, whatever the
+        environment now says, so workers running with another value (the default
+        is a value) are stopped first, and so are workers of an unknown start.
+        They are never stopped while they hold a claimed job; the phases only
+        reach this at a drained queue (a scaling drain starts from zero workers,
+        and the ramp scales after its populate drain)."""
+        if count < 1:
+            self._forget_embedding_threads()
+            self._scale(count)
+            self._verify_workers(count, NOT_CHECKED)
+            return
+        threads = self._embedding_threads_for(count)
+        changed = not self._embedding_threads_known or threads != self.embedding_threads
+        if changed and self._running_workers():
+            self._stop_workers_for_embedding_threads(threads)
+        self._pass_embedding_threads(threads)
+        self._scale(count)
+        self._verify_workers(count, threads)
+
+    def _running_workers(self) -> list[dict]:
+        return [
+            record
+            for record in running_model_containers(STACK.container_records(include_stopped=False))
+            if record["Service"] == "worker"
+        ]
+
+    def _scale(self, count: int) -> None:
         code = STACK.compose(
             "up", "-d", "--no-build", "--no-recreate", "--no-deps", "--scale", f"worker={count}", "worker"
         )
         if code != 0:
             raise CliError(f"could not scale the workers to {count}")
-        problems, _asked = check_stack()
+
+    def _stop_workers_for_embedding_threads(self, threads: int | None) -> None:
+        claimed = int(self.query(phases.CLAIMED_JOBS_SQL).strip())
+        if claimed:
+            wanted = "the default embedding threads" if threads is None else f"{threads} embedding thread(s)"
+            raise CliError(
+                f"{claimed} job(s) are claimed: the workers cannot be restarted with {wanted} "
+                "without stranding them until the lease reclaims them"
+            )
+        self._scale(0)
+        self._forget_embedding_threads()
+
+    def _verify_workers(self, count: int, embedding_threads: int | None | Unchecked) -> None:
+        problems, _asked = check_stack(embedding_threads)
         if problems:
-            raise CliError("the stack failed its no-spend check after scaling: " + "; ".join(problems))
-        running = [
-            record
-            for record in running_model_containers(STACK.container_records(include_stopped=False))
-            if record["Service"] == "worker"
-        ]
+            raise CliError("the stack failed its checks after scaling: " + "; ".join(problems))
+        running = self._running_workers()
         if len(running) != count:
             raise CliError(f"asked for {count} worker(s), {len(running)} running")
 

@@ -152,3 +152,32 @@ def test_the_pinned_model_is_loaded_unless_a_path_is_given(monkeypatch: pytest.M
 
     assert fetched == [("BAAI/bge-small-en-v1.5", "/models")]
     assert [kwargs["specific_model_path"] for kwargs in loaded] == [str(tmp_path / "pinned"), "/air-gapped/copy"]
+
+
+@pytest.mark.parametrize("setting", [None, 1, 4])
+def test_build_embedder_passes_the_thread_count_to_onnx_only_when_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, setting: int | None
+) -> None:
+    import types
+
+    from app.retrieval import model_fetch
+
+    loaded: list[dict] = []
+
+    class FakeTextEmbedding:
+        embedding_size = EMBEDDING_DIM
+
+        def __init__(self, name, **kwargs):
+            loaded.append(kwargs)
+
+    monkeypatch.setitem(sys.modules, "fastembed", types.SimpleNamespace(TextEmbedding=FakeTextEmbedding))
+    monkeypatch.setattr(model_fetch, "ensure_pinned_model", lambda name, dest: tmp_path / "pinned")
+
+    build_embedder(Settings(embedding_backend="fastembed", embedding_threads=setting))._load()
+
+    assert ("threads" in loaded[0]) is (setting is not None)
+    assert loaded[0].get("threads") == setting
+
+
+def test_the_hashing_embedder_ignores_the_thread_count() -> None:
+    assert isinstance(build_embedder(Settings(embedding_backend="hashing", embedding_threads=2)), HashingEmbedder)
