@@ -241,6 +241,10 @@ flowchart LR
 
 This is the data-flow shape (what happens to a document and a question), not the deployment topology -- for that, `docker compose up --build` runs five services: `db`, a one-shot `migrate`, `api`, `worker`, and `frontend`, plus an opt-in `jaeger` for traces (see the Quickstart above and `docker-compose.yml`). Every job -- extract, index, judge -- goes through the same Postgres `SKIP LOCKED` queue and the same worker, and carries the traceparent of whatever enqueued it.
 
+Two more compose projects run the same backend image beside the dev stack, each with its own database, volumes, and ports so that nothing in them can touch the dev data.
+`doc-pilot-demo` records the demo GIFs.
+`doc-pilot-load` (`docker-compose.load.yml`, driven by `scripts/load/load.py`) is the load test: it answers every model call with a scripted stand-in (`MODEL_PROVIDER=scripted`, `app/scripted_model.py`) behind the same `_build_client` constructor, so a run costs nothing, and it measures the worker, the queue, the database, and the API ([Performance](#performance)).
+
 Every row in that diagram belongs to an organization, and two backend modules carry that.
 `app/auth/` holds sign-in: password hashing, sessions, API keys, and `current_principal`, the dependency every router but `/auth` hangs off.
 `app/tenancy.py` binds each database session to one organization and filters every query to it, with row-level security under a non-owner role as the second layer.
@@ -248,7 +252,10 @@ The [Security model](#security-model) describes both.
 
 ## Why these tech choices
 
-- **Postgres `SKIP LOCKED` instead of Redis for the job queue.** One datastore to run, deploy, and explain instead of two. More importantly, the queue is transactional with the data it produces: a job row and its extraction rows commit or roll back together, so there's no window where the queue says "done" and the data disagrees. A worker that crashes mid-claim doesn't need a separate recovery system -- it's just a `processing` row that a future worker startup reconciles back to `pending` (`reclaim_orphaned_jobs()` in `app/worker.py`). Scaling out is "run more worker processes" -- with the honest caveat that today's startup orphan-reclaim assumes a single worker; running two concurrently would need that sweep to become claim-aware first (see the `worker` service comment in `docker-compose.yml`).
+- **Postgres `SKIP LOCKED` instead of Redis for the job queue.** One datastore to run, deploy, and explain instead of two. More importantly, the queue is transactional with the data it produces: a job row and its extraction rows commit or roll back together, so there's no window where the queue says "done" and the data disagrees. A worker that crashes mid-claim doesn't need a separate recovery system -- it's just a `processing` row that a future worker startup reconciles back to `pending` (`reclaim_orphaned_jobs()` in `app/worker.py`). Scaling out is `docker compose up --scale worker=N`, and it is safe once a lease is set.
+  `WORKER_RECLAIM_AFTER_SECONDS` makes a starting worker reclaim only the jobs that have been processing longer than the lease, instead of every `processing` row, and every completion, failure, and shutdown requeue is a compare-and-set on the attempt the worker claimed, so a worker whose job was reclaimed settles nothing and its writes roll back.
+  The dev stack keeps the lease off and runs one worker; the load stack sets it.
+  Two honest caveats: nothing renews a lease, so it must be longer than the slowest job, and each worker's embedding threads must be sized to its share of the cores (`EMBEDDING_THREADS`), or throughput falls as workers are added ([Performance](#performance)).
 - **FastAPI / Python for the backend.** First-class SDKs for the pieces that matter here (the Anthropic SDK, async SQLAlchemy, Alembic); the workload is almost entirely I/O-bound waiting on VLM round-trips, which is exactly the case `async`/`await` is for.
 - **Evals from day one.** No prompt version ships without a run against the labeled corpus in `evals/` -- the table in the [Evals](#evals) section below isn't hand-maintained, it's generated from committed run artifacts in `evals/results/`, each tied to the `(model, prompt_version, dataset_version)` triple it was produced with.
 - **Per-field confidence, not a single document-level score, routed to a human review queue.** The extraction tool forces every leaf value into `{value, confidence}`, so review routes individual low-confidence *fields* to a human rather than re-doing an entire document. This is justified empirically, not just by preference: the `caught_by_review` column in the Evals Ops table shows Sonnet flags essentially all of its own misses with low confidence, while Haiku flags none of its 8 misses by confidence. That asymmetry -- a model that mostly knows when it's wrong versus one that doesn't -- is the whole case for the queue existing, and for the second reason that can flag a field: the arithmetic checks catch 4 of Haiku's 8 misses (the `caught_by_checks` column), including ones it was sure of.
@@ -777,14 +784,57 @@ A policy cannot compare a row's old and new values, so a wider grant would let a
 ## Performance
 
 How much work the stack gets through is measured, not guessed.
-`scripts/load/load.py` starts an isolated copy of the stack (its own compose project, database, and volumes, so the dev and demo stacks are never touched), fills it with tenants of different sizes, and drives it with Locust from inside the same Docker network.
-Every model call is answered by a scripted stand-in that never reaches a model API, so a run costs nothing, and the harness refuses to send traffic if any container holds an API key.
-The stand-in replaces the model's latency, not its answers: the `zero` profile answers at once, and the `replay` profile sleeps for the latency the committed extraction runs recorded.
-Read the numbers as the cost of this application's code, queue, and database on a laptop inside Docker Desktop, not as capacity planning for a real deployment.
+This section says how it is measured, what the stand-in model is and is not, what broke first and what fixed it, how to reproduce it, and what the numbers cannot tell you.
+Every figure lives in the generated block below, which is rebuilt from committed run artifacts and checked by a test, so this prose names things and never quotes a number.
 
-Each run is a JSON artifact committed under `scripts/load/results/`, and each configuration is repeated and shown as a median with its range.
-The block below, and the chart above it (in a light and a dark version), are generated from those artifacts by `python scripts/load/load.py report --update-readme`, and a test fails when they drift, so no number on this page is typed by hand.
-The block names the machine, the Docker allocation, the method, and the exact command that produced each run.
+### Method
+
+`scripts/load/load.py` starts an isolated copy of the stack: the compose project `doc-pilot-load` (`docker-compose.load.yml` on top of the base file), with its own containers, network, images, database, and volumes.
+Its database has no host port, its API listens on a loopback port of its own, and a guard refuses to remove any volume that does not belong to it, so the dev and demo stacks are never touched.
+The harness seeds three organizations of very different sizes through the real accounts CLI, each with an owner and an API key, so row-level security, per-tenant scans, and a small tenant among large ones are all exercised.
+The documents are the committed evaluation corpus, uploaded through the real `POST /documents`, each copy made byte-unique so that storage and indexing do real work for every upload.
+Locust runs in a container on the same Docker network as the API, so the numbers exclude Docker Desktop's port forwarding.
+Most virtual users send an API key, and some sign in with a password and keep the session cookie, so the real password hashing and the `Origin` check are exercised too.
+
+The users are a closed loop: each sends its next request as soon as the last one finished, with no think time, so the user count is the concurrency and the request rate is a result.
+Three phases run in turn:
+
+- **Ingest:** uploads with no worker running, so nothing consumes the queue and only the API's side of an upload is measured.
+- **Worker scaling:** a backlog uploaded with no worker running, then a number of workers started and left to drain it.
+  Throughput is measured between the early and late marks of the drain, so the staggered start and the thin tail do not count.
+- **Read ramp:** a fixed mix of search, ask, streamed ask, and document listing at rising user counts, ending at the first step that breaks a limit written down before any run.
+  The knee is the last step that held.
+
+Every configuration runs several times, interleaved, and the tables show the median with its range.
+"Runs separated" in a before and after table means every after run lies beyond every before run, not merely that a median moved, and only those rows count as evidence.
+A phase is marked invalid, not hidden, when the load generator itself may have been the limit, and a published artifact needs a clean working tree and no invalid phase.
+The database is analyzed after every bulk load and before any measured window, so the planner never works from stale statistics.
+The machine, the Docker allocation, the PostgreSQL and pgvector versions, the pool sizes, the embedder, and every load-only override are recorded in each artifact and printed at the top of its block, so they are not repeated here.
+
+### What the scripted model is and is not
+
+Every model call in the stack goes through one constructor, and with `MODEL_PROVIDER=scripted` it returns `ScriptedModelClient` instead of the Anthropic client.
+It is not a mock of the application.
+It returns the SDK's own response types, so extraction, reconciliation, indexing, the agent loop with its tool calls and citation resolution, the judge, and the cost arithmetic all run their real code, and every cost comes out as zero through the real pricing table.
+Its answers come from committed data: extraction replays what the committed Sonnet run returned for that document, transcription returns the document's gold page text plus a line unique to the upload, and the agent follows a fixed policy of one tool call, one page read, and an answer that cites what it was given.
+It is deterministic, and it refuses a malformed request the way the real API would.
+
+It has two profiles.
+The `zero` profile answers at once, so the numbers are the application's own cost.
+The `replay` profile sleeps for the latency the committed runs recorded for extraction and transcription, with the agent step and the judge latency as stated assumptions, because no live agent run is committed.
+A latency scale shortens those sleeps, so a scaling run takes minutes instead of an hour.
+Each block names its profile and scale.
+
+It is not a model.
+There is no network, no rate limit, and no overload error, so the retry path is not exercised, and the schema-repair path never runs because no answer for the corpus needs it.
+The PDF path is left out of the mix, because only the images have gold page text.
+The corpus is a few dozen documents, so a tenant of thousands holds the same documents replicated, which is realistic for storage and index size and not for the variety of real text.
+
+A run cannot bill.
+The overlay blanks the API key and names the scripted model everywhere, the settings refuse a scripted process that holds a key, and the harness asks every API and worker container what it resolved before it sends any traffic and again after each change in the worker count.
+A one-cent daily budget turns any recorded spend into refusals, and the harness reads cost and model names back from the database after every phase and stops on anything but zero and `scripted`.
+
+The block below, and the chart in a light and a dark version, are generated from the committed artifacts in `scripts/load/results/` by `python scripts/load/load.py report --update-readme`, and a test fails when they drift.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="screenshots/performance/load-dark.svg">
@@ -960,6 +1010,63 @@ python scripts/load/load.py run --profile replay --scale 0.1 --label after-query
 Both runs used the same machine, Docker resources, scripted model, traffic and overrides. A change counts as evidence only when the runs are separated: every after run lies beyond every before run.
 
 <!-- PERF_TABLE:END -->
+
+### What broke first, and the two fixes
+
+The first baseline was diagnosed with tracing on (a diagnosis pass, not a published run).
+The first resource to saturate was the single API process.
+One uvicorn process serves every request on one event loop, and under the read ramp that thread was close to a full core while PostgreSQL sat mostly idle and throughput stayed flat as users were added.
+Most of that loop's time went to `/ask`: its `query_extractions` tool loaded every extracted field of the tenant and filtered them in Python, so its cost followed the size of the tenant, not the question.
+Waits for a pooled connection, and connections idle in a transaction, rose with the load as well, but they were a symptom: a far larger pool removed the waits and left throughput flat.
+
+**Fix one.**
+`query_extractions` now answers in SQL.
+The filters, the count, and the exact per-currency sums run in one statement over each document's latest extraction, and only the records it lists are loaded.
+A filter that SQL cannot decide exactly (case-folding edge cases, unusual ISO date forms, oddly shaped corrections) is judged by the unchanged Python matcher over just those documents, so the answers are identical, and a property test compares the full tool output with a copy of the old implementation.
+It is a change on the read path, so the read tables moved and the ingest and worker rows did not, which the before and after tables show row by row.
+
+The same baseline showed a second problem under the `zero` profile: adding workers made throughput fall.
+Each worker's ONNX session sized its thread pool to every core, so several workers ran several times as many threads as there are cores.
+A benchmark (`scripts/load/onnx_threads_bench.py`) found that total embedding throughput peaks where processes times threads equals the cores and collapses past it.
+
+**Fix two.**
+`EMBEDDING_THREADS` sets the threads of a process's ONNX session, and blank keeps onnxruntime's default.
+Compose passes it to the worker as `WORKER_EMBEDDING_THREADS`, and the harness sets it to the cores divided by the workers whenever it scales them, leaves a lone worker on the default, restarts workers only at a drained queue, and reads the value back from every worker before measuring.
+
+Each after-run is compared with the run before it, not always with the first baseline, and the report refuses a pair whose machine, Docker allocation, model profile, traffic, or overrides differ.
+Scaling workers is only meaningful because it is safe: a lease (`WORKER_RECLAIM_AFTER_SECONDS`) keeps a starting worker from stealing a running job, and every completion, failure, and requeue is a compare-and-set on the attempt the worker claimed.
+
+### Reproduce it
+
+From the repository root, with Docker Desktop running and nothing else heavy on the machine, because the cores are what is being measured:
+
+```
+python scripts/load/load.py run --profile zero --label <label>
+python scripts/load/load.py report --update-readme
+```
+
+`run` resets the load database (never the models volume), starts the stack and the generator, seeds, runs the preflight, measures every phase, writes a JSON artifact under `scripts/load/out/`, and stops the stack.
+Add `--out scripts/load/results` for a full-plan run you mean to commit, and `--profile replay` with a `--scale` for the other profile; each block above prints the exact command that produced its run.
+`report --update-readme` rewrites the generated block and the charts from the committed artifacts, and `report --from <dir>` renders development artifacts to a scratch directory without touching the README.
+`load.py smoke` is the small version CI runs: a few uploads, two workers, a short read run on the hashing embedder, and the same checks that nothing was billed.
+`load.py stack down` stops the stack, and its `--dry-run` shows what `--volumes` would remove before anything is removed.
+
+The thread benchmark runs in the load image, once the stack has been built and has downloaded the embedding model:
+
+```
+docker run --rm -v doc-pilot-load_models:/data/models -v "$PWD/scripts/load:/bench:ro" -w /app doc-pilot-load-backend python /bench/onnx_threads_bench.py
+```
+
+### Limits
+
+- This is a laptop inside Docker Desktop's virtual machine, with a load generator competing for the same cores as the stack, and the thermal and background behavior of a laptop.
+- The model is a stand-in with answers replayed from committed runs, and its latencies in the `replay` profile are partly assumed.
+- The corpus's documents are replicated, so text variety, and the model's real failures and rate limits, are absent.
+- A closed loop slows down when the server does, so it understates the queueing that an open loop at a fixed arrival rate would show.
+- One API process serves every request and the rate limiters live in its memory, which is how the stack is built, not a tuning choice.
+- The load-only overrides (rate limits off, a share of answers graded, a long worker lease) are recorded in each artifact, and a lease must exceed the slowest job because nothing renews it.
+- Read the tables as relative evidence about which part of this application gives out first and whether a change moved it.
+  They are not capacity planning, and the absolute figures do not carry over to other hardware or a real model.
 
 ## Evals
 

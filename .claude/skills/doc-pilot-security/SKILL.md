@@ -10,7 +10,7 @@ The auth, session, cookie, and CSRF sections of the global guide apply; "Auth an
 
 ## Threat model
 
-- Local-only and multi-tenant: every route but `/healthz`, `/auth/login`, `/auth/logout`, and the docs needs a credential, and every compose port binds `127.0.0.1` (db 5434, api 8000, frontend 3000, Jaeger, demo api 8100 and frontend 3100).
+- Local-only and multi-tenant: every route but `/healthz`, `/auth/login`, `/auth/logout`, and the docs needs a credential, and every compose port binds `127.0.0.1` (db 5434, api 8000, frontend 3000, Jaeger, demo api 8100 and frontend 3100, load api 8200 with its frontend 3200 and Jaeger ports behind profiles and no database port).
 - Never hosted, plain HTTP, no TLS; the README "Security model" says what that rules in and out.
 - The GitHub repository `Antheagao/doc-pilot` is public: anything committed is published.
 - The README "Security model" section is the narrative; keep it true when a guard changes.
@@ -80,6 +80,14 @@ The auth, session, cookie, and CSRF sections of the global guide apply; "Auth an
 - Spans and Langfuse never carry prompts, documents, questions, or answers (`telemetry.py`, `langfuse_link.py`).
 - Secrets: the Anthropic key lives in gitignored `backend/.env`, mirrored to the gitignored root `.env` for compose; `docker compose config` prints it, so never paste that output.
 - No credential reaches a log, span, or error: a password is never echoed (the `422` handler, the CLI's `refusal_message`), the provisioner sends a SCRAM verifier and never the runtime role's password, a key's `AccessToken.token` is its public prefix, and `tests/test_api_keys.py` checks the logs and spans for a secret.
+- The load stack cannot spend (`docker-compose.load.yml`, `scripts/load/load.py`), by four independent layers, each with its own tests:
+  - The overlay runs `api` and `worker` on `MODEL_PROVIDER=scripted` with all four model names `scripted`, and sets `ANTHROPIC_API_KEY` to an explicit empty string on every backend service (`api`, `worker`, `migrate`, `loadgen`), because the base file passes the root `.env`'s real key through and an overlay that only left it out would bill.
+  - `Settings` (`app/config.py`) refuses `scripted` beside a non-empty key, and refuses a model name that does not match the provider in either direction, with `hide_input_in_errors` so the refusal never prints the key; a container that somehow got a key dies at import.
+  - `load.py` checks before any traffic: `config_problems` on the resolved compose config (any service with a key, a backend service whose key is not explicitly blank, a model setting that is not `scripted`, a budget that is not a tripwire, a missing worker lease) makes `stack up` refuse to start, and `check_stack` (the preflight, re-run after every change in the worker count) asks every running `api` and `worker` container what it resolved and holds, through `docker exec python -c`, and gets a provider, a yes or no for the key (never the key), the database, and the role; anything but scripted, keyless, `docpilot_load`, and `docpilot_runtime` refuses.
+  - `DAILY_BUDGET_USD` is one cent in the overlay, so any recorded spend turns uploads and questions into `429`; `read_spend` and `spend_problems` read cost and model names from the database as the owner after every phase and stop the run on anything but `0` and `scripted`, and an artifact with nonzero `spend_usd` fails validation.
+- `SCRIPTED_MODEL_ALLOW_API_KEY=true` lifts only the second layer, for a host process that reads `backend/.env` (which holds the real key): the scripted path never builds an Anthropic client and the SDK does not read the key unless one is built; it is not set in any compose file, so never set it in one.
+- The load stack's other exceptions are recorded in each artifact and stay on loopback: rate limits off (`ASK_RATE_LIMIT_PER_MINUTE=0`, `UPLOAD_RATE_LIMIT_PER_MINUTE=0`), a lease of several minutes, and a share of answers graded.
+  Its sign-in limits stay at their defaults, its tenants' owners get random passwords, and their API keys and passwords go to gitignored `scripts/load/out/tenants.json` (mode 600), never to stdout, an artifact, or the README; `scrub` strips key-shaped text from a harness failure's output.
 - The test suite cannot spend: `tests/conftest.py` blanks `ANTHROPIC_API_KEY` unless `RUN_LIVE_SMOKE=1`, and `tests/test_no_spend.py` proves it.
 
 ## Known gaps

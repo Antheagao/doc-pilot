@@ -40,10 +40,26 @@ Gate commands live in `AGENTS.md`; the Rust and Playwright subsections of the gl
 - The `spans` fixture lives in `tests/conftest.py`, not autouse: the tracer provider installs once per process, so it adds the in-memory exporter the first time a test asks and clears it each time; `test_telemetry.py` and `test_mcp.py` request it with `pytestmark = pytest.mark.usefixtures("spans")`.
 - Embeddings use `HashingEmbedder` (deterministic, lexical, no download); its numbers are plumbing checks, never quality.
 - `tests/test_live_smoke.py` is marked `live` and skips unless `RUN_LIVE_SMOKE=1`; it bills real calls under a cost cap.
+- The scripted model (`app/scripted_model.py`) is the second fake behind `_build_client` and the first one that runs in the production image.
+  `tests/test_scripted_model.py` covers each request kind, recognition through a metadata nonce (`tests/scripted_helpers.py` makes a picture byte-unique without changing its pixels), unknown bytes, a malformed request raising `BadRequestError`, exact delays through the injected `sleep`, and cost 0 through the real pricing code; `tests/test_scripted_end_to_end.py` goes upload, worker extract and index, `/ask`, `/ask/stream`, and the judge with `anthropic.AsyncAnthropic.__init__` patched to raise, so a real client built anywhere fails the test, and deletes its committed rows in a `finally`.
+  `tests/test_no_spend.py` also proves a scripted process is refused beside a key, and `tests/test_worker_scaling.py` runs four workers on one queue across two organizations as the runtime role.
+  `tests/test_extraction_query.py` compares `query_extractions` in SQL with a verbatim copy of the old Python implementation in a hypothesis property over adversarial tenants, so the pushdown and its Python fallback cannot drift.
 - Randomness is patched, not ranged: `_backoff_delay` tests patch `random.uniform` and assert exact values.
 - Property tests use `hypothesis` (`dev` extra): `tests/conftest.py` registers and loads the `doc-pilot` profile with `derandomize=True, deadline=None`, so every run draws the same examples and a failure reproduces anywhere.
   The `.hypothesis/` example database stays gitignored; pin a found regression as an ordinary example test, not as a database entry.
   `tests/test_reconcile_properties.py` is the model: generate a consistent record, break one number, assert what the engine says.
+
+## The load harness
+
+- `scripts/load/` and `scripts/compose_project.py` have pytest suites beside them (`scripts/load/test_artifact.py`, `test_load.py`, `test_locustfile.py` for `workload.py`, `test_phases.py`, `test_report.py`, `test_samplers.py`, and `scripts/test_compose_project.py`), run from `backend/` as `pytest ../scripts -q`.
+  They need the backend venv but no Docker, no Locust, and no database: the plan, the arithmetic, the SSE parser, the preflight and config checks, and the artifact validation are pure functions, and the Docker driver is replaced by a fake.
+  `locustfile.py` itself needs Locust, which only the `loadgen` image has, so it is covered through `workload.py`.
+- `scripts/load/test_report.py` has the README sync tests: the PERF_TABLE region and the two SVGs must equal what the committed artifacts in `scripts/load/results/` render, and the Performance section outside the region must hold no digit at all, so every number on the page is generated.
+  Changing an artifact or the renderer means running `python scripts/load/load.py report --update-readme`.
+- `python scripts/load/load.py smoke` is the end-to-end check of the whole harness against a real `doc-pilot-load` stack: a few uploads, two workers, a short read run on the hashing embedder, zero errors, a citation on every answer, spend 0 read from the database.
+  It writes to a temporary directory and refuses `scripts/load/results/`, and CI runs it as its own path-filtered workflow (`.github/workflows/load-smoke.yml`), so it is not one of the local gates and it needs Docker.
+- `scripts/load/onnx_threads_bench.py` is a measuring tool for the embedding thread count, run in the load image; it is not a pytest test.
+- A harness test never commits an artifact to `scripts/load/results/`: only a full run does, and a dirty tree or an invalid phase makes it unpublishable.
 
 ## Evals as tests
 

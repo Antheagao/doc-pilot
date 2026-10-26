@@ -19,8 +19,9 @@ The Rust and axum subsections of the global guide do not apply; the backend is F
 | The caller is one frozen value, `Principal` (organization, user or API key, role), resolved once by `current_principal`; limits key on `Principal.rate_key` and a route that only sessions may call uses `session_only(message)` | `app/auth/principal.py` |
 | One home for tenancy: `bind_tenant`, `tenant_session`, and `queue_session` bind a session to an organization, and code never sets `organization_id` (the database fills it) | `app/tenancy.py` |
 | Identity code gets its own sessions from `get_identity_session_factory` (no organization is known at sign-in), which tests replace with their transaction; work that outlives a request, such as a stream, takes a tenant session factory instead of the request's session | `app/auth/`, `app/routers/ask.py`, `app/routers/chat.py` |
-| One Anthropic client per API process, built by `_build_client` | `routers/ask.py`, `extraction.py` |
+| One model client per API process, built by `_build_client`, which is a port with two adapters selected by `MODEL_PROVIDER`: `anthropic.AsyncAnthropic` and the opt-in `ScriptedModelClient` (same `messages.create` and `beta.messages.create`, SDK response types, a `BadRequestError` for a request the API would refuse; `Settings` refuses it beside a key or a real model name) | `routers/ask.py`, `extraction.py`, `scripted_model.py` |
 | Outbox: the extract job adds its `index` job in the same transaction | `extraction.process_document_job` |
+| Settle by compare-and-set: `complete_job`, `fail_job`, and `requeue_job` update `jobs` where `(id, state = 'processing', attempts = <the claimed attempt>)`, so a worker whose job was reclaimed writes nothing and rolls back | `app/worker.py` |
 | No transaction across a model call: copy ids, `rollback()`, call, re-fetch | all three job handlers |
 | Model output parsed once at the edge: `_coerce_leaf`, `_schema_violations`, one repair reprompt | `app/extraction.py` |
 | One rule, one home: `records.field_value`, `review._PENDING` | `app/records.py`, `routers/review.py` |
@@ -33,7 +34,6 @@ The Rust and axum subsections of the global guide do not apply; the backend is F
 - Routers query the ORM directly; there is no feature layer between `routers/` and `models.py`, and extraction persistence lives inside `process_document_job` (Batch 0 task T0.2 extracts `build_extracted_fields`).
 - Shared model-call code is private to `extraction.py`, and its error types are named for extraction.
 - Closed sets (`Document.status`, `Job.state`, `Job.kind`) are strings with module constants, not `Literal` or `Enum`.
-- `complete_job` and `fail_job` write unconditionally instead of compare-and-set; that holds only while exactly one worker runs.
 - Rate limits live in process memory, which assumes one API process.
 - `get_identity_session_factory` imports `app.db` inside the function because `app.db` imports `app.auth.principal`; a new module should not add to that cycle.
 

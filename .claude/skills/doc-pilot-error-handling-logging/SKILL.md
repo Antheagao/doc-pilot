@@ -27,7 +27,11 @@ Load the global `error-handling-logging` guide for the rules; this file holds wh
 - Two retry layers: the SDK's own (`anthropic_max_retries`, set in `_build_client`) inside one call, then the queue's (`worker.fail_job`: `MAX_ATTEMPTS` 3, `_backoff_delay` equal jitter capped at `BACKOFF_MAX` 60 s, a `retry-after` floor capped at `RETRY_AFTER_MAX` 900 s).
 - `fail_job` keeps the last 2,000 characters of the traceback in `jobs.last_error`; a permanent failure marks the document `failed` or `refused` (extract) or fills `ask_runs.judge_error` (judge).
 - A persistence error after a billed call is re-raised as `ExtractionError` carrying its tokens and cost, so the spend stays visible.
-- `run_worker` catches every per-iteration exception, logs it, and keeps polling; `reclaim_orphaned_jobs` resets `processing` rows at startup.
+- `run_worker` catches every per-iteration exception, logs it, and keeps polling; `reclaim_orphaned_jobs` resets `processing` rows at startup, and with a lease (`WORKER_RECLAIM_AFTER_SECONDS` above 0) again every `RECLAIM_CHECK_SECONDS`.
+- A job that has been claimed `MAX_ATTEMPTS` times without settling as done is failed at reclaim, not requeued: `last_error` carries `RECLAIM_EXHAUSTED_ERROR` and the worker logs a warning `failed job %s for good at reclaim: ...`.
+- A stale settle is a warning, not an error: when `complete_job`, `fail_job`, or the shutdown `requeue_job` finds the job no longer this worker's claim (it was reclaimed, or already settled), `_drop_stale` rolls back the handler's writes and logs `dropped the <completion|failure|cancellation requeue> of job <id> (attempt <n>): it was reclaimed or already settled, so this worker's writes for it were rolled back`, and the outcome is `stale` on the `job <kind>` span (`docpilot.job.outcome`).
+  Seeing it means a job outlasted `WORKER_RECLAIM_AFTER_SECONDS` (the model call may have been billed twice) or two workers raced; raise the lease above the slowest job.
+  A Langfuse score is posted only after the job settles as `done`, so a stale run posts none.
 
 ## Logging and tracing
 
